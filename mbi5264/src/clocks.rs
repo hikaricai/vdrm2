@@ -9,7 +9,7 @@ use rp2040_hal::gpio::{
 };
 use rp2040_hal::multicore::{Multicore, Stack};
 use rp2040_hal::pac::{PPB, PSM};
-use rp2040_hal::pio::{PIOBuilder, PIOExt, PinDir};
+use rp2040_hal::pio::{PIOBuilder, PIOExt, PinDir, SM0};
 use rp2040_hal::sio::SioFifo;
 use rp2040_hal::{pac, Sio};
 use rp_pico::pac::{DMA, PIO0, RESETS};
@@ -185,9 +185,10 @@ impl CmdClockPins {
         ]
     }
 }
-// 2(cmd) + 16(chip bits) x 9(chips)
-const CMD_BUF_SIZE: usize = 2 + 16 * 9;
+//16(chip bits) x 9(chips) + 2(empty data)
+const CMD_BUF_SIZE: usize = 16 * 9 + 2;
 pub struct CmdClock {
+    clk_sm_tx: rp2040_hal::pio::Tx<(PIO0, SM0)>,
     cmd_ch: rp2040_hal::dma::Channel<rp2040_hal::dma::CH0>,
     buf: [u16; CMD_BUF_SIZE],
 }
@@ -197,13 +198,52 @@ impl CmdClock {
         let dma = dma.dyn_split(resets);
         let mut cmd_ch = dma.ch0.unwrap();
         let (mut pio, sm0, sm1, _, _) = pio0.split(resets);
-        let (clk_sm, row_sm_tx) = {
+        let (clk_sm, clk_sm_tx) = {
             let program_data = pio_proc::pio_asm!(
                 ".side_set 1",
+                "clk:",
                 ".wrap_target",
                 "irq 4           side 0b0",
+                "jmp !osre le    side 0b0",
                 "nop             side 0b0",
+                "clk_1:"
                 "irq 4           side 0b1",
+                "nop             side 0b1",
+                "jmp clk         side 0b1",
+
+                "le:",
+                "out x, 16       side 0b0",
+                "irq 4           side 0b1",
+                "out y, 16       side 0b1",
+                "wait 1 irq 5    side 0b1", // should not block
+
+                "cmd_clk:"
+                "irq 4           side 0b0",
+                "jmp x-- ext0    side 0b0",
+                "jmp le_up1      side 0b0",
+                "ext0:"
+                "nop             side 0b0"
+
+                "irq 4           side 0b1",
+                "jmp x-- ext1    side 0b1",
+                "jmp le_up0      side 0b1",
+                "ext1:"
+                "jmp cmd_clk     side 0b1",
+
+                "le_up1:"
+                "irq 4           side 0b1",
+                "set pins 1      side 0b1",
+                "jmp y-- le_up0  side 0b1",
+                "irq 4           side 0b0",
+                "set pins 0      side 0b0",
+                "jmp clk_1       side 0b0"
+
+                "le_up0:"
+                "irq 4           side 0b0",
+                "set pins 1      side 0b0",
+                "jmp y-- le_up1  side 0b0",
+                "irq 4           side 0b1",
+                "set pins 0      side 0b1",
                 "nop             side 0b1",
                 ".wrap",
             );
@@ -219,30 +259,16 @@ impl CmdClock {
 
         let (cmd_sm, cmd_sm_tx) = {
             let program_data = pio_proc::pio_asm!(
-                ".side_set 2",
-                "out isr, 32    side 0b0", // save loop_cnt to isr
+                "out isr, 32", // save loop_cnt to isr
                 ".wrap_target",
-                "load_loop_cnt:"
-                "mov x isr      side 0b0", // load loop_cnt
-                "out y, 16 side 0b0" // load cmd
-                "wait 1 irq 4 side 0b0", // pre wait to clear old irq
-
-                "le_down0:",
-                "wait 1 irq 4 side 0b0",
-                "jmp y-- le_down1  side 0b0",
-                "jmp le_up1  side 0b0",
-                "le_down1:",
-                "out pins, 16    side 0b0",
-                "jmp x-- le_down0  side 0b0",
-                "jmp load_loop_cnt side 0b0",
-
-                "le_up0:",
-                "wait 1 irq 4 side 0b1",
-                "le_up1:",
-                "out pins, 16    side 0b1",
-                "jmp x-- le_up0  side 0b1",
-                // "wait 1 irq 4 side 0b1", 再wait一个edge将数据写入 由app多填充一个0u16实现
-                // "out pins, 16    side 0b1",
+                "mov x isr ",   // load loop_cnt
+                "irq wait 5" // sync clk sm0
+                "loop:",
+                "wait 1 irq 4",
+                "out pins, 16",
+                "jmp x-- loop",
+                "wait 1 irq 4", // 再wait一个edge将数据写入 由app多填充一个0u32实现
+                "out pins, 32",
                 ".wrap",
             );
             let installed = pio.install(&program_data.program).unwrap();
@@ -261,7 +287,7 @@ impl CmdClock {
             ]);
             // Configure the width of the screen
             // let one_cmd_loops: u32 = 16 * 9 - 1
-            let one_cmd_loops: u32 = 16 * 9 + 1 - 1; // 多一个0u16保证数据都触发
+            let one_cmd_loops: u32 = 16 * 9 - 1; // 多一个0u16保证数据都触发
             tx.write(one_cmd_loops);
             (sm, tx)
         };
@@ -297,8 +323,12 @@ impl CmdClock {
             .ch()
             .ch_write_addr()
             .write(|w| unsafe { w.bits(cmd_sm_tx.fifo_address() as u32) });
-        let buf = [0xffff; CMD_BUF_SIZE];
-        Self { cmd_ch, buf }
+        let buf = [0; CMD_BUF_SIZE];
+        Self {
+            clk_sm_tx,
+            cmd_ch,
+            buf,
+        }
     }
 
     pub fn cmd_busy(&self) -> bool {
@@ -312,11 +342,7 @@ impl CmdClock {
     }
 
     pub fn refresh(&mut self, transaction: Transaction) {
-        let cmd_cnt = 16 * 9 - transaction.cmd as u16;
-        // let cmd_cnt = 100u16;
-        self.buf[0] = cmd_cnt;
-        *self.buf.last_mut().unwrap() = 0;
-        let mut buf_iter = self.buf.iter_mut().skip(1);
+        let mut buf_iter = self.buf.iter_mut();
         for [r, g, b] in transaction.regs {
             for i in (0..16).rev() {
                 let buf = buf_iter.next().unwrap();
@@ -338,5 +364,9 @@ impl CmdClock {
             .ch()
             .ch_al3_read_addr_trig()
             .write(|w| unsafe { w.bits(pixels_addr) });
+        let clk_total: u32 = 16 * 9;
+        let cmd_cnt = transaction.cmd as u32;
+        let clk_data = (clk_total << 16) | cmd_cnt;
+        self.clk_sm_tx.write(clk_data);
     }
 }
