@@ -185,91 +185,107 @@ impl CmdClockPins {
         ]
     }
 }
-// 2(cmd) + 16(chip bits) x 9(chips)
-const CMD_BUF_SIZE: usize = 2 + 16 * 9;
+//16(chip bits) x 9(chips) + 2(empty)
+const CMD_BUF_SIZE: usize = 16 * 9 + 2;
 pub struct CmdClock {
-    cmd_ch: rp2040_hal::dma::Channel<rp2040_hal::dma::CH0>,
+    le_sm_tx: rp2040_hal::pio::Tx<(PIO0, rp2040_hal::pio::SM2)>,
+    data_ch: rp2040_hal::dma::Channel<rp2040_hal::dma::CH0>,
     buf: [u16; CMD_BUF_SIZE],
 }
 
 impl CmdClock {
     pub fn new(pins: CmdClockPins, pio0: PIO0, dma: DMA, resets: &mut RESETS) -> Self {
         let dma = dma.dyn_split(resets);
-        let mut cmd_ch = dma.ch0.unwrap();
-        let (mut pio, sm0, sm1, _, _) = pio0.split(resets);
-        let (clk_sm, row_sm_tx) = {
+        let data_ch = dma.ch0.unwrap();
+        let (mut pio, sm0, sm1, sm2, _) = pio0.split(resets);
+        let (clk_sm, _clk_sm_tx) = {
             let program_data = pio_proc::pio_asm!(
                 ".side_set 1",
                 ".wrap_target",
                 "irq 4           side 0b0",
-                "nop             side 0b0",
+                "irq 5           side 0b0 [5]",
                 "irq 4           side 0b1",
-                "nop             side 0b1",
+                "irq 5           side 0b1 [5]",
                 ".wrap",
             );
             let installed = pio.install(&program_data.program).unwrap();
             let (mut sm, _, tx) = PIOBuilder::from_installed_program(installed)
                 .side_set_pin_base(pins.clk_pin.id().num)
-                .clock_divisor_fixed_point(3, 0)
+                .clock_divisor_fixed_point(1, 0)
                 .autopull(false)
                 .build(sm0);
             sm.set_pindirs([(pins.clk_pin.id().num, PinDir::Output)]);
             (sm, tx)
         };
 
-        let (cmd_sm, cmd_sm_tx) = {
+        let (data_sm, data_sm_tx) = {
             let program_data = pio_proc::pio_asm!(
-                ".side_set 2",
-                "out isr, 32    side 0b0", // save loop_cnt to isr
+                "out isr, 32", // save loop_cnt to isr
                 ".wrap_target",
-                "load_loop_cnt:"
-                "mov x isr      side 0b0", // load loop_cnt
-                "out y, 16 side 0b0" // load cmd
-                "wait 1 irq 4 side 0b0", // pre wait to clear old irq
-
-                "le_down0:",
-                "wait 1 irq 4 side 0b0",
-                "jmp y-- le_down1  side 0b0",
-                "jmp le_up1  side 0b0",
-                "le_down1:",
-                "out pins, 16    side 0b0",
-                "jmp x-- le_down0  side 0b0",
-                "jmp load_loop_cnt side 0b0",
-
-                "le_up0:",
-                "wait 1 irq 4 side 0b1",
-                "le_up1:",
-                "out pins, 16    side 0b1",
-                "jmp x-- le_up0  side 0b1",
-                // "wait 1 irq 4 side 0b1", 再wait一个edge将数据写入 由app多填充一个0u16实现
-                // "out pins, 16    side 0b1",
+                "mov x isr ",   // load loop_cnt
+                "irq wait 6" // sync clk sm0
+                "wait 1 irq 4", // pre wait to clear old irq
+                "loop:",
+                "wait 1 irq 4",
+                "out pins, 16",
+                "jmp x-- loop",
+                // "wait 1 irq 4", // 再wait一个edge将数据写入 由app多填充一个0u32实现
+                // "out pins, 32",
                 ".wrap",
             );
             let installed = pio.install(&program_data.program).unwrap();
             let (mut sm, _, mut tx) = PIOBuilder::from_installed_program(installed)
                 .out_pins(pins.r0_pin.id().num, 3)
-                .side_set_pin_base(pins.le_pin.id().num)
                 .clock_divisor_fixed_point(1, 0)
                 .autopull(true)
                 .buffers(rp2040_hal::pio::Buffers::OnlyTx)
                 .build(sm1);
             sm.set_pindirs([
-                (pins.le_pin.id().num, PinDir::Output),
                 (pins.r0_pin.id().num, PinDir::Output),
                 (pins.g0_pin.id().num, PinDir::Output),
                 (pins.b0_pin.id().num, PinDir::Output),
             ]);
             // Configure the width of the screen
             // let one_cmd_loops: u32 = 16 * 9 - 1
-            let one_cmd_loops: u32 = 16 * 9 + 1 - 1; // 多一个0u16保证数据都触发
+            let one_cmd_loops: u32 = 16 * 9 + 2 - 1; // 多2个0u16保证数据都触发
             tx.write(one_cmd_loops);
+            (sm, tx)
+        };
+
+        let (le_sm, le_sm_tx) = {
+            let program_data = pio_proc::pio_asm!(
+                ".side_set 2",
+                ".wrap_target"
+                "out x, 16 side 0",
+                "out y, 16 side 0",
+                "wait 1 irq 6 side 0b0", // sync
+                "wait 1 irq 5 side 0b0", // pre wait to clear old irq
+                "loop0:",
+                "wait 1 irq 5 side 0b0",
+                "jmp x-- loop0 side 0b0",
+                "loop1:",
+                "wait 1 irq 5 side 0b1",
+                "jmp y-- loop1 side 0b1",
+                ".wrap",
+            );
+            let installed = pio.install(&program_data.program).unwrap();
+            let (mut sm, _, tx) = PIOBuilder::from_installed_program(installed)
+                .out_pins(pins.r0_pin.id().num, 3)
+                .side_set_pin_base(pins.le_pin.id().num)
+                .clock_divisor_fixed_point(1, 0)
+                .autopull(true)
+                .buffers(rp2040_hal::pio::Buffers::OnlyTx)
+                .build(sm2);
+            sm.set_pindirs([(pins.le_pin.id().num, PinDir::Output)]);
             (sm, tx)
         };
 
         pins.into_pio0_pins();
         clk_sm.start();
-        cmd_sm.start();
-        cmd_ch.ch().ch_al1_ctrl().write(|w| unsafe {
+        data_sm.start();
+        le_sm.start();
+
+        data_ch.ch().ch_al1_ctrl().write(|w| unsafe {
             w
                 // Increase the read addr as we progress through the buffer
                 .incr_read()
@@ -282,7 +298,7 @@ impl CmdClock {
                 .size_word()
                 // Setup PIO FIFO as data request trigger
                 .treq_sel()
-                .bits(cmd_sm_tx.dreq_value())
+                .bits(data_sm_tx.dreq_value())
                 // Turn off interrupts
                 .irq_quiet()
                 .bit(true)
@@ -293,16 +309,20 @@ impl CmdClock {
                 .en()
                 .bit(true)
         });
-        cmd_ch
+        data_ch
             .ch()
             .ch_write_addr()
-            .write(|w| unsafe { w.bits(cmd_sm_tx.fifo_address() as u32) });
-        let buf = [0xffff; CMD_BUF_SIZE];
-        Self { cmd_ch, buf }
+            .write(|w| unsafe { w.bits(data_sm_tx.fifo_address() as u32) });
+        let buf = [0; CMD_BUF_SIZE];
+        Self {
+            le_sm_tx,
+            data_ch,
+            buf,
+        }
     }
 
     pub fn cmd_busy(&self) -> bool {
-        self.cmd_ch.ch().ch_ctrl_trig().read().busy().bit_is_set()
+        self.data_ch.ch().ch_ctrl_trig().read().busy().bit_is_set()
     }
 
     pub fn commit(&mut self) -> bool {
@@ -312,11 +332,7 @@ impl CmdClock {
     }
 
     pub fn refresh(&mut self, transaction: Transaction) {
-        let cmd_cnt = 16 * 9 - transaction.cmd as u16;
-        // let cmd_cnt = 100u16;
-        self.buf[0] = cmd_cnt;
-        *self.buf.last_mut().unwrap() = 0;
-        let mut buf_iter = self.buf.iter_mut().skip(1);
+        let mut buf_iter = self.buf.iter_mut();
         for [r, g, b] in transaction.regs {
             for i in (0..16).rev() {
                 let buf = buf_iter.next().unwrap();
@@ -330,13 +346,20 @@ impl CmdClock {
         let pixels_cnt = self.buf.len() as u32 / 2;
         let pixels_addr = self.buf.as_ptr() as u32;
 
-        self.cmd_ch
+        self.data_ch
             .ch()
             .ch_trans_count()
             .write(|w| unsafe { w.bits(pixels_cnt) });
-        self.cmd_ch
+        self.data_ch
             .ch()
             .ch_al3_read_addr_trig()
             .write(|w| unsafe { w.bits(pixels_addr) });
+
+        let le_high_cnt = transaction.cmd as u32;
+        let le_low_cnt: u32 = 16 * 9 + 1 - le_high_cnt;
+        let le_low_cnt = le_low_cnt - 1;
+        let le_high_cnt = le_high_cnt - 1;
+        let le_data = (le_high_cnt << 16) | le_low_cnt;
+        self.le_sm_tx.write(le_data);
     }
 }
