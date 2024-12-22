@@ -202,10 +202,10 @@ impl CmdClock {
             let program_data = pio_proc::pio_asm!(
                 ".side_set 1",
                 ".wrap_target",
-                "irq 4           side 0b0",
-                "irq 5           side 0b0 [5]",
-                "irq 4           side 0b1",
-                "irq 5           side 0b1 [5]",
+                "irq 5           side 0b0",     // 5 first to be faster
+                "irq 4           side 0b0 [2]", // increase the delay if something get wrong
+                "irq 5           side 0b1",
+                "irq 4           side 0b1 [2]",
                 ".wrap",
             );
             let installed = pio.install(&program_data.program).unwrap();
@@ -259,13 +259,14 @@ impl CmdClock {
                 "out x, 16 side 0",
                 "out y, 16 side 0",
                 "wait 1 irq 6 side 0b0", // sync
-                "wait 1 irq 5 side 0b0", // pre wait to clear old irq
+                "wait 1 irq 5 side 0b0",
                 "loop0:",
                 "wait 1 irq 5 side 0b0",
                 "jmp x-- loop0 side 0b0",
                 "loop1:",
                 "wait 1 irq 5 side 0b1",
                 "jmp y-- loop1 side 0b1",
+                "nop side 0b0"
                 ".wrap",
             );
             let installed = pio.install(&program_data.program).unwrap();
