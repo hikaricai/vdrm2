@@ -149,10 +149,12 @@ fn main() -> ! {
     let mut mock_cmd = 1;
     loop {
         delay.delay_ms(10);
-        cmd_pio.refresh(Transaction::mock(mock_cmd));
+        // cmd_pio.refresh(Transaction::mock(mock_cmd));
+        cmd_pio.refresh_color(Transaction::mock(mock_cmd));
         cmd_pio.commit();
+        // delay.delay_ms(20);
         mock_cmd += 1;
-        if mock_cmd == 143 {
+        if mock_cmd == 143 - 8 {
             mock_cmd = 1
         }
         led_pin.set_low().unwrap();

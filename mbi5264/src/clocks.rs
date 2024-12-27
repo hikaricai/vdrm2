@@ -187,25 +187,29 @@ impl CmdClockPins {
 }
 //16(chip bits) x 9(chips) + 2(empty)
 const CMD_BUF_SIZE: usize = 16 * 9 + 2;
+const COLOR_BUF_SIZE: usize = 16 * 9;
 pub struct CmdClock {
-    le_sm_tx: rp2040_hal::pio::Tx<(PIO0, rp2040_hal::pio::SM2)>,
+    le_sm_tx: rp2040_hal::pio::Tx<(PIO0, rp2040_hal::pio::SM3)>,
     data_ch: rp2040_hal::dma::Channel<rp2040_hal::dma::CH0>,
-    buf: [u16; CMD_BUF_SIZE],
+    color_ch: rp2040_hal::dma::Channel<rp2040_hal::dma::CH1>,
+    data_buf: [u16; CMD_BUF_SIZE],
+    color_buf: [u16; COLOR_BUF_SIZE],
 }
 
 impl CmdClock {
     pub fn new(pins: CmdClockPins, pio0: PIO0, dma: DMA, resets: &mut RESETS) -> Self {
         let dma = dma.dyn_split(resets);
         let data_ch = dma.ch0.unwrap();
-        let (mut pio, sm0, sm1, sm2, _) = pio0.split(resets);
+        let color_ch = dma.ch1.unwrap();
+        let (mut pio, sm0, sm1, sm2, sm3) = pio0.split(resets);
         let (clk_sm, _clk_sm_tx) = {
             let program_data = pio_proc::pio_asm!(
                 ".side_set 1",
                 ".wrap_target",
                 "irq 5           side 0b0",     // 5 first to be faster
-                "irq 4           side 0b0 [2]", // increase the delay if something get wrong
+                "irq 4           side 0b0 [8]", // increase the delay if something get wrong
                 "irq 5           side 0b1",
-                "irq 4           side 0b1 [2]",
+                "irq 4           side 0b1 [8]",
                 ".wrap",
             );
             let installed = pio.install(&program_data.program).unwrap();
@@ -252,6 +256,41 @@ impl CmdClock {
             (sm, tx)
         };
 
+        let (color_sm, color_sm_tx) = {
+            let program_data = pio_proc::pio_asm!(
+                ".wrap_target",
+                "set y 8",   // bigloop cnt is chip_num -1
+                "irq wait 6" // sync clk sm0
+                "wait 1 irq 4", // pre wait to clear old irq
+                "bigloop:"
+                "set x 7",
+                "loop:",
+                "wait 1 irq 4",
+                "out pins, 16",
+                "jmp x-- loop",
+                "set x 7",
+                "empty:"
+                "wait 1 irq 4",
+                "mov pins null",
+                "jmp x-- empty",
+                "jmp y-- bigloop",
+                ".wrap",
+            );
+            let installed = pio.install(&program_data.program).unwrap();
+            let (mut sm, _, tx) = PIOBuilder::from_installed_program(installed)
+                .out_pins(pins.r0_pin.id().num, 3)
+                .clock_divisor_fixed_point(1, 0)
+                .autopull(true)
+                .buffers(rp2040_hal::pio::Buffers::OnlyTx)
+                .build(sm2);
+            sm.set_pindirs([
+                (pins.r0_pin.id().num, PinDir::Output),
+                (pins.g0_pin.id().num, PinDir::Output),
+                (pins.b0_pin.id().num, PinDir::Output),
+            ]);
+            (sm, tx)
+        };
+
         let (le_sm, le_sm_tx) = {
             let program_data = pio_proc::pio_asm!(
                 ".side_set 2",
@@ -266,7 +305,6 @@ impl CmdClock {
                 "loop1:",
                 "wait 1 irq 5 side 0b1",
                 "jmp y-- loop1 side 0b1",
-                "nop side 0b0"
                 ".wrap",
             );
             let installed = pio.install(&program_data.program).unwrap();
@@ -276,7 +314,7 @@ impl CmdClock {
                 .clock_divisor_fixed_point(1, 0)
                 .autopull(true)
                 .buffers(rp2040_hal::pio::Buffers::OnlyTx)
-                .build(sm2);
+                .build(sm3);
             sm.set_pindirs([(pins.le_pin.id().num, PinDir::Output)]);
             (sm, tx)
         };
@@ -284,6 +322,7 @@ impl CmdClock {
         pins.into_pio0_pins();
         clk_sm.start();
         data_sm.start();
+        color_sm.start();
         le_sm.start();
 
         data_ch.ch().ch_al1_ctrl().write(|w| unsafe {
@@ -314,16 +353,48 @@ impl CmdClock {
             .ch()
             .ch_write_addr()
             .write(|w| unsafe { w.bits(data_sm_tx.fifo_address() as u32) });
+
+        color_ch.ch().ch_al1_ctrl().write(|w| unsafe {
+            w
+                // Increase the read addr as we progress through the buffer
+                .incr_read()
+                .bit(true)
+                // Do not increase the write addr because we always want to write to PIO FIFO
+                .incr_write()
+                .bit(false)
+                // Read 32 bits at a time
+                .data_size()
+                .size_word()
+                // Setup PIO FIFO as data request trigger
+                .treq_sel()
+                .bits(color_sm_tx.dreq_value())
+                // Turn off interrupts
+                .irq_quiet()
+                .bit(true)
+                // Chain to the channel selecting the framebuffers
+                .chain_to()
+                .bits(rp2040_hal::dma::CH1::id())
+                // Enable the channel
+                .en()
+                .bit(true)
+        });
+        color_ch
+            .ch()
+            .ch_write_addr()
+            .write(|w| unsafe { w.bits(color_sm_tx.fifo_address() as u32) });
         let buf = [0; CMD_BUF_SIZE];
         Self {
             le_sm_tx,
             data_ch,
-            buf,
+            color_ch,
+            data_buf: buf,
+            color_buf: [0; COLOR_BUF_SIZE],
         }
     }
 
     pub fn cmd_busy(&self) -> bool {
-        self.data_ch.ch().ch_ctrl_trig().read().busy().bit_is_set()
+        // self.data_ch.ch().ch_ctrl_trig().read().busy().bit_is_set()
+        self.color_ch.ch().ch_ctrl_trig().read().busy().bit_is_set()
     }
 
     pub fn commit(&mut self) -> bool {
@@ -333,7 +404,7 @@ impl CmdClock {
     }
 
     pub fn refresh(&mut self, transaction: Transaction) {
-        let mut buf_iter = self.buf.iter_mut();
+        let mut buf_iter = self.data_buf.iter_mut();
         for [r, g, b] in transaction.regs {
             for i in (0..16).rev() {
                 let buf = buf_iter.next().unwrap();
@@ -344,8 +415,8 @@ impl CmdClock {
                 // *buf = 0x03;
             }
         }
-        let pixels_cnt = self.buf.len() as u32 / 2;
-        let pixels_addr = self.buf.as_ptr() as u32;
+        let pixels_cnt = self.data_buf.len() as u32 / 2;
+        let pixels_addr = self.data_buf.as_ptr() as u32;
 
         self.data_ch
             .ch()
@@ -358,6 +429,39 @@ impl CmdClock {
 
         let le_high_cnt = transaction.cmd as u32;
         let le_low_cnt: u32 = 16 * 9 + 1 - le_high_cnt;
+        let le_low_cnt = le_low_cnt - 1;
+        let le_high_cnt = le_high_cnt - 1;
+        let le_data = (le_high_cnt << 16) | le_low_cnt;
+        self.le_sm_tx.write(le_data);
+    }
+
+    pub fn refresh_color(&mut self, transaction: Transaction) {
+        let mut buf_iter = self.color_buf.iter_mut();
+        for [r, g, b] in transaction.regs {
+            for i in (0..8).rev() {
+                let buf = buf_iter.next().unwrap();
+                let r = (r >> i) & 1;
+                let g = (g >> i) & 1;
+                let b = (b >> i) & 1;
+                *buf = r + (g << 1) + (b << 2);
+                // *buf = 0x03;
+            }
+        }
+        let pixels_cnt = self.color_buf.len() as u32 / 4;
+        let pixels_addr = self.color_buf.as_ptr() as u32;
+
+        self.color_ch
+            .ch()
+            .ch_trans_count()
+            .write(|w| unsafe { w.bits(pixels_cnt) });
+        self.color_ch
+            .ch()
+            .ch_al3_read_addr_trig()
+            .write(|w| unsafe { w.bits(pixels_addr) });
+
+        let total_cnt = 16 * 9 + 1 - 8; // so color will remain zero
+        let le_high_cnt = transaction.cmd as u32;
+        let le_low_cnt: u32 = total_cnt - le_high_cnt;
         let le_low_cnt = le_low_cnt - 1;
         let le_high_cnt = le_high_cnt - 1;
         let le_data = (le_high_cnt << 16) | le_low_cnt;
