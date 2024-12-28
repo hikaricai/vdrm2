@@ -9,7 +9,7 @@ use rp2040_hal::gpio::{
 };
 use rp2040_hal::multicore::{Multicore, Stack};
 use rp2040_hal::pac::{PPB, PSM};
-use rp2040_hal::pio::{PIOBuilder, PIOExt, PinDir};
+use rp2040_hal::pio::{PIOBuilder, PIOExt, PinDir, Running, Stopped};
 use rp2040_hal::sio::SioFifo;
 use rp2040_hal::{pac, Sio};
 use rp_pico::pac::{DMA, PIO0, RESETS};
@@ -105,6 +105,7 @@ fn core1_main(mut clock: Clock) {
 }
 
 pub struct LineClock {
+    cnt: u32,
     pwm: rp_pico::hal::pwm::Slices,
     gclk_pin: Pin<Gpio0, FunctionPwm, PullDown>,
     a_pin: Pin<Gpio2, FunctionPwm, PullDown>,
@@ -124,20 +125,22 @@ impl LineClock {
         let a_pin = pwm.pwm1.channel_a.output_to(a_pin);
         let b_pin = pwm.pwm2.channel_a.output_to(b_pin);
         let c_pin = pwm.pwm2.channel_b.output_to(c_pin);
-        pwm.pwm0.set_div_int(5);
+        let pwm_div = 5;
+        pwm.pwm0.set_div_int(pwm_div);
         pwm.pwm0.set_top(200 - 1);
         pwm.pwm0.channel_a.set_duty_cycle(100).unwrap();
         pwm.pwm0.enable_interrupt();
 
-        pwm.pwm1.set_div_int(5);
+        pwm.pwm1.set_div_int(pwm_div);
         pwm.pwm1.set_top(100 * 64 - 1);
         pwm.pwm1.channel_a.set_duty_cycle(100).unwrap();
 
-        pwm.pwm2.set_div_int(5);
+        pwm.pwm2.set_div_int(pwm_div);
         pwm.pwm2.set_top(100 - 1);
         pwm.pwm2.channel_a.set_duty_cycle(3).unwrap();
         pwm.pwm2.channel_b.set_duty_cycle(1).unwrap();
         Self {
+            cnt: 0,
             pwm,
             gclk_pin,
             a_pin,
@@ -147,12 +150,22 @@ impl LineClock {
     }
 
     pub fn start(&mut self) {
+        self.stop();
         self.pwm.pwm2.retard_phase();
         self.pwm.enable_simultaneous(0x07);
     }
 
     pub fn clear_interupte(&mut self) {
         self.pwm.pwm0.clear_interrupt();
+    }
+
+    pub fn handle_interrupt(&mut self) {
+        self.pwm.pwm0.clear_interrupt();
+        self.cnt += 1;
+        if self.cnt == 32 {
+            self.cnt = 0;
+            self.stop();
+        }
     }
 
     pub fn stop(&mut self) {
@@ -189,7 +202,11 @@ impl CmdClockPins {
 const CMD_BUF_SIZE: usize = 16 * 9 + 2;
 const COLOR_BUF_SIZE: usize = 16 * 9;
 pub struct CmdClock {
+    le_prog_offset: u32,
+    le_sm: rp2040_hal::pio::StateMachine<(PIO0, rp2040_hal::pio::SM3), Running>,
     le_sm_tx: rp2040_hal::pio::Tx<(PIO0, rp2040_hal::pio::SM3)>,
+    color_prog_offset: u32,
+    color_sm: rp2040_hal::pio::StateMachine<(PIO0, rp2040_hal::pio::SM2), Running>,
     data_ch: rp2040_hal::dma::Channel<rp2040_hal::dma::CH0>,
     color_ch: rp2040_hal::dma::Channel<rp2040_hal::dma::CH1>,
     data_buf: [u16; CMD_BUF_SIZE],
@@ -256,11 +273,11 @@ impl CmdClock {
             (sm, tx)
         };
 
-        let (color_sm, color_sm_tx) = {
+        let (color_sm, color_sm_tx, color_prog_offset) = {
             let program_data = pio_proc::pio_asm!(
                 ".wrap_target",
                 "set y 8",   // bigloop cnt is chip_num -1
-                "irq wait 6" // sync clk sm0
+                "irq wait 6", // sync clk sm0
                 "wait 1 irq 4", // pre wait to clear old irq
                 "bigloop:"
                 "set x 7",
@@ -277,6 +294,7 @@ impl CmdClock {
                 ".wrap",
             );
             let installed = pio.install(&program_data.program).unwrap();
+            let offset = installed.offset() as u32;
             let (mut sm, _, tx) = PIOBuilder::from_installed_program(installed)
                 .out_pins(pins.r0_pin.id().num, 3)
                 .clock_divisor_fixed_point(1, 0)
@@ -288,10 +306,10 @@ impl CmdClock {
                 (pins.g0_pin.id().num, PinDir::Output),
                 (pins.b0_pin.id().num, PinDir::Output),
             ]);
-            (sm, tx)
+            (sm, tx, offset)
         };
 
-        let (le_sm, le_sm_tx) = {
+        let (le_sm, le_sm_tx, le_prog_offset) = {
             let program_data = pio_proc::pio_asm!(
                 ".side_set 2",
                 ".wrap_target"
@@ -308,6 +326,7 @@ impl CmdClock {
                 ".wrap",
             );
             let installed = pio.install(&program_data.program).unwrap();
+            let offset = installed.offset() as u32;
             let (mut sm, _, tx) = PIOBuilder::from_installed_program(installed)
                 .out_pins(pins.r0_pin.id().num, 3)
                 .side_set_pin_base(pins.le_pin.id().num)
@@ -316,14 +335,14 @@ impl CmdClock {
                 .buffers(rp2040_hal::pio::Buffers::OnlyTx)
                 .build(sm3);
             sm.set_pindirs([(pins.le_pin.id().num, PinDir::Output)]);
-            (sm, tx)
+            (sm, tx, offset)
         };
 
         pins.into_pio0_pins();
         clk_sm.start();
         data_sm.start();
-        color_sm.start();
-        le_sm.start();
+        let color_sm = color_sm.start();
+        let le_sm = le_sm.start();
 
         data_ch.ch().ch_al1_ctrl().write(|w| unsafe {
             w
@@ -383,8 +402,17 @@ impl CmdClock {
             .ch_write_addr()
             .write(|w| unsafe { w.bits(color_sm_tx.fifo_address() as u32) });
         let buf = [0; CMD_BUF_SIZE];
+        rprintln!(
+            "le_prog_offset {} color_prog_offset {}",
+            le_prog_offset,
+            color_prog_offset
+        );
         Self {
+            le_prog_offset,
+            le_sm,
             le_sm_tx,
+            color_sm,
+            color_prog_offset,
             data_ch,
             color_ch,
             data_buf: buf,
@@ -392,9 +420,28 @@ impl CmdClock {
         }
     }
 
+    pub fn le_end(&self) -> bool {
+        let addr = self.le_sm.instruction_address();
+        if addr <= self.le_prog_offset + 1 {
+            return true;
+        }
+        false
+    }
+
+    pub fn color_end(&self) -> bool {
+        let addr = self.color_sm.instruction_address();
+        // wait irq 1 command may add pc
+        if addr <= self.color_prog_offset + 2 {
+            return true;
+        }
+        false
+    }
+
     pub fn cmd_busy(&self) -> bool {
-        // self.data_ch.ch().ch_ctrl_trig().read().busy().bit_is_set()
-        self.color_ch.ch().ch_ctrl_trig().read().busy().bit_is_set()
+        self.data_ch.ch().ch_ctrl_trig().read().busy().bit_is_set()
+            | self.color_ch.ch().ch_ctrl_trig().read().busy().bit_is_set()
+            | !self.color_end()
+            | !self.le_end()
     }
 
     pub fn commit(&mut self) -> bool {

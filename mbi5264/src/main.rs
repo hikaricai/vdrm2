@@ -100,48 +100,14 @@ fn main() -> ! {
         .into_push_pull_output()
         .into_dyn_pin()
         .into_pull_type();
-    // let clk_pin: Outpin = pins
-    //     .gpio4
-    //     .into_push_pull_output()
-    //     .into_dyn_pin()
-    //     .into_pull_type();
-    // let scan_pin: Outpin = pins
-    //     .gpio0
-    //     .into_push_pull_output()
-    //     .into_dyn_pin()
-    //     .into_pull_type();
-    // let a_pin: Outpin = pins
-    //     .gpio1
-    //     .into_push_pull_output()
-    //     .into_dyn_pin()
-    //     .into_pull_type();
-    // let b_pin: Outpin = pins
-    //     .gpio2
-    //     .into_push_pull_output()
-    //     .into_dyn_pin()
-    //     .into_pull_type();
-    // let c_pin: Outpin = pins
-    //     .gpio3
-    //     .into_push_pull_output()
-    //     .into_dyn_pin()
-    //     .into_pull_type();
 
     let pwm_slices = pwm::Slices::new(pac.PWM, &mut pac.RESETS);
     let mut line_clock = LineClock::new(pwm_slices, pins.gpio0, pins.gpio2, pins.gpio4, pins.gpio5);
-
     line_clock.start();
     critical_section::with(move |cs| {
         GLOBAL_LINE_CLOCK.replace(cs, Some(line_clock));
     });
-    // let a_b_c_pin = (a_pin, b_pin, c_pin);
-    // let _app = clocks::ClockApp::new(
-    //     clk_pin,
-    //     scan_pin,
-    //     a_b_c_pin,
-    //     sio.fifo,
-    //     &mut pac.PSM,
-    //     &mut pac.PPB,
-    // );
+
     let mut read_buf = [0; 1024];
     unsafe {
         pac::NVIC::unmask(pac::Interrupt::PWM_IRQ_WRAP);
@@ -152,7 +118,6 @@ fn main() -> ! {
         // cmd_pio.refresh(Transaction::mock(mock_cmd));
         cmd_pio.refresh_color(Transaction::mock(mock_cmd));
         cmd_pio.commit();
-        // delay.delay_ms(20);
         mock_cmd += 1;
         if mock_cmd == 143 - 8 {
             mock_cmd = 1
@@ -180,15 +145,9 @@ fn main() -> ! {
 #[allow(static_mut_refs)] // See https://github.com/rust-embedded/cortex-m/pull/561
 #[interrupt]
 fn PWM_IRQ_WRAP() {
-    static mut CNT: u32 = 0;
     critical_section::with(move |cs| {
-        *CNT += 1;
         let mut guard = GLOBAL_LINE_CLOCK.borrow_ref_mut(cs);
         let line_clk = guard.as_mut().unwrap();
-        line_clk.clear_interupte();
-        if *CNT == 32 {
-            *CNT = 0;
-            line_clk.stop();
-        }
+        line_clk.handle_interrupt();
     });
 }
