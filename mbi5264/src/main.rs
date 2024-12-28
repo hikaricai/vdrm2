@@ -102,8 +102,7 @@ fn main() -> ! {
         .into_pull_type();
 
     let pwm_slices = pwm::Slices::new(pac.PWM, &mut pac.RESETS);
-    let mut line_clock = LineClock::new(pwm_slices, pins.gpio0, pins.gpio2, pins.gpio4, pins.gpio5);
-    line_clock.start();
+    let line_clock = LineClock::new(pwm_slices, pins.gpio0, pins.gpio2, pins.gpio4, pins.gpio5);
     critical_section::with(move |cs| {
         GLOBAL_LINE_CLOCK.replace(cs, Some(line_clock));
     });
@@ -118,13 +117,6 @@ fn main() -> ! {
         // cmd_pio.refresh(Transaction::mock(mock_cmd));
         cmd_pio.refresh_color(Transaction::mock(mock_cmd));
         cmd_pio.commit();
-        mock_cmd += 1;
-        if mock_cmd == 143 - 8 {
-            mock_cmd = 1
-        }
-        led_pin.set_low().unwrap();
-        delay.delay_ms(10);
-        led_pin.set_high().unwrap();
         critical_section::with(move |cs| {
             GLOBAL_LINE_CLOCK
                 .borrow_ref_mut(cs)
@@ -132,6 +124,14 @@ fn main() -> ! {
                 .unwrap()
                 .start();
         });
+        mock_cmd += 1;
+        if mock_cmd == 143 - 8 {
+            mock_cmd = 1
+        }
+        // rprintln!("mock_cmd {}", mock_cmd);
+        led_pin.set_low().unwrap();
+        delay.delay_ms(10);
+        led_pin.set_high().unwrap();
         loop {
             let read_len = rtt.down.0.read(&mut read_buf);
             if read_len == 0 {

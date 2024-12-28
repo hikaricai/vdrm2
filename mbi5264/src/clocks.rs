@@ -129,11 +129,12 @@ impl LineClock {
         pwm.pwm0.set_div_int(pwm_div);
         pwm.pwm0.set_top(200 - 1);
         pwm.pwm0.channel_a.set_duty_cycle(100).unwrap();
-        pwm.pwm0.enable_interrupt();
+        // pwm.pwm0.disable_interrupt();
 
         pwm.pwm1.set_div_int(pwm_div);
-        pwm.pwm1.set_top(100 * 64 - 1);
+        pwm.pwm1.set_top(100 * 64 - 1 - 50); // -50 to stop pwm ealy
         pwm.pwm1.channel_a.set_duty_cycle(100).unwrap();
+        pwm.pwm1.enable_interrupt();
 
         pwm.pwm2.set_div_int(pwm_div);
         pwm.pwm2.set_top(100 - 1);
@@ -156,16 +157,18 @@ impl LineClock {
     }
 
     pub fn clear_interupte(&mut self) {
-        self.pwm.pwm0.clear_interrupt();
+        self.pwm.pwm1.clear_interrupt();
     }
 
     pub fn handle_interrupt(&mut self) {
-        self.pwm.pwm0.clear_interrupt();
-        self.cnt += 1;
-        if self.cnt == 32 {
-            self.cnt = 0;
-            self.stop();
-        }
+        // self.cnt += 1;
+        // self.pwm.pwm0.clear_interrupt();
+        // if !self.pwm.pwm1.has_overflown() {
+        //     return;
+        // }
+        self.pwm.pwm1.clear_interrupt();
+        // self.pwm.pwm2.clear_interrupt();
+        self.stop();
     }
 
     pub fn stop(&mut self) {
