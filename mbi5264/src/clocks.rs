@@ -17,7 +17,7 @@ const CMD_STOP_GCLK: u32 = 0x42;
 const CMD_RESTART_GCLK: u32 = 0x43;
 const RESP_ACK: u32 = 0x11;
 const RESP_ONLINE: u32 = 0x12;
-use crate::{Outpin, Transaction};
+use crate::{Command, Outpin};
 use rtt_target::rprintln;
 static mut CORE1_STACK: Stack<4096> = Stack::new();
 pub struct ClockApp {
@@ -453,7 +453,7 @@ impl CmdClock {
         busy
     }
 
-    pub fn refresh(&mut self, transaction: Transaction) {
+    pub fn refresh(&mut self, transaction: Command) {
         let mut buf_iter = self.data_buf.iter_mut();
         for [r, g, b] in transaction.regs {
             for i in (0..16).rev() {
@@ -485,9 +485,9 @@ impl CmdClock {
         self.le_sm_tx.write(le_data);
     }
 
-    pub fn refresh_color(&mut self, transaction: Transaction) {
+    pub fn refresh_color(&mut self, cmd: &Command) {
         let mut buf_iter = self.color_buf.iter_mut();
-        for [r, g, b] in transaction.regs {
+        for [r, g, b] in cmd.regs {
             for i in (0..8).rev() {
                 let buf = buf_iter.next().unwrap();
                 let r = (r >> i) & 1;
@@ -510,7 +510,7 @@ impl CmdClock {
             .write(|w| unsafe { w.bits(pixels_addr) });
 
         let total_cnt = 16 * 9 + 1 - 8; // so color will remain zero
-        let le_high_cnt = transaction.cmd as u32;
+        let le_high_cnt = cmd.cmd as u32;
         let le_low_cnt: u32 = total_cnt - le_high_cnt;
         let le_low_cnt = le_low_cnt - 1;
         let le_high_cnt = le_high_cnt - 1;

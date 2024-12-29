@@ -8,6 +8,7 @@ use std::time::Duration;
 struct RttHost {
     session: Session,
     rtt: Rtt,
+    terminal_up: UpChannel,
     up: UpChannel,
     down: DownChannel,
 }
@@ -38,11 +39,14 @@ impl RttHost {
         log::info!("[end] attach");
         std::mem::drop(core);
 
-        let up = rtt.up_channels().take(0).unwrap();
+        let terminal_up = rtt.up_channels().take(0).unwrap();
+        let up = rtt.up_channels().take(1).unwrap();
         let down = rtt.down_channels().take(0).unwrap();
+
         Self {
             session,
             rtt,
+            terminal_up,
             up,
             down,
         }
@@ -50,7 +54,18 @@ impl RttHost {
 }
 
 impl RttHost {
+    fn try_read_log(&mut self) {
+        let mut core = self.session.core(0).unwrap();
+        let mut buf = [0; 1024];
+        let size = self.terminal_up.read(&mut core, &mut buf[..]).unwrap();
+        if size == 0 {
+            return;
+        }
+        log::info!("log: {}", String::from_utf8_lossy(&buf[0..size]));
+    }
+
     fn try_read(&mut self) -> anyhow::Result<usize> {
+        self.try_read_log();
         let mut core = self.session.core(0).unwrap();
         let mut buf = [0; 1024];
         let size = self.up.read(&mut core, &mut buf[..])?;
@@ -68,6 +83,7 @@ impl RttHost {
     }
 
     fn try_write(&mut self, buf: &[u8]) -> anyhow::Result<usize> {
+        self.try_read_log();
         let mut core = self.session.core(0).unwrap();
         let size = self.down.write(&mut core, buf)?;
         Ok(size)
@@ -81,6 +97,14 @@ impl RttHost {
             }
             std::thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    fn block_write_cmd(&mut self, cmd: mbi5264::Command) {
+        let buf = cmd.to_buf();
+        // log::info!("write cmd {}, buf[0] {}", cmd.cmd, buf[0]);
+        self.block_write(buf).unwrap();
+        let size = self.block_read().unwrap();
+        // log::info!("block read {}", size);
     }
 }
 
@@ -97,37 +121,16 @@ fn main() {
     log::info!("Hello, world!");
     let elf_path = std::env::args().nth(1).unwrap();
     let mut rtt_host = RttHost::open(&elf_path);
-
-    let cmd = mbi5264::Transaction::new_cmd(1, 0x2333);
-    let mut has_write = false;
+    if let Ok(size) = rtt_host.try_read() {
+        log::info!("drain up {}", size);
+    };
+    let mut cmd = 0u8;
     loop {
-        std::thread::sleep(Duration::from_secs(1));
-        // Read from a channel
-        match rtt_host.try_read() {
-            Ok(count) => {
-                if count != 0 {
-                    println!("Read {count}",);
-                }
-            }
-            Err(e) => {
-                println!("read e {e}");
-            }
-        };
-        if has_write {
-            continue;
+        cmd += 1;
+        rtt_host.block_write_cmd(mbi5264::Command::new_cmd(cmd, cmd as u16));
+        if cmd == 143 - 8 {
+            cmd = 0
         }
-
-        // Write to a channel
-        let w_buf = cmd.to_buf();
-        match rtt_host.block_write(w_buf) {
-            Ok(len) => {
-                println!("write {len}");
-            }
-            Err(e) => {
-                panic!("write e {e}");
-            }
-        }
-        has_write = true;
     }
 }
 

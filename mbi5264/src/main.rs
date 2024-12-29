@@ -3,6 +3,7 @@
 #![no_main]
 mod clocks;
 use core::cell::RefCell;
+use core::fmt::Write;
 
 use bsp::entry;
 use bsp::hal::{
@@ -25,14 +26,14 @@ static GLOBAL_LINE_CLOCK: Mutex<RefCell<Option<LineClock>>> = Mutex::new(RefCell
 type Outpin = Pin<DynPinId, FunctionSioOutput, DynPullType>;
 
 #[repr(packed)]
-pub struct Transaction {
+pub struct Command {
     // 命令
     pub cmd: u8,
     // 9个串联芯片
     pub regs: [[u16; 3]; 9],
 }
 
-impl Transaction {
+impl Command {
     fn mock(cmd: u8) -> Self {
         Self {
             cmd,
@@ -48,6 +49,10 @@ fn main() -> ! {
             0: {
                 size: 1024,
                 name: "Terminal"
+            }
+            1: {
+                size: 1024,
+                name: "Cmd"
             }
         }
         down: {
@@ -106,17 +111,18 @@ fn main() -> ! {
     critical_section::with(move |cs| {
         GLOBAL_LINE_CLOCK.replace(cs, Some(line_clock));
     });
-
-    let mut read_buf = [0; 1024];
     unsafe {
         pac::NVIC::unmask(pac::Interrupt::PWM_IRQ_WRAP);
     }
-    let mut mock_cmd = 1;
+    let mut cmd_rx = CmdRx::new(rtt.down.0, rtt.up.1);
     loop {
         delay.delay_ms(10);
         // cmd_pio.refresh(Transaction::mock(mock_cmd));
-        cmd_pio.refresh_color(Transaction::mock(mock_cmd));
-        cmd_pio.commit();
+        if let Some(cmd) = cmd_rx.try_recv() {
+            cmd_pio.refresh_color(cmd);
+            cmd_pio.commit();
+            cmd_rx.ack();
+        }
         critical_section::with(move |cs| {
             GLOBAL_LINE_CLOCK
                 .borrow_ref_mut(cs)
@@ -124,21 +130,42 @@ fn main() -> ! {
                 .unwrap()
                 .start();
         });
-        mock_cmd += 1;
-        if mock_cmd == 143 - 8 {
-            mock_cmd = 1
-        }
         // rprintln!("mock_cmd {}", mock_cmd);
         led_pin.set_low().unwrap();
         delay.delay_ms(10);
         led_pin.set_high().unwrap();
-        loop {
-            let read_len = rtt.down.0.read(&mut read_buf);
-            if read_len == 0 {
-                break;
-            }
-            rprintln!("read {}", read_len);
+    }
+}
+
+struct CmdRx {
+    down: rtt_target::DownChannel,
+    up: rtt_target::UpChannel,
+    read_buf: [u8; 1024],
+}
+
+impl CmdRx {
+    fn new(down: rtt_target::DownChannel, up: rtt_target::UpChannel) -> Self {
+        Self {
+            down,
+            up,
+            read_buf: [0; 1024],
         }
+    }
+    fn try_recv(&mut self) -> Option<&Command> {
+        let read_len = self.down.read(&mut self.read_buf);
+        if read_len != core::mem::size_of::<Command>() {
+            if read_len != 0 {
+                rprintln!("invalid size {}", read_len);
+            }
+            return None;
+        }
+        let trans: &Command = unsafe { &*(self.read_buf.as_ptr() as *const Command) };
+        rprintln!("trans cmd {}", trans.cmd);
+        Some(trans)
+    }
+
+    fn ack(&mut self) {
+        self.up.write(b"\n");
     }
 }
 
