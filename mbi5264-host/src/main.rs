@@ -124,13 +124,20 @@ fn main() {
     if let Ok(size) = rtt_host.try_read() {
         log::info!("drain up {}", size);
     };
-    let mut cmd = 0u8;
+    let cmds: &[(u8, u16)] = &[];
     loop {
-        cmd += 1;
-        rtt_host.block_write_cmd(mbi5264::Command::new_cmd(cmd, cmd as u16));
-        if cmd == 143 - 8 {
-            cmd = 0
+        for &(cmd, param) in cmds {
+            rtt_host.block_write_cmd(mbi5264::Command::new_cmd(cmd, param));
         }
+
+        for y in 0..64u16 {
+            for x in 0..16u16 {
+                let regs = [[y * 16 + x; 3]; 9];
+                rtt_host.block_write_cmd(mbi5264::Command::new_rgb(regs));
+            }
+        }
+        // sync
+        rtt_host.block_write_cmd(mbi5264::Command::new_cmd(2, 0));
     }
 }
 

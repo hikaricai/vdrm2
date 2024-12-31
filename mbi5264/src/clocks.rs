@@ -453,7 +453,7 @@ impl CmdClock {
         busy
     }
 
-    pub fn refresh(&mut self, transaction: Command) {
+    pub fn refresh(&mut self, transaction: &Command) {
         let mut buf_iter = self.data_buf.iter_mut();
         for [r, g, b] in transaction.regs {
             for i in (0..16).rev() {

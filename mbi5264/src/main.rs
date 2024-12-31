@@ -14,10 +14,8 @@ use bsp::hal::{
 };
 use clocks::LineClock;
 use critical_section::Mutex;
-use embedded_hal::digital::OutputPin;
-use embedded_hal::pwm::SetDutyCycle;
+use embedded_hal::digital::StatefulOutputPin;
 use panic_rtt_target as _;
-use rp2040_hal::dma::DMAExt;
 use rp2040_hal::gpio::{DynPinId, DynPullType, FunctionSioOutput, Pin};
 use rp2040_hal::pac::interrupt;
 use rp_pico as bsp;
@@ -115,25 +113,32 @@ fn main() -> ! {
         pac::NVIC::unmask(pac::Interrupt::PWM_IRQ_WRAP);
     }
     let mut cmd_rx = CmdRx::new(rtt.down.0, rtt.up.1);
+    let mut cnt = 0;
     loop {
-        delay.delay_ms(10);
+        cnt += 1;
         // cmd_pio.refresh(Transaction::mock(mock_cmd));
         if let Some(cmd) = cmd_rx.try_recv() {
-            cmd_pio.refresh_color(cmd);
+            let is_sync = cmd.cmd == 2;
+            cnt += 1000;
+            cmd_pio.refresh(cmd);
             cmd_pio.commit();
             cmd_rx.ack();
+            if is_sync {
+                // vsync
+                critical_section::with(move |cs| {
+                    GLOBAL_LINE_CLOCK
+                        .borrow_ref_mut(cs)
+                        .as_mut()
+                        .unwrap()
+                        .start();
+                });
+            }
         }
-        critical_section::with(move |cs| {
-            GLOBAL_LINE_CLOCK
-                .borrow_ref_mut(cs)
-                .as_mut()
-                .unwrap()
-                .start();
-        });
         // rprintln!("mock_cmd {}", mock_cmd);
-        led_pin.set_low().unwrap();
-        delay.delay_ms(10);
-        led_pin.set_high().unwrap();
+        if cnt == 1000_000 {
+            cnt = 0;
+            led_pin.toggle().unwrap();
+        }
     }
 }
 
