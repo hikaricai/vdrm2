@@ -209,7 +209,7 @@ pub struct CmdClock {
     le_sm: rp2040_hal::pio::StateMachine<(PIO0, rp2040_hal::pio::SM3), Running>,
     le_sm_tx: rp2040_hal::pio::Tx<(PIO0, rp2040_hal::pio::SM3)>,
     color_prog_offset: u32,
-    color_sm: rp2040_hal::pio::StateMachine<(PIO0, rp2040_hal::pio::SM2), Running>,
+    color_sm: rp2040_hal::pio::StateMachine<(PIO0, rp2040_hal::pio::SM2), Stopped>,
     data_ch: rp2040_hal::dma::Channel<rp2040_hal::dma::CH0>,
     color_ch: rp2040_hal::dma::Channel<rp2040_hal::dma::CH1>,
     data_buf: [u16; CMD_BUF_SIZE],
@@ -227,9 +227,9 @@ impl CmdClock {
                 ".side_set 1",
                 ".wrap_target",
                 "irq 5           side 0b0",     // 5 first to be faster
-                "irq 4           side 0b0 [8]", // increase the delay if something get wrong
+                "irq 4           side 0b0 [5]", // increase the delay if something get wrong
                 "irq 5           side 0b1",
-                "irq 4           side 0b1 [8]",
+                "irq 4           side 0b1 [5]",
                 ".wrap",
             );
             let installed = pio.install(&program_data.program).unwrap();
@@ -344,7 +344,7 @@ impl CmdClock {
         pins.into_pio0_pins();
         clk_sm.start();
         data_sm.start();
-        let color_sm = color_sm.start();
+        // let color_sm = color_sm.start();
         let le_sm = le_sm.start();
 
         data_ch.ch().ch_al1_ctrl().write(|w| unsafe {
@@ -432,6 +432,8 @@ impl CmdClock {
     }
 
     pub fn color_end(&self) -> bool {
+        // TODO use color sm
+        return true;
         let addr = self.color_sm.instruction_address();
         // wait irq 1 command may add pc
         if addr <= self.color_prog_offset + 2 {

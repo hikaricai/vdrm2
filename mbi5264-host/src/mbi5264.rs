@@ -6,6 +6,7 @@ trait UminiDefault {
     fn umini_default() -> u16;
 }
 
+#[derive(Clone, Copy)]
 #[repr(u8)]
 pub enum CMD {
     Latch = 1,
@@ -30,7 +31,7 @@ pub enum CMD {
     WriteCfg16 = 31, // 1F
 }
 
-struct Unknown3(u16);
+pub struct Unknown3(u16);
 impl UminiDefault for Unknown3 {
     fn umini_default() -> u16 {
         0x4A7C
@@ -71,6 +72,7 @@ impl UminiDefault for RegCfg1 {
 struct RegCfg2 {
     #[bits(10, default = 0x201)]
     _reserved0: u16,
+    #[bits(default = true)]
     double_fresh: bool,
     #[bits(3)]
     color_compensation: u8,
@@ -135,7 +137,7 @@ impl UminiDefault for RegCfg4 {
         assert_eq!(exp, exp2);
         let v = Self::new()
             .with_dimm_compensation2(0x00)
-            .with_dimm_compensation1(0x11)
+            .with_dimm_compensation1(0x13)
             .0;
         assert_eq!(v, exp);
         v
@@ -298,7 +300,7 @@ impl UminiDefault for RegCfg13 {
         // clk = 10m
         // gclk_freq >= 125k * (spwm_mod 0b11) 512 == 64m
         // ? pll_multi == (79 + 1) / (7 + 1) = 10
-        // ? gclk == 100m > 64m
+        // ? gclk == 9m * 10 > 64m
         // dsview is A79F or A797
         let exp = 0xA79F;
         let exp2 = 0b1010_0111_1001_1111;
@@ -333,6 +335,28 @@ impl UminiDefault for RegCfg16 {
     }
 }
 
+pub fn unimi_cmds() -> Vec<(CMD, u16)> {
+    vec![
+        (CMD::Unknown3, Unknown3::umini_default()),
+        (CMD::WriteCfg1, RegCfg1::umini_default()),
+        (CMD::WriteCfg7, RegCfg7::umini_default()),
+        (CMD::WriteCfg2, RegCfg2::umini_default()),
+        (CMD::WriteCfg5, RegCfg5::umini_default()),
+        (CMD::WriteCfg6, RegCfg6::umini_default()),
+        (CMD::WriteCfg3, RegCfg3::umini_default()),
+        (CMD::WriteCfg4, RegCfg4::umini_default()),
+        (CMD::WriteCfg8, RegCfg8::umini_default()),
+        (CMD::WriteCfg9, RegCfg9::umini_default()),
+        (CMD::WriteCfg10, RegCfg10::umini_default()),
+        (CMD::WriteCfg11, RegCfg11::umini_default()),
+        (CMD::WriteCfg12, RegCfg12::umini_default()),
+        (CMD::WriteCfg13, RegCfg13::umini_default()),
+        (CMD::WriteCfg14, RegCfg14::umini_default()),
+        (CMD::WriteCfg15, RegCfg15::umini_default()),
+        (CMD::WriteCfg16, RegCfg16::umini_default()),
+    ]
+}
+
 // 一个transaction完成串联的全部芯片的一次命令写入
 // 只控制le和data
 #[repr(packed)]
@@ -344,10 +368,10 @@ pub struct Command {
 }
 
 impl Command {
-    pub fn new_cmd(cmd: u8, reg: u16) -> Self {
+    pub fn new_cmd(cmd: CMD, reg: u16) -> Self {
         Self {
             regs: [[reg; 3]; 9],
-            cmd,
+            cmd: cmd as u8,
         }
     }
     pub fn new_rgb(regs: [[u16; 3]; 9]) -> Self {

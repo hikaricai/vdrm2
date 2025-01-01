@@ -14,7 +14,7 @@ use bsp::hal::{
 };
 use clocks::LineClock;
 use critical_section::Mutex;
-use embedded_hal::digital::StatefulOutputPin;
+use embedded_hal::digital::{OutputPin, StatefulOutputPin};
 use panic_rtt_target as _;
 use rp2040_hal::gpio::{DynPinId, DynPullType, FunctionSioOutput, Pin};
 use rp2040_hal::pac::interrupt;
@@ -55,7 +55,7 @@ fn main() -> ! {
         }
         down: {
             0: {
-                size: 1024,
+                size: 102400,
                 name: "Terminal"
             }
         }
@@ -104,6 +104,12 @@ fn main() -> ! {
         .into_dyn_pin()
         .into_pull_type();
 
+    let mut dbg_pin: Outpin = pins
+        .gpio11
+        .into_push_pull_output()
+        .into_dyn_pin()
+        .into_pull_type();
+
     let pwm_slices = pwm::Slices::new(pac.PWM, &mut pac.RESETS);
     let line_clock = LineClock::new(pwm_slices, pins.gpio0, pins.gpio2, pins.gpio4, pins.gpio5);
     critical_section::with(move |cs| {
@@ -112,26 +118,31 @@ fn main() -> ! {
     unsafe {
         pac::NVIC::unmask(pac::Interrupt::PWM_IRQ_WRAP);
     }
-    let mut cmd_rx = CmdRx::new(rtt.down.0, rtt.up.1);
+    let mut cmd_rx = CmdRx::new(rtt.down.0);
+    let mut cmd_rx_ack = CmdRxAck::new(rtt.up.1);
     let mut cnt = 0;
     loop {
         cnt += 1;
         // cmd_pio.refresh(Transaction::mock(mock_cmd));
-        if let Some(cmd) = cmd_rx.try_recv() {
-            let is_sync = cmd.cmd == 2;
-            cnt += 1000;
-            cmd_pio.refresh(cmd);
-            cmd_pio.commit();
-            cmd_rx.ack();
-            if is_sync {
-                // vsync
-                critical_section::with(move |cs| {
-                    GLOBAL_LINE_CLOCK
-                        .borrow_ref_mut(cs)
-                        .as_mut()
-                        .unwrap()
-                        .start();
-                });
+        if let Some(cmds) = cmd_rx.try_recv() {
+            for cmd in cmds {
+                let is_sync = cmd.cmd == 2;
+                cnt += 1000;
+                dbg_pin.set_low().unwrap();
+                cmd_pio.refresh(cmd);
+                cmd_pio.commit();
+                cmd_rx_ack.ack();
+                dbg_pin.set_high().unwrap();
+                if is_sync {
+                    // vsync
+                    critical_section::with(move |cs| {
+                        GLOBAL_LINE_CLOCK
+                            .borrow_ref_mut(cs)
+                            .as_mut()
+                            .unwrap()
+                            .start();
+                    });
+                }
             }
         }
         // rprintln!("mock_cmd {}", mock_cmd);
@@ -144,33 +155,43 @@ fn main() -> ! {
 
 struct CmdRx {
     down: rtt_target::DownChannel,
-    up: rtt_target::UpChannel,
-    read_buf: [u8; 1024],
+    read_buf: [u8; 102400],
 }
 
-impl CmdRx {
-    fn new(down: rtt_target::DownChannel, up: rtt_target::UpChannel) -> Self {
-        Self {
-            down,
-            up,
-            read_buf: [0; 1024],
-        }
-    }
-    fn try_recv(&mut self) -> Option<&Command> {
-        let read_len = self.down.read(&mut self.read_buf);
-        if read_len != core::mem::size_of::<Command>() {
-            if read_len != 0 {
-                rprintln!("invalid size {}", read_len);
-            }
-            return None;
-        }
-        let trans: &Command = unsafe { &*(self.read_buf.as_ptr() as *const Command) };
-        rprintln!("trans cmd {}", trans.cmd);
-        Some(trans)
+struct CmdRxAck {
+    up: rtt_target::UpChannel,
+}
+
+impl CmdRxAck {
+    pub fn new(up: rtt_target::UpChannel) -> Self {
+        Self { up }
     }
 
     fn ack(&mut self) {
         self.up.write(b"\n");
+    }
+}
+
+impl CmdRx {
+    fn new(down: rtt_target::DownChannel) -> Self {
+        Self {
+            down,
+            read_buf: [0; 102400],
+        }
+    }
+    fn try_recv(&mut self) -> Option<&[Command]> {
+        let read_len = self.down.read(&mut self.read_buf);
+        let len = read_len / core::mem::size_of::<Command>();
+        if read_len % core::mem::size_of::<Command>() != 0 {
+            rprintln!("invalid size {}", read_len);
+        }
+        if len == 0 {
+            return None;
+        }
+        let trans: &[Command] =
+            unsafe { core::slice::from_raw_parts(self.read_buf.as_ptr() as *const Command, len) };
+        // rprintln!("trans cmd {}", trans.cmd);
+        Some(trans)
     }
 }
 
