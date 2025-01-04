@@ -14,7 +14,9 @@ pub enum CMD {
     Unknown3 = 3,
     WriteCfg1 = 4,
     WriteCfg7 = 6,
+    ErrDetect = 7,
     WriteCfg2 = 8,
+    ResetSoft = 10,  // A
     WriteCfg5 = 13,  // D
     Confirm = 14,    // E
     WriteCfg6 = 15,  // F
@@ -34,7 +36,15 @@ pub enum CMD {
 pub struct Unknown3(u16);
 impl UminiDefault for Unknown3 {
     fn umini_default() -> u16 {
+        // 也可以是4a78
         0x4A7C
+    }
+}
+
+pub struct ErrDetect(u16);
+impl UminiDefault for ErrDetect {
+    fn umini_default() -> u16 {
+        0
     }
 }
 
@@ -57,10 +67,11 @@ impl UminiDefault for RegCfg1 {
     fn umini_default() -> u16 {
         let exp = 0x9FA5;
         let exp2 = 0b1001_1111_1010_0101;
+        let exp = 0x9F2D;
+        let exp2 = 0b1001_1111_0010_1101;
         assert_eq!(exp, exp2);
         let v = Self::new()
-            .with_current_gain(0x25)
-            .with_spwm_mode_low(true)
+            .with_current_gain(0x2D)
             .with_scan_lines_low(31)
             .0;
         assert_eq!(v, exp);
@@ -134,10 +145,13 @@ impl UminiDefault for RegCfg4 {
     fn umini_default() -> u16 {
         let exp = 0xCC1F;
         let exp2 = 0b1100_1100_0001_1111;
+
+        let exp = 0xAC1F;
+        let exp2 = 0b1010_1100_0001_1111;
         assert_eq!(exp, exp2);
         let v = Self::new()
             .with_dimm_compensation2(0x00)
-            .with_dimm_compensation1(0x13)
+            .with_dimm_compensation1(0x0B)
             .0;
         assert_eq!(v, exp);
         v
@@ -191,8 +205,11 @@ impl UminiDefault for RegCfg7 {
     fn umini_default() -> u16 {
         let exp = 0x8A04;
         let exp2 = 0b1000_1010_0000_0100;
+        let exp = 0x8C04;
+        let exp2 = 0b1000_1100_0000_0100;
+
         assert_eq!(exp, exp2);
-        let v = Self::new().with_reserved2(0x114).0;
+        let v = Self::new().with_reserved2(0x118).0;
         assert_eq!(v, exp);
         v
     }
@@ -232,7 +249,7 @@ impl UminiDefault for RegCfg9 {
         // datasheet default is 0x121
         // dsveiw is 0x643 or 0x 3A1
         // 0b0000_0011_1010_0001
-        0x3A1
+        0x321
     }
 }
 
@@ -302,10 +319,14 @@ impl UminiDefault for RegCfg13 {
         // ? pll_multi == (79 + 1) / (7 + 1) = 10
         // ? gclk == 9m * 10 > 64m
         // dsview is A79F or A797
-        let exp = 0xA79F;
-        let exp2 = 0b1010_0111_1001_1111;
+        // let exp = 0xA79F;
+        // let exp2 = 0b1010_0111_1001_1111;
+        // assert_eq!(exp, exp2);
+
+        let exp = 0xA797;
+        let exp2 = 0b1010_0111_1001_0111;
         assert_eq!(exp, exp2);
-        let v = Self::new().with_pll_n(7).with_pll_m(79).0;
+        let v = Self::new().with_pll_n(5).with_pll_m(79).0;
         assert_eq!(v, exp);
         v
     }

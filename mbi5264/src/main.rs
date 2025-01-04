@@ -38,6 +38,24 @@ impl Command {
             regs: [[0xff00 + cmd as u16; 3]; 9],
         }
     }
+
+    fn new_sync() -> Self {
+        Self {
+            cmd: 2,
+            regs: [[0; 3]; 9],
+        }
+    }
+}
+fn gen_colors() -> [Command; 1024] {
+    let mut cmds = unsafe { core::mem::MaybeUninit::<[Command; 1024]>::zeroed().assume_init() };
+    for y in 0..64u16 {
+        for x in 0..16u16 {
+            let regs = [[(y * 16 + x) << 3; 3]; 9];
+            let cmd = Command { cmd: 1, regs };
+            cmds[(y * 16 + x) as usize] = cmd;
+        }
+    }
+    cmds
 }
 
 #[entry]
@@ -55,7 +73,7 @@ fn main() -> ! {
         }
         down: {
             0: {
-                size: 102400,
+                size: 10240,
                 name: "Terminal"
             }
         }
@@ -118,6 +136,8 @@ fn main() -> ! {
     unsafe {
         pac::NVIC::unmask(pac::Interrupt::PWM_IRQ_WRAP);
     }
+    let colors = gen_colors();
+    let sync_cmd = Command::new_sync();
     let mut cmd_rx = CmdRx::new(rtt.down.0);
     let mut cmd_rx_ack = CmdRxAck::new(rtt.up.1);
     let mut cnt = 0;
@@ -126,27 +146,54 @@ fn main() -> ! {
         // cmd_pio.refresh(Transaction::mock(mock_cmd));
         if let Some(cmds) = cmd_rx.try_recv() {
             for cmd in cmds {
-                let is_sync = cmd.cmd == 2;
-                cnt += 1000;
-                dbg_pin.set_low().unwrap();
+                // dbg_pin.set_low().unwrap();
+                // dbg_pin.set_high().unwrap();
+                if cmd.cmd == 2 {
+                    for color in colors.iter() {
+                        cmd_pio.refresh(color);
+                        cmd_pio.commit();
+                    }
+                    cmd_rx_ack.ack();
+                    continue;
+                }
                 cmd_pio.refresh(cmd);
                 cmd_pio.commit();
                 cmd_rx_ack.ack();
-                dbg_pin.set_high().unwrap();
-                if is_sync {
-                    // vsync
-                    critical_section::with(move |cs| {
-                        GLOBAL_LINE_CLOCK
-                            .borrow_ref_mut(cs)
-                            .as_mut()
-                            .unwrap()
-                            .start();
-                    });
-                }
+            }
+        }
+
+        cmd_pio.refresh(&sync_cmd);
+        cmd_pio.commit();
+        // vsync
+        critical_section::with(move |cs| {
+            GLOBAL_LINE_CLOCK
+                .borrow_ref_mut(cs)
+                .as_mut()
+                .unwrap()
+                .start();
+        });
+        loop {
+            delay.delay_ms(1);
+            let sync_end = critical_section::with(move |cs| {
+                !GLOBAL_LINE_CLOCK
+                    .borrow_ref_mut(cs)
+                    .as_mut()
+                    .unwrap()
+                    .running
+            });
+            if sync_end {
+                break;
             }
         }
         // rprintln!("mock_cmd {}", mock_cmd);
-        if cnt == 1000_000 {
+        if cnt >= 10 {
+            // critical_section::with(move |cs| {
+            //     GLOBAL_LINE_CLOCK
+            //         .borrow_ref_mut(cs)
+            //         .as_mut()
+            //         .unwrap()
+            //         .start();
+            // });
             cnt = 0;
             led_pin.toggle().unwrap();
         }
@@ -155,7 +202,7 @@ fn main() -> ! {
 
 struct CmdRx {
     down: rtt_target::DownChannel,
-    read_buf: [u8; 102400],
+    read_buf: [u8; 10240],
 }
 
 struct CmdRxAck {
@@ -176,7 +223,7 @@ impl CmdRx {
     fn new(down: rtt_target::DownChannel) -> Self {
         Self {
             down,
-            read_buf: [0; 102400],
+            read_buf: [0; 10240],
         }
     }
     fn try_recv(&mut self) -> Option<&[Command]> {

@@ -2,7 +2,7 @@ use critical_section::Mutex;
 use embedded_hal::digital::OutputPin;
 use embedded_hal::pwm::SetDutyCycle;
 use rp2040_hal::dma::{ChannelIndex, DMAExt, SingleChannel};
-use rp2040_hal::gpio::bank0::{self, Gpio0, Gpio2, Gpio4, Gpio5};
+use rp2040_hal::gpio::bank0::{self, Gpio0, Gpio12, Gpio2, Gpio4, Gpio5};
 use rp2040_hal::gpio::{
     DefaultTypeState, DynFunction, DynPinId, DynPullType, FunctionNull, FunctionPio0, FunctionPwm,
     FunctionSioOutput, Pin, PullDown, PullType,
@@ -105,6 +105,7 @@ fn core1_main(mut clock: Clock) {
 }
 
 pub struct LineClock {
+    pub running: bool,
     cnt: u32,
     pwm: rp_pico::hal::pwm::Slices,
     gclk_pin: Pin<Gpio0, FunctionPwm, PullDown>,
@@ -141,6 +142,7 @@ impl LineClock {
         pwm.pwm2.channel_a.set_duty_cycle(3).unwrap();
         pwm.pwm2.channel_b.set_duty_cycle(1).unwrap();
         Self {
+            running: false,
             cnt: 0,
             pwm,
             gclk_pin,
@@ -152,6 +154,7 @@ impl LineClock {
 
     pub fn start(&mut self) {
         self.stop();
+        self.running = true;
         self.pwm.pwm2.retard_phase();
         self.pwm.enable_simultaneous(0x07);
     }
@@ -161,17 +164,21 @@ impl LineClock {
     }
 
     pub fn handle_interrupt(&mut self) {
-        // self.cnt += 1;
+        self.cnt += 1;
         // self.pwm.pwm0.clear_interrupt();
         // if !self.pwm.pwm1.has_overflown() {
         //     return;
         // }
         self.pwm.pwm1.clear_interrupt();
         // self.pwm.pwm2.clear_interrupt();
-        self.stop();
+        if self.cnt == 32 {
+            self.cnt = 0;
+            self.stop();
+        }
     }
 
     pub fn stop(&mut self) {
+        self.running = false;
         // self.pwm.enable_simultaneous(0xf8);
         self.pwm.pwm0.disable();
         self.pwm.pwm1.disable();

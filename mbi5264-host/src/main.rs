@@ -162,10 +162,13 @@ fn main() {
     };
     let cmds = mbi5264::unimi_cmds();
     let colors = gen_colors();
+    let mut sync_cnt = 0;
     loop {
         for &(cmd, param) in cmds.iter() {
-            rtt_host.block_write_cmd(mbi5264::Command::new_cmd(mbi5264::CMD::Confirm, 0));
-            rtt_host.block_write_cmd(mbi5264::Command::new_cmd(cmd, param));
+            rtt_host.block_write_cmds(&[
+                mbi5264::Command::new_cmd(mbi5264::CMD::Confirm, 0),
+                mbi5264::Command::new_cmd(cmd, param),
+            ]);
         }
 
         // for y in 0..64u16 {
@@ -178,11 +181,16 @@ fn main() {
         //     }
         //     rtt_host.block_write_cmds(&cmds);
         // }
-        for batch in colors.iter() {
-            rtt_host.block_write_cmds(batch);
-        }
+
+        // for batch in colors.iter() {
+        //     rtt_host.block_write_cmds(batch);
+        // }
         // sync
-        rtt_host.block_write_cmd(mbi5264::Command::new_cmd(mbi5264::CMD::VSync, 0));
+        if sync_cnt < 3 {
+            rtt_host.block_write_cmd(mbi5264::Command::new_cmd(mbi5264::CMD::VSync, 0));
+        }
+        // sync_cnt += 1;
+        std::thread::sleep(Duration::from_millis(2));
     }
 }
 
