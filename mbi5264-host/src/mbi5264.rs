@@ -17,6 +17,8 @@ pub enum CMD {
     ErrDetect = 7,
     WriteCfg2 = 8,
     ResetSoft = 10,  // A
+    EnableAll = 11,  // B
+    DisableAll = 12, // C
     WriteCfg5 = 13,  // D
     Confirm = 14,    // E
     WriteCfg6 = 15,  // F
@@ -37,7 +39,8 @@ pub struct Unknown3(u16);
 impl UminiDefault for Unknown3 {
     fn umini_default() -> u16 {
         // 也可以是4a78
-        0x4A7C
+        0x4A7C;
+        0x4A78
     }
 }
 
@@ -376,6 +379,7 @@ pub fn unimi_cmds() -> Vec<(CMD, u16)> {
         (CMD::WriteCfg15, RegCfg15::umini_default()),
         (CMD::WriteCfg16, RegCfg16::umini_default()),
     ]
+    // return vec![(CMD::EnableAll, 0)];
 }
 
 // 一个transaction完成串联的全部芯片的一次命令写入

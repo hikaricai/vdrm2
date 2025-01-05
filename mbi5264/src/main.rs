@@ -45,18 +45,28 @@ impl Command {
             regs: [[0; 3]; 9],
         }
     }
+
+    fn new_confirm() -> Self {
+        Self {
+            cmd: 14,
+            regs: [[0; 3]; 9],
+        }
+    }
 }
 fn gen_colors() -> [Command; 1024] {
     let mut cmds = unsafe { core::mem::MaybeUninit::<[Command; 1024]>::zeroed().assume_init() };
     for y in 0..64u16 {
         for x in 0..16u16 {
-            let regs = [[(y * 16 + x) << 3; 3]; 9];
+            let regs = [[(y * 16 + x) << 2; 3]; 9];
+            // let regs = [[0x1555; 3]; 9];
             let cmd = Command { cmd: 1, regs };
             cmds[(y * 16 + x) as usize] = cmd;
         }
     }
     cmds
 }
+
+const COLOR_RAW_BUF: [[u16; clocks::CMD_BUF_SIZE]; 1024] = clocks::gen_colors_raw_buf();
 
 #[entry]
 fn main() -> ! {
@@ -136,34 +146,27 @@ fn main() -> ! {
     unsafe {
         pac::NVIC::unmask(pac::Interrupt::PWM_IRQ_WRAP);
     }
-    let colors = gen_colors();
+    // let colors = gen_colors();
     let sync_cmd = Command::new_sync();
+    let confirm_cmd = Command::new_confirm();
     let mut cmd_rx = CmdRx::new(rtt.down.0);
     let mut cmd_rx_ack = CmdRxAck::new(rtt.up.1);
     let mut cnt = 0;
+    let mut do_latch = false;
+    let mut raw_color_buf1: [u16; clocks::CMD_BUF_SIZE] = [0; clocks::CMD_BUF_SIZE];
+    let mut raw_color_buf2: [u16; clocks::CMD_BUF_SIZE] = [0; clocks::CMD_BUF_SIZE];
+    let mut using_raw_color_buf1 = true;
     loop {
         cnt += 1;
-        // cmd_pio.refresh(Transaction::mock(mock_cmd));
-        if let Some(cmds) = cmd_rx.try_recv() {
-            for cmd in cmds {
-                // dbg_pin.set_low().unwrap();
-                // dbg_pin.set_high().unwrap();
-                if cmd.cmd == 2 {
-                    for color in colors.iter() {
-                        cmd_pio.refresh(color);
-                        cmd_pio.commit();
-                    }
-                    cmd_rx_ack.ack();
-                    continue;
-                }
-                cmd_pio.refresh(cmd);
-                cmd_pio.commit();
-                cmd_rx_ack.ack();
-            }
-        }
-
         cmd_pio.refresh(&sync_cmd);
         cmd_pio.commit();
+        if let Some(cmd) = cmd_rx.try_recv_one() {
+            cmd_pio.refresh(&confirm_cmd);
+            cmd_pio.commit();
+            cmd_pio.refresh(cmd);
+            cmd_pio.commit();
+            cmd_rx_ack.ack();
+        }
         // vsync
         critical_section::with(move |cs| {
             GLOBAL_LINE_CLOCK
@@ -172,8 +175,25 @@ fn main() -> ! {
                 .unwrap()
                 .start();
         });
+        using_raw_color_buf1 = true;
+        raw_color_buf1 = *COLOR_RAW_BUF.first().unwrap();
+        cmd_pio.refresh_raw_buf(&raw_color_buf1);
+        for raw in COLOR_RAW_BUF.iter() {
+            dbg_pin.set_high().unwrap();
+            // let next_buf = if using_raw_color_buf1 {
+            //     &mut raw_color_buf2
+            // } else {
+            //     &mut raw_color_buf1
+            // };
+            // using_raw_color_buf1 = !using_raw_color_buf1;
+            // *next_buf = *raw;
+            let next_buf = &raw_color_buf1;
+            cmd_pio.commit();
+            cmd_pio.refresh_raw_buf(next_buf);
+            dbg_pin.set_low().unwrap();
+        }
+        cmd_pio.commit();
         loop {
-            delay.delay_ms(1);
             let sync_end = critical_section::with(move |cs| {
                 !GLOBAL_LINE_CLOCK
                     .borrow_ref_mut(cs)
@@ -185,6 +205,7 @@ fn main() -> ! {
                 break;
             }
         }
+        delay.delay_ms(1);
         // rprintln!("mock_cmd {}", mock_cmd);
         if cnt >= 10 {
             // critical_section::with(move |cs| {
@@ -203,6 +224,8 @@ fn main() -> ! {
 struct CmdRx {
     down: rtt_target::DownChannel,
     read_buf: [u8; 10240],
+    cnt: usize,
+    iter: usize,
 }
 
 struct CmdRxAck {
@@ -224,6 +247,8 @@ impl CmdRx {
         Self {
             down,
             read_buf: [0; 10240],
+            cnt: 0,
+            iter: 0,
         }
     }
     fn try_recv(&mut self) -> Option<&[Command]> {
@@ -232,6 +257,8 @@ impl CmdRx {
         if read_len % core::mem::size_of::<Command>() != 0 {
             rprintln!("invalid size {}", read_len);
         }
+        self.cnt = len;
+        self.iter = 0;
         if len == 0 {
             return None;
         }
@@ -239,6 +266,24 @@ impl CmdRx {
             unsafe { core::slice::from_raw_parts(self.read_buf.as_ptr() as *const Command, len) };
         // rprintln!("trans cmd {}", trans.cmd);
         Some(trans)
+    }
+
+    fn try_recv_one(&mut self) -> Option<&Command> {
+        if self.iter == self.cnt {
+            self.try_recv();
+        }
+        if self.cnt == 0 {
+            return None;
+        }
+        if self.iter == self.cnt {
+            return None;
+        }
+        let trans: &[Command] = unsafe {
+            core::slice::from_raw_parts(self.read_buf.as_ptr() as *const Command, self.cnt)
+        };
+        let ret = &trans[self.iter];
+        self.iter += 1;
+        Some(ret)
     }
 }
 

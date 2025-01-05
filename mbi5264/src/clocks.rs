@@ -133,7 +133,7 @@ impl LineClock {
         // pwm.pwm0.disable_interrupt();
 
         pwm.pwm1.set_div_int(pwm_div);
-        pwm.pwm1.set_top(100 * 64 - 1 - 50); // -50 to stop pwm ealy
+        pwm.pwm1.set_top(100 * 64 - 1);
         pwm.pwm1.channel_a.set_duty_cycle(100).unwrap();
         pwm.pwm1.enable_interrupt();
 
@@ -155,6 +155,7 @@ impl LineClock {
     pub fn start(&mut self) {
         self.stop();
         self.running = true;
+        self.pwm.pwm1.set_top(100 * 64 - 1);
         self.pwm.pwm2.retard_phase();
         self.pwm.enable_simultaneous(0x07);
     }
@@ -164,14 +165,17 @@ impl LineClock {
     }
 
     pub fn handle_interrupt(&mut self) {
-        self.cnt += 1;
         // self.pwm.pwm0.clear_interrupt();
         // if !self.pwm.pwm1.has_overflown() {
         //     return;
         // }
         self.pwm.pwm1.clear_interrupt();
+        self.cnt += 1;
         // self.pwm.pwm2.clear_interrupt();
-        if self.cnt == 32 {
+        if self.cnt == 32 * 2 - 2 {
+            self.pwm.pwm1.set_top(100 * 64 - 1 - 50);
+        }
+        if self.cnt == 32 * 2 {
             self.cnt = 0;
             self.stop();
         }
@@ -209,7 +213,7 @@ impl CmdClockPins {
     }
 }
 //16(chip bits) x 9(chips) + 2(empty)
-const CMD_BUF_SIZE: usize = 16 * 9 + 2;
+pub const CMD_BUF_SIZE: usize = 16 * 9 + 2;
 const COLOR_BUF_SIZE: usize = 16 * 9;
 pub struct CmdClock {
     le_prog_offset: u32,
@@ -451,8 +455,8 @@ impl CmdClock {
 
     pub fn cmd_busy(&self) -> bool {
         self.data_ch.ch().ch_ctrl_trig().read().busy().bit_is_set()
-            | self.color_ch.ch().ch_ctrl_trig().read().busy().bit_is_set()
-            | !self.color_end()
+            // | self.color_ch.ch().ch_ctrl_trig().read().busy().bit_is_set()
+            // | !self.color_end()
             | !self.le_end()
     }
 
@@ -494,6 +498,27 @@ impl CmdClock {
         self.le_sm_tx.write(le_data);
     }
 
+    pub fn refresh_raw_buf(&mut self, buf: &[u16; CMD_BUF_SIZE]) {
+        let pixels_cnt = buf.len() as u32 / 2;
+        let pixels_addr = buf.as_ptr() as u32;
+
+        self.data_ch
+            .ch()
+            .ch_trans_count()
+            .write(|w| unsafe { w.bits(pixels_cnt) });
+        self.data_ch
+            .ch()
+            .ch_al3_read_addr_trig()
+            .write(|w| unsafe { w.bits(pixels_addr) });
+
+        let le_high_cnt = 1;
+        let le_low_cnt: u32 = 16 * 9 + 1 - le_high_cnt;
+        let le_low_cnt = le_low_cnt - 1;
+        let le_high_cnt = le_high_cnt - 1;
+        let le_data = (le_high_cnt << 16) | le_low_cnt;
+        self.le_sm_tx.write(le_data);
+    }
+
     pub fn refresh_color(&mut self, cmd: &Command) {
         let mut buf_iter = self.color_buf.iter_mut();
         for [r, g, b] in cmd.regs {
@@ -526,4 +551,56 @@ impl CmdClock {
         let le_data = (le_high_cnt << 16) | le_low_cnt;
         self.le_sm_tx.write(le_data);
     }
+}
+
+pub const fn gen_colors_raw_buf() -> [[u16; CMD_BUF_SIZE]; 1024] {
+    let mut data_buf: [[u16; CMD_BUF_SIZE]; 1024] = [[0; CMD_BUF_SIZE]; 1024];
+    let mut idx = 0usize;
+    let mut x = 0u16;
+    let mut y = 0u16;
+    let mut i = 0usize;
+    let mut j = 0usize;
+    loop {
+        // for y in 0..64
+        x = 0;
+        loop {
+            // for x in 0..16
+            let [r, g, b] = [(y * 16 + x) << 2; 3];
+            let [r, g, b] = [0x1555; 3];
+            let buf = &mut data_buf[idx];
+            let mut pixel_idx = 0usize;
+            j = 0;
+            loop {
+                // for j in 0..9
+                i = 15;
+                loop {
+                    // for i in (0..16).rev
+                    let r = (r >> i) & 1;
+                    let g = (g >> i) & 1;
+                    let b = (b >> i) & 1;
+                    let color = r + (g << 1) + (b << 2);
+                    buf[pixel_idx] = color;
+                    pixel_idx += 1;
+                    if i == 0 {
+                        break;
+                    }
+                    i -= 1;
+                }
+                j += 1;
+                if j >= 9 {
+                    break;
+                }
+            }
+            idx += 1;
+            x += 1;
+            if x >= 16 {
+                break;
+            }
+        }
+        y += 1;
+        if y >= 64 {
+            break;
+        }
+    }
+    return data_buf;
 }
