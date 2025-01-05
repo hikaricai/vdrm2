@@ -161,8 +161,17 @@ fn main() -> ! {
         cmd_pio.refresh(&sync_cmd);
         cmd_pio.commit();
         if let Some(cmd) = cmd_rx.try_recv_one() {
+            // rprintln!("cmd {}", cmd.cmd);
             cmd_pio.refresh(&confirm_cmd);
             cmd_pio.commit();
+            delay.delay_us(14);
+            critical_section::with(move |cs| {
+                GLOBAL_LINE_CLOCK
+                    .borrow_ref_mut(cs)
+                    .as_mut()
+                    .unwrap()
+                    .set_gclk(rp2040_hal::gpio::PinState::High);
+            });
             cmd_pio.refresh(cmd);
             cmd_pio.commit();
             cmd_rx_ack.ack();

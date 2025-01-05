@@ -5,7 +5,7 @@ use rp2040_hal::dma::{ChannelIndex, DMAExt, SingleChannel};
 use rp2040_hal::gpio::bank0::{self, Gpio0, Gpio12, Gpio2, Gpio4, Gpio5};
 use rp2040_hal::gpio::{
     DefaultTypeState, DynFunction, DynPinId, DynPullType, FunctionNull, FunctionPio0, FunctionPwm,
-    FunctionSioOutput, Pin, PullDown, PullType,
+    FunctionSioOutput, OutputDriveStrength, Pin, PullDown, PullType,
 };
 use rp2040_hal::multicore::{Multicore, Stack};
 use rp2040_hal::pac::{PPB, PSM};
@@ -108,7 +108,8 @@ pub struct LineClock {
     pub running: bool,
     cnt: u32,
     pwm: rp_pico::hal::pwm::Slices,
-    gclk_pin: Pin<Gpio0, FunctionPwm, PullDown>,
+    gclk_pin: Option<Pin<Gpio0, FunctionPwm, PullDown>>,
+    gpio0_pin: Option<Pin<Gpio0, FunctionSioOutput, PullDown>>,
     a_pin: Pin<Gpio2, FunctionPwm, PullDown>,
     b_pin: Pin<Gpio4, FunctionPwm, PullDown>,
     c_pin: Pin<Gpio5, FunctionPwm, PullDown>,
@@ -141,11 +142,13 @@ impl LineClock {
         pwm.pwm2.set_top(100 - 1);
         pwm.pwm2.channel_a.set_duty_cycle(3).unwrap();
         pwm.pwm2.channel_b.set_duty_cycle(1).unwrap();
+
         Self {
             running: false,
             cnt: 0,
             pwm,
-            gclk_pin,
+            gclk_pin: Some(gclk_pin),
+            gpio0_pin: None,
             a_pin,
             b_pin,
             c_pin,
@@ -153,11 +156,21 @@ impl LineClock {
     }
 
     pub fn start(&mut self) {
+        if let Some(gpio0_pin) = self.gpio0_pin.take() {
+            self.gclk_pin = Some(gpio0_pin.into_function());
+        }
         self.stop();
         self.running = true;
         self.pwm.pwm1.set_top(100 * 64 - 1);
         self.pwm.pwm2.retard_phase();
         self.pwm.enable_simultaneous(0x07);
+    }
+
+    pub fn set_gclk(&mut self, state: rp2040_hal::gpio::PinState) {
+        let mut pin: Pin<Gpio0, FunctionSioOutput, PullDown> =
+            self.gclk_pin.take().unwrap().into_function();
+        pin.set_state(state).unwrap();
+        self.gpio0_pin = Some(pin);
     }
 
     pub fn clear_interupte(&mut self) {
@@ -228,7 +241,21 @@ pub struct CmdClock {
 }
 
 impl CmdClock {
-    pub fn new(pins: CmdClockPins, pio0: PIO0, dma: DMA, resets: &mut RESETS) -> Self {
+    pub fn new(mut pins: CmdClockPins, pio0: PIO0, dma: DMA, resets: &mut RESETS) -> Self {
+        let default_strength = pins.r0_pin.get_drive_strength();
+        let default_strength_v = match default_strength {
+            OutputDriveStrength::TwoMilliAmps => 2,
+            OutputDriveStrength::FourMilliAmps => 4,
+            OutputDriveStrength::EightMilliAmps => 8,
+            OutputDriveStrength::TwelveMilliAmps => 12,
+        };
+        rprintln!("default_strength {}ma", default_strength_v);
+        pins.r0_pin
+            .set_drive_strength(OutputDriveStrength::TwelveMilliAmps);
+        pins.g0_pin
+            .set_drive_strength(OutputDriveStrength::TwelveMilliAmps);
+        pins.b0_pin
+            .set_drive_strength(OutputDriveStrength::TwelveMilliAmps);
         let dma = dma.dyn_split(resets);
         let data_ch = dma.ch0.unwrap();
         let color_ch = dma.ch1.unwrap();
