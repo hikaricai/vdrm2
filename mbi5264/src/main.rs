@@ -39,6 +39,13 @@ impl Command {
         }
     }
 
+    fn new(cmd: u8, param: u16) -> Self {
+        Self {
+            cmd,
+            regs: [[param; 3]; 9],
+        }
+    }
+
     fn new_sync() -> Self {
         Self {
             cmd: 2,
@@ -67,6 +74,7 @@ fn gen_colors() -> [Command; 1024] {
 }
 
 const COLOR_RAW_BUF: [[u16; clocks::CMD_BUF_SIZE]; 1024] = clocks::gen_colors_raw_buf();
+const UMINI_CMDS: &[(mbi5264_common::CMD, u16)] = &mbi5264_common::unimi_cmds();
 
 #[entry]
 fn main() -> ! {
@@ -156,25 +164,32 @@ fn main() -> ! {
     let mut raw_color_buf1: [u16; clocks::CMD_BUF_SIZE] = [0; clocks::CMD_BUF_SIZE];
     let mut raw_color_buf2: [u16; clocks::CMD_BUF_SIZE] = [0; clocks::CMD_BUF_SIZE];
     let mut using_raw_color_buf1 = true;
+    let mut cmd_iter = UMINI_CMDS.iter();
     loop {
         cnt += 1;
         cmd_pio.refresh(&sync_cmd);
         cmd_pio.commit();
-        if let Some(cmd) = cmd_rx.try_recv_one() {
-            // rprintln!("cmd {}", cmd.cmd);
+        // if let Some(cmd) = cmd_rx.try_recv_one() {
+        //     // rprintln!("cmd {}", cmd.cmd);
+        //     cmd_pio.refresh(&confirm_cmd);
+        //     cmd_pio.commit();
+        //     delay.delay_us(14);
+        //     critical_section::with(move |cs| {
+        //         GLOBAL_LINE_CLOCK
+        //             .borrow_ref_mut(cs)
+        //             .as_mut()
+        //             .unwrap()
+        //             .set_gclk(rp2040_hal::gpio::PinState::High);
+        //     });
+        //     cmd_pio.refresh(cmd);
+        //     cmd_pio.commit();
+        //     cmd_rx_ack.ack();
+        // }
+        if let Some(&(cmd, param)) = cmd_iter.next() {
             cmd_pio.refresh(&confirm_cmd);
             cmd_pio.commit();
-            delay.delay_us(14);
-            critical_section::with(move |cs| {
-                GLOBAL_LINE_CLOCK
-                    .borrow_ref_mut(cs)
-                    .as_mut()
-                    .unwrap()
-                    .set_gclk(rp2040_hal::gpio::PinState::High);
-            });
-            cmd_pio.refresh(cmd);
+            cmd_pio.refresh(&Command::new(cmd as u8, param));
             cmd_pio.commit();
-            cmd_rx_ack.ack();
         }
         // vsync
         critical_section::with(move |cs| {
