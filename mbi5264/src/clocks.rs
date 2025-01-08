@@ -184,10 +184,10 @@ impl LineClock {
         self.pwm.pwm1.clear_interrupt();
         self.cnt += 1;
         // self.pwm.pwm2.clear_interrupt();
-        if self.cnt == 32 * 2 - 2 {
-            self.pwm.pwm1.set_top(100 * 64 - 1 - 50);
-        }
-        if self.cnt == 32 * 2 {
+        // if self.cnt == 8 - 2 {
+        //     self.pwm.pwm1.set_top(100 * 64 - 1 - 50);
+        // }
+        if self.cnt == 1 {
             self.cnt = 0;
             self.stop();
         }
@@ -553,11 +553,11 @@ impl CmdClock {
     }
 
     pub fn refresh_empty_buf(&mut self) {
-        static BUF: [u16; 16 + 2] = [0; 18];
+        static BUF: [u16; 2] = [0; 2];
         let pixels_cnt = BUF.len() as u32 / 2;
         let pixels_addr = BUF.as_ptr() as u32;
 
-        self.data_sm_tx.write(18 - 1);
+        self.data_sm_tx.write(2 - 1);
         self.data_ch
             .ch()
             .ch_trans_count()
@@ -568,7 +568,7 @@ impl CmdClock {
             .write(|w| unsafe { w.bits(pixels_addr) });
 
         let le_high_cnt = 1;
-        let le_low_cnt: u32 = 16 + 1 - le_high_cnt;
+        let le_low_cnt: u32 = 1 + 1 - le_high_cnt;
         let le_low_cnt = le_low_cnt - 1;
         let le_high_cnt = le_high_cnt - 1;
         let le_data = (le_high_cnt << 16) | le_low_cnt;
@@ -607,6 +607,22 @@ impl CmdClock {
         let le_data = (le_high_cnt << 16) | le_low_cnt;
         self.le_sm_tx.write(le_data);
     }
+}
+
+pub fn gen_raw_buf(regs: [u16; 3]) -> [u16; CMD_BUF_SIZE] {
+    let mut buf = [0; CMD_BUF_SIZE];
+    let mut buf_iter = buf.iter_mut();
+    let [r, g, b] = regs;
+    for _chip in 0..9 {
+        for i in (0..16).rev() {
+            let buf = buf_iter.next().unwrap();
+            let r = (r >> i) & 1;
+            let g = (g >> i) & 1;
+            let b = (b >> i) & 1;
+            *buf = r + (g << 1) + (b << 2);
+        }
+    }
+    buf
 }
 
 pub const fn gen_colors_raw_buf() -> [[u16; CMD_BUF_SIZE]; 1024] {

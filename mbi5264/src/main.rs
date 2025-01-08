@@ -12,7 +12,7 @@ use bsp::hal::{
     sio::Sio,
     watchdog::Watchdog,
 };
-use clocks::LineClock;
+use clocks::{gen_raw_buf, LineClock, CMD_BUF_SIZE};
 use critical_section::Mutex;
 use embedded_hal::digital::{OutputPin, StatefulOutputPin};
 use panic_rtt_target as _;
@@ -166,12 +166,11 @@ fn main() -> ! {
     let mut using_raw_color_buf1 = true;
     let mut cmd_iter = UMINI_CMDS.iter();
     // put buf in ram, flash is tooooooo slow
-    let palette: [[u16; clocks::CMD_BUF_SIZE]; 4] = [
-        COLOR_RAW_BUF[0],
-        COLOR_RAW_BUF[1],
-        COLOR_RAW_BUF[2],
-        COLOR_RAW_BUF[3],
-    ];
+    let palette: [[u16; clocks::CMD_BUF_SIZE]; 4] = [0u16, 1, 1, 1].map(|idx| {
+        let color = idx * 0xffff;
+        gen_raw_buf([color; 3])
+    });
+    let mut frame = 0usize;
     loop {
         cnt += 1;
         cmd_pio.refresh(&sync_cmd);
@@ -206,24 +205,40 @@ fn main() -> ! {
                 .unwrap()
                 .start();
         });
+
         for (idx, _raw) in COLOR_RAW_BUF.iter().enumerate() {
             // dbg_pin.set_high().unwrap();
             let coloum_idx = idx % 16;
-            match coloum_idx {
-                0..4 => {
-                    cmd_pio.refresh_raw_buf(&palette[coloum_idx]);
-                }
-                4 => {
-                    cmd_pio.refresh_raw_buf(&palette[0]);
-                }
-                _ => {
-                    cmd_pio.refresh_empty_buf();
-                }
-            };
+            let empty_coloum_idx = (frame + 1) % 16;
+            if coloum_idx == frame {
+                cmd_pio.refresh_raw_buf(&palette[3]);
+            } else if coloum_idx == empty_coloum_idx {
+                cmd_pio.refresh_raw_buf(&palette[0]);
+            } else {
+                cmd_pio.refresh_empty_buf();
+            }
+            // match coloum_idx {
+            //     0 => {
+            //         cmd_pio.refresh_raw_buf(&palette[3]);
+            //     }
+            //     1 => {
+            //         cmd_pio.refresh_raw_buf(&palette[0]);
+            //     }
+            //     // 5..15 => {
+            //     //     // cmd_pio.refresh_raw_buf(&palette[0]);
+            //     //     cmd_pio.refresh_empty_buf();
+            //     // }
+            //     // 10 => {
+            //     //     cmd_pio.refresh_raw_buf(&palette[3]);
+            //     // }
+            //     _ => {
+            //         cmd_pio.refresh_empty_buf();
+            //     }
+            // };
             cmd_pio.commit();
             // dbg_pin.set_low().unwrap();
         }
-        cmd_pio.commit();
+        // cmd_pio.commit();
         loop {
             let sync_end = critical_section::with(move |cs| {
                 !GLOBAL_LINE_CLOCK
@@ -236,7 +251,9 @@ fn main() -> ! {
                 break;
             }
         }
-        delay.delay_ms(1);
+        frame += 1;
+        frame %= 16;
+        // delay.delay_ms(1);
         // rprintln!("mock_cmd {}", mock_cmd);
         if cnt >= 10 {
             // critical_section::with(move |cs| {
