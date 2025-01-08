@@ -165,6 +165,13 @@ fn main() -> ! {
     let mut raw_color_buf2: [u16; clocks::CMD_BUF_SIZE] = [0; clocks::CMD_BUF_SIZE];
     let mut using_raw_color_buf1 = true;
     let mut cmd_iter = UMINI_CMDS.iter();
+    // put buf in ram, flash is tooooooo slow
+    let palette: [[u16; clocks::CMD_BUF_SIZE]; 4] = [
+        COLOR_RAW_BUF[0],
+        COLOR_RAW_BUF[1],
+        COLOR_RAW_BUF[2],
+        COLOR_RAW_BUF[3],
+    ];
     loop {
         cnt += 1;
         cmd_pio.refresh(&sync_cmd);
@@ -199,22 +206,22 @@ fn main() -> ! {
                 .unwrap()
                 .start();
         });
-        using_raw_color_buf1 = true;
-        raw_color_buf1 = *COLOR_RAW_BUF.first().unwrap();
-        cmd_pio.refresh_raw_buf(&raw_color_buf1);
-        for raw in COLOR_RAW_BUF.iter() {
-            dbg_pin.set_high().unwrap();
-            // let next_buf = if using_raw_color_buf1 {
-            //     &mut raw_color_buf2
-            // } else {
-            //     &mut raw_color_buf1
-            // };
-            // using_raw_color_buf1 = !using_raw_color_buf1;
-            // *next_buf = *raw;
-            let next_buf = &raw_color_buf1;
+        for (idx, _raw) in COLOR_RAW_BUF.iter().enumerate() {
+            // dbg_pin.set_high().unwrap();
+            let coloum_idx = idx % 16;
+            match coloum_idx {
+                0..4 => {
+                    cmd_pio.refresh_raw_buf(&palette[coloum_idx]);
+                }
+                4 => {
+                    cmd_pio.refresh_raw_buf(&palette[0]);
+                }
+                _ => {
+                    cmd_pio.refresh_empty_buf();
+                }
+            };
             cmd_pio.commit();
-            cmd_pio.refresh_raw_buf(next_buf);
-            dbg_pin.set_low().unwrap();
+            // dbg_pin.set_low().unwrap();
         }
         cmd_pio.commit();
         loop {

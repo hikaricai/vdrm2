@@ -19,7 +19,6 @@ const RESP_ACK: u32 = 0x11;
 const RESP_ONLINE: u32 = 0x12;
 use crate::{Command, Outpin};
 use rtt_target::rprintln;
-static mut CORE1_STACK: Stack<4096> = Stack::new();
 pub struct ClockApp {
     clock: Option<Clock>,
     fifo: SioFifo,
@@ -228,12 +227,15 @@ impl CmdClockPins {
 //16(chip bits) x 9(chips) + 2(empty)
 pub const CMD_BUF_SIZE: usize = 16 * 9 + 2;
 const COLOR_BUF_SIZE: usize = 16 * 9;
+const ONE_COMMAND_LOOPS: u32 = CMD_BUF_SIZE as u32 - 1; // 多2个0u16保证数据都触发
+static mut CORE1_STACK: Stack<4096> = Stack::new();
 pub struct CmdClock {
     le_prog_offset: u32,
     le_sm: rp2040_hal::pio::StateMachine<(PIO0, rp2040_hal::pio::SM3), Running>,
     le_sm_tx: rp2040_hal::pio::Tx<(PIO0, rp2040_hal::pio::SM3)>,
     color_prog_offset: u32,
     color_sm: rp2040_hal::pio::StateMachine<(PIO0, rp2040_hal::pio::SM2), Stopped>,
+    data_sm_tx: rp2040_hal::pio::Tx<(PIO0, rp2040_hal::pio::SM1)>,
     data_ch: rp2040_hal::dma::Channel<rp2040_hal::dma::CH0>,
     color_ch: rp2040_hal::dma::Channel<rp2040_hal::dma::CH1>,
     data_buf: [u16; CMD_BUF_SIZE],
@@ -282,14 +284,14 @@ impl CmdClock {
 
         let (data_sm, data_sm_tx) = {
             let program_data = pio_proc::pio_asm!(
-                "out isr, 32", // save loop_cnt to isr
                 ".wrap_target",
-                "mov x isr ",   // load loop_cnt
+                "out x, 32", // save loop_cnt to isr
                 "irq wait 6" // sync clk sm0
                 "wait 1 irq 4", // pre wait to clear old irq
                 "loop:",
                 "wait 1 irq 4",
                 "out pins, 16",
+                // TODO try loop with !OSRE
                 "jmp x-- loop",
                 // "wait 1 irq 4", // 再wait一个edge将数据写入 由app多填充一个0u32实现
                 // "out pins, 32",
@@ -309,8 +311,8 @@ impl CmdClock {
             ]);
             // Configure the width of the screen
             // let one_cmd_loops: u32 = 16 * 9 - 1
-            let one_cmd_loops: u32 = 16 * 9 + 2 - 1; // 多2个0u16保证数据都触发
-            tx.write(one_cmd_loops);
+            // let one_cmd_loops: u32 = ONE_COMMAND_LOOPS - 1; // 多2个0u16保证数据都触发
+            // tx.write(one_cmd_loops);
             (sm, tx)
         };
 
@@ -455,6 +457,7 @@ impl CmdClock {
             color_sm,
             color_prog_offset,
             data_ch,
+            data_sm_tx,
             color_ch,
             data_buf: buf,
             color_buf: [0; COLOR_BUF_SIZE],
@@ -508,6 +511,8 @@ impl CmdClock {
         let pixels_cnt = self.data_buf.len() as u32 / 2;
         let pixels_addr = self.data_buf.as_ptr() as u32;
 
+        self.data_sm_tx.write(ONE_COMMAND_LOOPS);
+
         self.data_ch
             .ch()
             .ch_trans_count()
@@ -529,6 +534,7 @@ impl CmdClock {
         let pixels_cnt = buf.len() as u32 / 2;
         let pixels_addr = buf.as_ptr() as u32;
 
+        self.data_sm_tx.write(ONE_COMMAND_LOOPS);
         self.data_ch
             .ch()
             .ch_trans_count()
@@ -540,6 +546,29 @@ impl CmdClock {
 
         let le_high_cnt = 1;
         let le_low_cnt: u32 = 16 * 9 + 1 - le_high_cnt;
+        let le_low_cnt = le_low_cnt - 1;
+        let le_high_cnt = le_high_cnt - 1;
+        let le_data = (le_high_cnt << 16) | le_low_cnt;
+        self.le_sm_tx.write(le_data);
+    }
+
+    pub fn refresh_empty_buf(&mut self) {
+        static BUF: [u16; 16 + 2] = [0; 18];
+        let pixels_cnt = BUF.len() as u32 / 2;
+        let pixels_addr = BUF.as_ptr() as u32;
+
+        self.data_sm_tx.write(18 - 1);
+        self.data_ch
+            .ch()
+            .ch_trans_count()
+            .write(|w| unsafe { w.bits(pixels_cnt) });
+        self.data_ch
+            .ch()
+            .ch_al3_read_addr_trig()
+            .write(|w| unsafe { w.bits(pixels_addr) });
+
+        let le_high_cnt = 1;
+        let le_low_cnt: u32 = 16 + 1 - le_high_cnt;
         let le_low_cnt = le_low_cnt - 1;
         let le_high_cnt = le_high_cnt - 1;
         let le_data = (le_high_cnt << 16) | le_low_cnt;
@@ -592,8 +621,9 @@ pub const fn gen_colors_raw_buf() -> [[u16; CMD_BUF_SIZE]; 1024] {
         x = 0;
         loop {
             // for x in 0..16
-            let [r, g, b] = [(y * 16 + x) << 2; 3];
-            let [r, g, b] = [0x1555; 3];
+            let color = (x % 4) * 0x155;
+            // let [r, g, b] = [(y * 16 + x) << 2; 3];
+            let [r, g, b] = [color; 3];
             let buf = &mut data_buf[idx];
             let mut pixel_idx = 0usize;
             j = 0;
