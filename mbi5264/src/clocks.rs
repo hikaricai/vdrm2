@@ -1,4 +1,5 @@
 use critical_section::Mutex;
+use defmt::info;
 use embedded_hal::digital::OutputPin;
 use embedded_hal::pwm::SetDutyCycle;
 use rp2040_hal::dma::{ChannelIndex, DMAExt, SingleChannel};
@@ -18,7 +19,6 @@ const CMD_RESTART_GCLK: u32 = 0x43;
 const RESP_ACK: u32 = 0x11;
 const RESP_ONLINE: u32 = 0x12;
 use crate::{Command, Outpin};
-use rtt_target::rprintln;
 pub struct ClockApp {
     clock: Option<Clock>,
     fifo: SioFifo,
@@ -93,7 +93,7 @@ impl Clock {
 }
 
 fn core1_main(mut clock: Clock) {
-    rprintln!("core1_main");
+    info!("core1_main");
     let pac = unsafe { pac::Peripherals::steal() };
     let _core = unsafe { pac::CorePeripherals::steal() };
     let sio = Sio::new(pac.SIO);
@@ -251,7 +251,6 @@ impl CmdClock {
             OutputDriveStrength::EightMilliAmps => 8,
             OutputDriveStrength::TwelveMilliAmps => 12,
         };
-        rprintln!("default_strength {}ma", default_strength_v);
         pins.r0_pin
             .set_drive_strength(OutputDriveStrength::TwelveMilliAmps);
         pins.g0_pin
@@ -371,7 +370,6 @@ impl CmdClock {
             let installed = pio.install(&program_data.program).unwrap();
             let offset = installed.offset() as u32;
             let (mut sm, _, tx) = PIOBuilder::from_installed_program(installed)
-                .out_pins(pins.r0_pin.id().num, 3)
                 .side_set_pin_base(pins.le_pin.id().num)
                 .clock_divisor_fixed_point(1, 0)
                 .autopull(true)
@@ -445,10 +443,9 @@ impl CmdClock {
             .ch_write_addr()
             .write(|w| unsafe { w.bits(color_sm_tx.fifo_address() as u32) });
         let buf = [0; CMD_BUF_SIZE];
-        rprintln!(
+        info!(
             "le_prog_offset {} color_prog_offset {}",
-            le_prog_offset,
-            color_prog_offset
+            le_prog_offset, color_prog_offset
         );
         Self {
             le_prog_offset,

@@ -2,6 +2,7 @@
 #![no_std]
 #![no_main]
 mod clocks;
+mod clocks2;
 use core::cell::RefCell;
 use core::fmt::Write;
 
@@ -14,14 +15,21 @@ use bsp::hal::{
 };
 use clocks::{gen_raw_buf, LineClock, CMD_BUF_SIZE};
 use critical_section::Mutex;
+use defmt::info;
 use embedded_hal::digital::{OutputPin, StatefulOutputPin};
-use panic_rtt_target as _;
 use rp2040_hal::gpio::{DynPinId, DynPullType, FunctionSioOutput, Pin};
 use rp2040_hal::pac::interrupt;
 use rp_pico as bsp;
-use rtt_target::{rprintln, rtt_init};
+use {defmt_rtt as _, panic_probe as _};
 static GLOBAL_LINE_CLOCK: Mutex<RefCell<Option<LineClock>>> = Mutex::new(RefCell::new(None));
 type Outpin = Pin<DynPinId, FunctionSioOutput, DynPullType>;
+use embassy_executor::Spawner;
+use embassy_futures::join::join;
+use embassy_rp::bind_interrupts;
+use embassy_rp::peripherals::USB;
+use embassy_usb::driver::{Endpoint, EndpointIn, EndpointOut};
+use embassy_usb::msos::{self, windows_version};
+use embassy_usb::{Builder, Config};
 
 #[repr(packed)]
 pub struct Command {
@@ -77,28 +85,7 @@ const COLOR_RAW_BUF: [[u16; clocks::CMD_BUF_SIZE]; 1024] = clocks::gen_colors_ra
 const UMINI_CMDS: &[(mbi5264_common::CMD, u16)] = &mbi5264_common::unimi_cmds();
 
 #[entry]
-fn main() -> ! {
-    let mut rtt = rtt_init! {
-        up: {
-            0: {
-                size: 1024,
-                name: "Terminal"
-            }
-            1: {
-                size: 1024,
-                name: "Cmd"
-            }
-        }
-        down: {
-            0: {
-                size: 10240,
-                name: "Terminal"
-            }
-        }
-    };
-    rtt_target::set_print_channel(rtt.up.0);
-    // rtt_init_print!();
-    rprintln!("Program start");
+fn entry() -> ! {
     let mut pac = pac::Peripherals::take().unwrap();
     let core = pac::CorePeripherals::take().unwrap();
     let mut watchdog = Watchdog::new(pac.WATCHDOG);
@@ -157,8 +144,6 @@ fn main() -> ! {
     // let colors = gen_colors();
     let sync_cmd = Command::new_sync();
     let confirm_cmd = Command::new_confirm();
-    let mut cmd_rx = CmdRx::new(rtt.down.0);
-    let mut cmd_rx_ack = CmdRxAck::new(rtt.up.1);
     let mut cnt = 0;
     let mut do_latch = false;
     let mut raw_color_buf1: [u16; clocks::CMD_BUF_SIZE] = [0; clocks::CMD_BUF_SIZE];
@@ -175,22 +160,6 @@ fn main() -> ! {
         cnt += 1;
         cmd_pio.refresh(&sync_cmd);
         cmd_pio.commit();
-        // if let Some(cmd) = cmd_rx.try_recv_one() {
-        //     // rprintln!("cmd {}", cmd.cmd);
-        //     cmd_pio.refresh(&confirm_cmd);
-        //     cmd_pio.commit();
-        //     delay.delay_us(14);
-        //     critical_section::with(move |cs| {
-        //         GLOBAL_LINE_CLOCK
-        //             .borrow_ref_mut(cs)
-        //             .as_mut()
-        //             .unwrap()
-        //             .set_gclk(rp2040_hal::gpio::PinState::High);
-        //     });
-        //     cmd_pio.refresh(cmd);
-        //     cmd_pio.commit();
-        //     cmd_rx_ack.ack();
-        // }
         if let Some(&(cmd, param)) = cmd_iter.next() {
             cmd_pio.refresh(&confirm_cmd);
             cmd_pio.commit();
@@ -255,6 +224,7 @@ fn main() -> ! {
         frame %= 16;
         // delay.delay_ms(1);
         // rprintln!("mock_cmd {}", mock_cmd);
+
         if cnt >= 10 {
             // critical_section::with(move |cs| {
             //     GLOBAL_LINE_CLOCK
@@ -269,72 +239,6 @@ fn main() -> ! {
     }
 }
 
-struct CmdRx {
-    down: rtt_target::DownChannel,
-    read_buf: [u8; 10240],
-    cnt: usize,
-    iter: usize,
-}
-
-struct CmdRxAck {
-    up: rtt_target::UpChannel,
-}
-
-impl CmdRxAck {
-    pub fn new(up: rtt_target::UpChannel) -> Self {
-        Self { up }
-    }
-
-    fn ack(&mut self) {
-        self.up.write(b"\n");
-    }
-}
-
-impl CmdRx {
-    fn new(down: rtt_target::DownChannel) -> Self {
-        Self {
-            down,
-            read_buf: [0; 10240],
-            cnt: 0,
-            iter: 0,
-        }
-    }
-    fn try_recv(&mut self) -> Option<&[Command]> {
-        let read_len = self.down.read(&mut self.read_buf);
-        let len = read_len / core::mem::size_of::<Command>();
-        if read_len % core::mem::size_of::<Command>() != 0 {
-            rprintln!("invalid size {}", read_len);
-        }
-        self.cnt = len;
-        self.iter = 0;
-        if len == 0 {
-            return None;
-        }
-        let trans: &[Command] =
-            unsafe { core::slice::from_raw_parts(self.read_buf.as_ptr() as *const Command, len) };
-        // rprintln!("trans cmd {}", trans.cmd);
-        Some(trans)
-    }
-
-    fn try_recv_one(&mut self) -> Option<&Command> {
-        if self.iter == self.cnt {
-            self.try_recv();
-        }
-        if self.cnt == 0 {
-            return None;
-        }
-        if self.iter == self.cnt {
-            return None;
-        }
-        let trans: &[Command] = unsafe {
-            core::slice::from_raw_parts(self.read_buf.as_ptr() as *const Command, self.cnt)
-        };
-        let ret = &trans[self.iter];
-        self.iter += 1;
-        Some(ret)
-    }
-}
-
 #[allow(static_mut_refs)] // See https://github.com/rust-embedded/cortex-m/pull/561
 #[interrupt]
 fn PWM_IRQ_WRAP() {
@@ -343,4 +247,26 @@ fn PWM_IRQ_WRAP() {
         let line_clk = guard.as_mut().unwrap();
         line_clk.handle_interrupt();
     });
+}
+
+use embassy_rp::peripherals::PIO0;
+use embassy_rp::pio::{InterruptHandler, Pio};
+embassy_rp::bind_interrupts!(struct PioIrqs {
+    PIO0_IRQ_0 => InterruptHandler<PIO0>;
+});
+
+#[embassy_executor::main]
+async fn main(_spawner: Spawner) {
+    info!("Hello there!");
+    let p = embassy_rp::init(Default::default());
+    let pio0 = Pio::new(p.PIO0, PioIrqs);
+    let pins = clocks2::CmdClockPins {
+        clk_pin: p.PIN_6,
+        le_pin: p.PIN_7,
+        r0_pin: p.PIN_8,
+        g0_pin: p.PIN_9,
+        b0_pin: p.PIN_10,
+    };
+    let data_ch = p.DMA_CH0;
+    let clock2 = clocks2::CmdClock::new(pio0, pins, data_ch);
 }
