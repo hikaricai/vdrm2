@@ -7,18 +7,11 @@ edition = "2021"
 libm = "0.2"
 cortex-m = "0.7"
 cortex-m-rt = "0.7"
-embedded-time = "0.12"
-rtt-target = "0.6"
-panic-rtt-target = "0.1"
 critical-section = "1"
 embedded-hal = "1.0.0"
-rp2040-hal = "0.10.2"
-rp-pico = "0.9.0"
 pio = "0.2.1"
 pio-proc = "0.2.2"
 mbi5264-common = { path = "../mbi5264-common" }
-
-
 embassy-embedded-hal = { version = "0.3.0", features = ["defmt"] }
 embassy-sync = { version = "0.6.1", features = ["defmt"] }
 embassy-executor = { version = "0.7.0", features = [
