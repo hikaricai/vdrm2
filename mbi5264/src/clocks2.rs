@@ -1,14 +1,13 @@
 use core::cell::RefCell;
-
+use core::pin::pin;
+use embassy_futures::poll_once;
 use embassy_rp::dma::Transfer;
-use embassy_rp::gpio::Level;
 use embassy_rp::interrupt::typelevel::{Handler, Interrupt, PWM_IRQ_WRAP};
-use embassy_rp::pac::PIO0;
 use embassy_rp::peripherals::{
     DMA_CH0, PIN_0, PIN_2, PIN_4, PIN_5, PIO0, PWM_SLICE0, PWM_SLICE1, PWM_SLICE2,
 };
 use embassy_rp::peripherals::{PIN_10, PIN_6, PIN_7, PIN_8, PIN_9};
-use embassy_rp::pio::{self, Instance, Pio, StateMachine};
+use embassy_rp::pio::{self, Pio, ShiftConfig, StateMachine};
 use embassy_rp::pwm::{self, Pwm, PwmBatch};
 use embassy_rp::{Peripheral, PeripheralRef};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
@@ -72,7 +71,7 @@ impl LineClock {
 
         let mut a_cfg = pwm::Config::default();
         a_cfg.divider = pwm_div;
-        a_cfg.top = 100 * 64 - 1;
+        a_cfg.top = 100 * 64 - 50 - 1;
         a_cfg.compare_a = 100;
         let pwm_a = Pwm::new_output_a(pwm1, a_pin, a_cfg);
         embassy_rp::pac::PWM.inte().modify(|w| w.set_ch1(true));
@@ -81,7 +80,7 @@ impl LineClock {
         bc_cfg.divider = pwm_div;
         bc_cfg.top = 100 - 1;
         bc_cfg.compare_a = 3;
-        bc_cfg.compare_a = 1;
+        bc_cfg.compare_b = 1;
         let pwm_bc = Pwm::new_output_ab(pwm2, b_pin, c_pin, bc_cfg);
 
         let this = Self {
@@ -212,13 +211,20 @@ impl CmdClock {
         let b0_pin = common.make_pio_pin(pins.b0_pin);
         data_sm.set_pin_dirs(pio::Direction::Out, &[&r0_pin, &g0_pin, &b0_pin]);
 
+        defmt::info!("data_sm addr {}", data_prog.origin);
         let mut cfg = pio::Config::default();
         cfg.use_program(&data_prog, &[]);
         cfg.set_out_pins(&[&r0_pin, &g0_pin, &b0_pin]);
+        cfg.fifo_join = pio::FifoJoin::TxOnly;
+        cfg.shift_out = ShiftConfig {
+            auto_fill: true,
+            threshold: 32,
+            direction: pio::ShiftDirection::Right,
+        };
         data_sm.set_config(&cfg);
 
         let le_program_data = pio_proc::pio_asm!(
-            ".side_set 2",
+            ".side_set 1",
             ".wrap_target"
             "out x, 16 side 0",
             "out y, 16 side 0",
@@ -234,14 +240,24 @@ impl CmdClock {
         );
         let le_prog = common.load_program(&le_program_data.program);
         let le_prog_offset = le_prog.origin;
+        defmt::info!("le_prog_offset {}", le_prog_offset);
         let le_pin = common.make_pio_pin(pins.le_pin);
         // le_sm.set_pins(Level::High, &[&le_pin]);
         le_sm.set_pin_dirs(pio::Direction::Out, &[&le_pin]);
 
         let mut cfg = pio::Config::default();
         cfg.use_program(&le_prog, &[&le_pin]);
+        cfg.fifo_join = pio::FifoJoin::TxOnly;
+        cfg.shift_out = ShiftConfig {
+            auto_fill: true,
+            threshold: 32,
+            direction: pio::ShiftDirection::Right,
+        };
         le_sm.set_config(&cfg);
 
+        clk_sm.set_enable(true);
+        data_sm.set_enable(true);
+        le_sm.set_enable(true);
         Self {
             clk_sm,
             data_sm,
@@ -268,8 +284,9 @@ impl CmdClock {
         let data_tx = self.data_sm.tx();
         data_tx.push(ONE_COMMAND_LOOPS);
         let data_ch = self.data_ch.reborrow();
-        let dma_task = data_tx.dma_push(data_ch, &self.data_buf);
-
+        let buf: &[u32; CMD_BUF_SIZE / 2] = unsafe { core::mem::transmute(&self.data_buf) };
+        let dma_task = data_tx.dma_push(data_ch, buf);
+        // core::mem::drop(dma_task);
         let le_high_cnt = 1;
         let le_low_cnt: u32 = 16 * 9 + 1 - le_high_cnt;
         let le_low_cnt = le_low_cnt - 1;
@@ -277,6 +294,12 @@ impl CmdClock {
         let le_data = (le_high_cnt << 16) | le_low_cnt;
         let le_tx = self.le_sm.tx();
         le_tx.push(le_data);
+        // loop {
+        //     let busy = self.data_ch.reborrow().regs().ctrl_trig().read().busy();
+        //     if !busy {
+        //         break;
+        //     }
+        // }
         dma_task.await;
         self.wait_le_end();
     }
@@ -285,6 +308,7 @@ impl CmdClock {
         let data_tx = self.data_sm.tx();
         data_tx.push(ONE_COMMAND_LOOPS);
         let data_ch = self.data_ch.reborrow();
+        let buf: &[u32; CMD_BUF_SIZE / 2] = unsafe { core::mem::transmute(buf) };
         let dma_task = data_tx.dma_push(data_ch, buf);
 
         let le_high_cnt = 1;
@@ -299,8 +323,9 @@ impl CmdClock {
             le_prog_offset: self.le_prog_offset,
         }
     }
+
     pub fn refresh_empty_buf(&mut self) -> WaitSync {
-        static BUF: [u16; 2] = [0; 2];
+        static BUF: [u32; 1] = [0x00; 1];
         let data_tx = self.data_sm.tx();
         data_tx.push(2 - 1);
         let data_ch = self.data_ch.reborrow();
@@ -311,16 +336,14 @@ impl CmdClock {
         let le_low_cnt = le_low_cnt - 1;
         let le_high_cnt = le_high_cnt - 1;
         let le_data = (le_high_cnt << 16) | le_low_cnt;
-        let le_tx = self.le_sm.tx();
-        le_tx.push(le_data);
-
+        self.le_sm.tx().push(le_data);
         WaitSync {
             dma_task,
             le_prog_offset: self.le_prog_offset,
         }
     }
     fn wait_le_end(&self) {
-        while self.le_end() {}
+        while !self.le_end() {}
     }
     fn le_end(&self) -> bool {
         let addr = embassy_rp::pac::PIO0.sm(3).addr().read().addr();
@@ -338,8 +361,14 @@ pub struct WaitSync<'a> {
 
 impl<'a> WaitSync<'a> {
     pub async fn wait(self) {
+        // core::mem::forget(self.dma_task);
+        // toooo slow 160pfs
         self.dma_task.await;
-        while Self::le_end(self.le_prog_offset) {}
+        // 210fps with poll
+        // let mut fut = pin!(self.dma_task);
+        // core::future::poll_fn(f)
+        // while poll_once(&mut fut).is_pending() {}
+        while !Self::le_end(self.le_prog_offset) {}
     }
     fn le_end(le_prog_offset: u8) -> bool {
         let addr = embassy_rp::pac::PIO0.sm(3).addr().read().addr();

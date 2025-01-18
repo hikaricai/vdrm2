@@ -2,7 +2,6 @@
 #![no_main]
 mod clocks2;
 use clocks2::gen_raw_buf;
-use defmt::info;
 use embassy_executor::Spawner;
 use embassy_rp::gpio;
 use {defmt_rtt as _, panic_probe as _};
@@ -57,14 +56,16 @@ fn gen_colors() -> [Command; 1024] {
     cmds
 }
 
-const COLOR_RAW_BUF: [[u16; clocks2::CMD_BUF_SIZE]; 1024] = clocks2::gen_colors_raw_buf();
+// const COLOR_RAW_BUF: [[u16; clocks2::CMD_BUF_SIZE]; 1024] = clocks2::gen_colors_raw_buf();
 const UMINI_CMDS: &[(mbi5264_common::CMD, u16)] = &mbi5264_common::unimi_cmds();
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
-    info!("Hello there!");
+    defmt::info!("Hello there!");
     let p = embassy_rp::init(Default::default());
     let mut led_pin = gpio::Output::new(p.PIN_25, gpio::Level::Low);
+    let mut dbg_pin = gpio::Output::new(p.PIN_11, gpio::Level::Low);
+    let mut dbg_pin2 = gpio::Output::new(p.PIN_12, gpio::Level::Low);
     let pins = clocks2::CmdClockPins {
         clk_pin: p.PIN_6,
         le_pin: p.PIN_7,
@@ -95,11 +96,6 @@ async fn main(_spawner: Spawner) {
     });
     let mut frame = 0usize;
     loop {
-        line.start();
-        line.wait_stop().await;
-        embassy_time::Timer::after_millis(50).await;
-    }
-    loop {
         cnt += 1;
         cmd_pio.refresh(&sync_cmd).await;
         if let Some(&(cmd, param)) = cmd_iter.next() {
@@ -108,9 +104,8 @@ async fn main(_spawner: Spawner) {
         }
         // vsync
         line.start();
-
-        for (idx, _raw) in COLOR_RAW_BUF.iter().enumerate() {
-            // dbg_pin.set_high().unwrap();
+        for idx in 0..1024 {
+            dbg_pin.set_high();
             let coloum_idx = idx % 16;
             let empty_coloum_idx = (frame + 1) % 16;
             let task = if coloum_idx == frame {
@@ -121,6 +116,7 @@ async fn main(_spawner: Spawner) {
                 cmd_pio.refresh_empty_buf()
             };
             task.wait().await;
+            dbg_pin.set_low();
         }
         line.wait_stop().await;
         frame += 1;
