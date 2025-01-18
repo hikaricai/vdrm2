@@ -1,4 +1,3 @@
-//! Displays an animated Nyan cat
 #![no_std]
 #![no_main]
 mod clocks2;
@@ -96,6 +95,11 @@ async fn main(_spawner: Spawner) {
     });
     let mut frame = 0usize;
     loop {
+        line.start();
+        line.wait_stop().await;
+        embassy_time::Timer::after_millis(50).await;
+    }
+    loop {
         cnt += 1;
         cmd_pio.refresh(&sync_cmd).await;
         if let Some(&(cmd, param)) = cmd_iter.next() {
@@ -109,15 +113,16 @@ async fn main(_spawner: Spawner) {
             // dbg_pin.set_high().unwrap();
             let coloum_idx = idx % 16;
             let empty_coloum_idx = (frame + 1) % 16;
-            if coloum_idx == frame {
-                cmd_pio.refresh_raw_buf(&palette[3]).await;
+            let task = if coloum_idx == frame {
+                cmd_pio.refresh_raw_buf(&palette[3])
             } else if coloum_idx == empty_coloum_idx {
-                cmd_pio.refresh_raw_buf(&palette[0]).await;
+                cmd_pio.refresh_raw_buf(&palette[0])
             } else {
-                cmd_pio.refresh_empty_buf().await;
-            }
+                cmd_pio.refresh_empty_buf()
+            };
+            task.wait().await;
         }
-        line.wait().await;
+        line.wait_stop().await;
         frame += 1;
         frame %= 16;
         if cnt >= 10 {

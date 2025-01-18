@@ -1,3 +1,6 @@
+use core::cell::RefCell;
+
+use embassy_rp::dma::Transfer;
 use embassy_rp::gpio::Level;
 use embassy_rp::interrupt::typelevel::{Handler, Interrupt, PWM_IRQ_WRAP};
 use embassy_rp::pac::PIO0;
@@ -10,8 +13,10 @@ use embassy_rp::pwm::{self, Pwm, PwmBatch};
 use embassy_rp::{Peripheral, PeripheralRef};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex;
-use embassy_sync::channel::Channel;
 use embassy_sync::signal::Signal;
+
+static LINE_CLOCK: Mutex<CriticalSectionRawMutex, RefCell<Option<LineClock>>> =
+    Mutex::new(RefCell::new(None));
 
 embassy_rp::bind_interrupts!(struct PioIrqs {
     PIO0_IRQ_0 => pio::InterruptHandler<PIO0>;
@@ -21,19 +26,18 @@ embassy_rp::bind_interrupts!(struct PwmIrq {
     PWM_IRQ_WRAP => PwmInterruptHandler;
 });
 
-static PWM_CMD_SIGNAL: Signal<CriticalSectionRawMutex, PwmCmd> = Signal::new();
 static PWM_OFF_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
-enum PwmCmd {
-    On,
-    Off,
-}
 struct PwmInterruptHandler {}
 
 impl Handler<PWM_IRQ_WRAP> for PwmInterruptHandler {
     unsafe fn on_interrupt() {
-        PWM_IRQ_WRAP::unpend();
-        PWM_CMD_SIGNAL.signal(PwmCmd::Off);
+        critical_section::with(|cs| {
+            let mut guard = LINE_CLOCK.borrow(cs).borrow_mut();
+            let line = guard.as_mut().unwrap();
+            line.stop();
+            line.pwm_a.clear_wrapped();
+        });
         PWM_OFF_SIGNAL.signal(());
     }
 }
@@ -43,14 +47,6 @@ pub struct LineClock {
     pwm_a: Pwm<'static>,
     pwm_bc: Pwm<'static>,
     started: bool,
-    // pub running: bool,
-    // cnt: u32,
-    // pwm: rp_pico::hal::pwm::Slices,
-    // gclk_pin: Option<Pin<Gpio0, FunctionPwm, PullDown>>,
-    // gpio0_pin: Option<Pin<Gpio0, FunctionSioOutput, PullDown>>,
-    // a_pin: Pin<Gpio2, FunctionPwm, PullDown>,
-    // b_pin: Pin<Gpio4, FunctionPwm, PullDown>,
-    // c_pin: Pin<Gpio5, FunctionPwm, PullDown>,
 }
 
 impl LineClock {
@@ -62,7 +58,7 @@ impl LineClock {
         a_pin: PIN_2,
         b_pin: PIN_4,
         c_pin: PIN_5,
-    ) -> Self {
+    ) -> LineClockHdl {
         let pwm_div = 5.into();
         PWM_IRQ_WRAP::unpend();
         unsafe {
@@ -79,6 +75,7 @@ impl LineClock {
         a_cfg.top = 100 * 64 - 1;
         a_cfg.compare_a = 100;
         let pwm_a = Pwm::new_output_a(pwm1, a_pin, a_cfg);
+        embassy_rp::pac::PWM.inte().modify(|w| w.set_ch1(true));
 
         let mut bc_cfg = pwm::Config::default();
         bc_cfg.divider = pwm_div;
@@ -87,12 +84,14 @@ impl LineClock {
         bc_cfg.compare_a = 1;
         let pwm_bc = Pwm::new_output_ab(pwm2, b_pin, c_pin, bc_cfg);
 
-        Self {
+        let this = Self {
             pwm_gclk,
             pwm_a,
             pwm_bc,
             started: false,
-        }
+        };
+        LINE_CLOCK.lock(|v| v.borrow_mut().replace(this));
+        LineClockHdl { started: false }
     }
 
     pub fn start(&mut self) {
@@ -118,28 +117,6 @@ impl LineClock {
         self.pwm_a.set_counter(0);
         self.pwm_bc.set_counter(0);
     }
-
-    pub async fn wait(&mut self) {
-        if !self.started {
-            return;
-        }
-        PWM_OFF_SIGNAL.wait().await;
-        self.stop();
-    }
-
-    pub async fn run_bg(mut self) {
-        loop {
-            let cmd = PWM_CMD_SIGNAL.wait().await;
-            match cmd {
-                PwmCmd::On => {
-                    self.start();
-                }
-                PwmCmd::Off => {
-                    self.stop();
-                }
-            }
-        }
-    }
 }
 
 pub struct LineClockHdl {
@@ -148,8 +125,10 @@ pub struct LineClockHdl {
 
 impl LineClockHdl {
     pub fn start(&mut self) {
-        PWM_CMD_SIGNAL.signal(PwmCmd::On);
         self.started = true;
+        LINE_CLOCK.lock(|v| {
+            v.borrow_mut().as_mut().unwrap().start();
+        });
         PWM_OFF_SIGNAL.reset();
     }
 
@@ -182,14 +161,6 @@ pub struct CmdClock {
     le_prog_offset: u8,
     le_sm: StateMachine<'static, PIO0, 3>,
     data_buf: [u16; CMD_BUF_SIZE],
-    // le_sm_tx: rp2040_hal::pio::Tx<(PIO0, rp2040_hal::pio::SM3)>,
-    // color_prog_offset: u32,
-    // color_sm: rp2040_hal::pio::StateMachine<(PIO0, rp2040_hal::pio::SM2), Stopped>,
-    // data_sm_tx: rp2040_hal::pio::Tx<(PIO0, rp2040_hal::pio::SM1)>,
-    // data_ch: rp2040_hal::dma::Channel<rp2040_hal::dma::CH0>,
-    // color_ch: rp2040_hal::dma::Channel<rp2040_hal::dma::CH1>,
-    // data_buf: [u16; CMD_BUF_SIZE],
-    // color_buf: [u16; COLOR_BUF_SIZE],
 }
 
 impl CmdClock {
@@ -310,7 +281,7 @@ impl CmdClock {
         self.wait_le_end();
     }
 
-    pub async fn refresh_raw_buf(&mut self, buf: &[u16; CMD_BUF_SIZE]) {
+    pub fn refresh_raw_buf<'a>(&'a mut self, buf: &'a [u16; CMD_BUF_SIZE]) -> WaitSync<'a> {
         let data_tx = self.data_sm.tx();
         data_tx.push(ONE_COMMAND_LOOPS);
         let data_ch = self.data_ch.reborrow();
@@ -323,10 +294,12 @@ impl CmdClock {
         let le_data = (le_high_cnt << 16) | le_low_cnt;
         let le_tx = self.le_sm.tx();
         le_tx.push(le_data);
-        dma_task.await;
-        self.wait_le_end();
+        WaitSync {
+            dma_task,
+            le_prog_offset: self.le_prog_offset,
+        }
     }
-    pub async fn refresh_empty_buf(&mut self) {
+    pub fn refresh_empty_buf(&mut self) -> WaitSync {
         static BUF: [u16; 2] = [0; 2];
         let data_tx = self.data_sm.tx();
         data_tx.push(2 - 1);
@@ -341,8 +314,10 @@ impl CmdClock {
         let le_tx = self.le_sm.tx();
         le_tx.push(le_data);
 
-        dma_task.await;
-        self.wait_le_end();
+        WaitSync {
+            dma_task,
+            le_prog_offset: self.le_prog_offset,
+        }
     }
     fn wait_le_end(&self) {
         while self.le_end() {}
@@ -350,6 +325,25 @@ impl CmdClock {
     fn le_end(&self) -> bool {
         let addr = embassy_rp::pac::PIO0.sm(3).addr().read().addr();
         if addr <= self.le_prog_offset + 1 {
+            return true;
+        }
+        false
+    }
+}
+
+pub struct WaitSync<'a> {
+    dma_task: Transfer<'a, DMA_CH0>,
+    le_prog_offset: u8,
+}
+
+impl<'a> WaitSync<'a> {
+    pub async fn wait(self) {
+        self.dma_task.await;
+        while Self::le_end(self.le_prog_offset) {}
+    }
+    fn le_end(le_prog_offset: u8) -> bool {
+        let addr = embassy_rp::pac::PIO0.sm(3).addr().read().addr();
+        if addr <= le_prog_offset + 1 {
             return true;
         }
         false
