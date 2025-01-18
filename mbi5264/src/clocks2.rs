@@ -1,7 +1,6 @@
 use core::cell::RefCell;
-use core::pin::pin;
 use embassy_futures::poll_once;
-use embassy_rp::dma::Transfer;
+use embassy_rp::dma::{Channel, Transfer};
 use embassy_rp::interrupt::typelevel::{Handler, Interrupt, PWM_IRQ_WRAP};
 use embassy_rp::peripherals::{
     DMA_CH0, PIN_0, PIN_2, PIN_4, PIN_5, PIO0, PWM_SLICE0, PWM_SLICE1, PWM_SLICE2,
@@ -211,7 +210,7 @@ impl CmdClock {
         let b0_pin = common.make_pio_pin(pins.b0_pin);
         data_sm.set_pin_dirs(pio::Direction::Out, &[&r0_pin, &g0_pin, &b0_pin]);
 
-        defmt::info!("data_sm addr {}", data_prog.origin);
+        // defmt::info!("data_sm addr {}", data_prog.origin);
         let mut cfg = pio::Config::default();
         cfg.use_program(&data_prog, &[]);
         cfg.set_out_pins(&[&r0_pin, &g0_pin, &b0_pin]);
@@ -240,7 +239,7 @@ impl CmdClock {
         );
         let le_prog = common.load_program(&le_program_data.program);
         let le_prog_offset = le_prog.origin;
-        defmt::info!("le_prog_offset {}", le_prog_offset);
+        // defmt::info!("le_prog_offset {}", le_prog_offset);
         let le_pin = common.make_pio_pin(pins.le_pin);
         // le_sm.set_pins(Level::High, &[&le_pin]);
         le_sm.set_pin_dirs(pio::Direction::Out, &[&le_pin]);
@@ -258,6 +257,29 @@ impl CmdClock {
         clk_sm.set_enable(true);
         data_sm.set_enable(true);
         le_sm.set_enable(true);
+
+        let p = data_ch.regs();
+
+        let pio_no = 0;
+        let ch_no = 0;
+        let data_sm_no = 1usize;
+        p.write_addr()
+            .write_value(embassy_rp::pac::PIO0.txf(1).as_ptr() as u32);
+        p.al1_ctrl().write(|w| {
+            let mut reg = embassy_rp::pac::dma::regs::CtrlTrig::default();
+            // Set TX DREQ for this statemachine
+            reg.set_treq_sel(embassy_rp::pac::dma::vals::TreqSel::from(
+                pio_no * 8 + data_sm_no as u8,
+            ));
+            reg.set_data_size(embassy_rp::pac::dma::vals::DataSize::SIZE_WORD);
+            reg.set_chain_to(ch_no);
+            reg.set_incr_read(true);
+            reg.set_incr_write(false);
+            reg.set_en(true);
+            reg.set_irq_quiet(true);
+            *w = reg.0;
+        });
+
         Self {
             clk_sm,
             data_sm,
@@ -268,7 +290,7 @@ impl CmdClock {
         }
     }
 
-    pub async fn refresh(&mut self, transaction: &super::Command) {
+    pub fn refresh(&mut self, transaction: &super::Command) {
         let mut buf_iter = self.data_buf.iter_mut();
         for [r, g, b] in transaction.regs {
             for i in (0..16).rev() {
@@ -277,70 +299,64 @@ impl CmdClock {
                 let g = (g >> i) & 1;
                 let b = (b >> i) & 1;
                 *buf = r + (g << 1) + (b << 2);
-                // *buf = 0x03;
             }
         }
 
         let data_tx = self.data_sm.tx();
         data_tx.push(ONE_COMMAND_LOOPS);
-        let data_ch = self.data_ch.reborrow();
-        let buf: &[u32; CMD_BUF_SIZE / 2] = unsafe { core::mem::transmute(&self.data_buf) };
-        let dma_task = data_tx.dma_push(data_ch, buf);
-        // core::mem::drop(dma_task);
-        let le_high_cnt = 1;
+        let p = self.data_ch.regs();
+        p.trans_count().write_value(CMD_BUF_SIZE as u32 / 2);
+        p.al3_read_addr_trig()
+            .write_value(self.data_buf.as_ptr() as u32);
+
+        let le_high_cnt = transaction.cmd as u32;
         let le_low_cnt: u32 = 16 * 9 + 1 - le_high_cnt;
         let le_low_cnt = le_low_cnt - 1;
         let le_high_cnt = le_high_cnt - 1;
         let le_data = (le_high_cnt << 16) | le_low_cnt;
+
         let le_tx = self.le_sm.tx();
         le_tx.push(le_data);
-        // loop {
-        //     let busy = self.data_ch.reborrow().regs().ctrl_trig().read().busy();
-        //     if !busy {
-        //         break;
-        //     }
-        // }
-        dma_task.await;
-        self.wait_le_end();
+        while p.ctrl_trig().read().busy() {}
     }
 
-    pub fn refresh_raw_buf<'a>(&'a mut self, buf: &'a [u16; CMD_BUF_SIZE]) -> WaitSync<'a> {
+    pub fn refresh_raw_buf<'a>(&'a mut self, buf: &'a [u16; CMD_BUF_SIZE]) {
         let data_tx = self.data_sm.tx();
         data_tx.push(ONE_COMMAND_LOOPS);
-        let data_ch = self.data_ch.reborrow();
-        let buf: &[u32; CMD_BUF_SIZE / 2] = unsafe { core::mem::transmute(buf) };
-        let dma_task = data_tx.dma_push(data_ch, buf);
+        let p = self.data_ch.regs();
+        p.trans_count().write_value(CMD_BUF_SIZE as u32 / 2);
+        p.al3_read_addr_trig().write_value(buf.as_ptr() as u32);
 
-        let le_high_cnt = 1;
-        let le_low_cnt: u32 = 16 * 9 + 1 - le_high_cnt;
-        let le_low_cnt = le_low_cnt - 1;
-        let le_high_cnt = le_high_cnt - 1;
-        let le_data = (le_high_cnt << 16) | le_low_cnt;
+        const LE_DATA: u32 = {
+            let le_high_cnt = 1;
+            let le_low_cnt: u32 = 16 * 9 + 1 - le_high_cnt;
+            let le_low_cnt = le_low_cnt - 1;
+            let le_high_cnt = le_high_cnt - 1;
+            let le_data = (le_high_cnt << 16) | le_low_cnt;
+            le_data
+        };
+
         let le_tx = self.le_sm.tx();
-        le_tx.push(le_data);
-        WaitSync {
-            dma_task,
-            le_prog_offset: self.le_prog_offset,
-        }
+        le_tx.push(LE_DATA);
+        while p.ctrl_trig().read().busy() {}
     }
 
-    pub fn refresh_empty_buf(&mut self) -> WaitSync {
+    pub fn refresh_empty_buf(&mut self) {
         static BUF: [u32; 1] = [0x00; 1];
         let data_tx = self.data_sm.tx();
         data_tx.push(2 - 1);
-        let data_ch = self.data_ch.reborrow();
-        let dma_task = data_tx.dma_push(data_ch, &BUF);
 
-        let le_high_cnt = 1;
-        let le_low_cnt: u32 = 1 + 1 - le_high_cnt;
-        let le_low_cnt = le_low_cnt - 1;
-        let le_high_cnt = le_high_cnt - 1;
-        let le_data = (le_high_cnt << 16) | le_low_cnt;
-        self.le_sm.tx().push(le_data);
-        WaitSync {
-            dma_task,
-            le_prog_offset: self.le_prog_offset,
-        }
+        let p = self.data_ch.regs();
+        p.trans_count().write_value(1);
+        p.al3_read_addr_trig().write_value(BUF.as_ptr() as u32);
+        // let le_high_cnt = 1;
+        // let le_low_cnt: u32 = 1 + 1 - le_high_cnt;
+        // let le_low_cnt = le_low_cnt - 1;
+        // let le_high_cnt = le_high_cnt - 1;
+        // let le_data = (le_high_cnt << 16) | le_low_cnt;
+        self.le_sm.tx().push(0);
+        while p.ctrl_trig().read().busy() {}
+        // let mut fut = core::pin::Pin::new(&mut dma_task);
     }
     fn wait_le_end(&self) {
         while !self.le_end() {}
@@ -354,21 +370,22 @@ impl CmdClock {
     }
 }
 
+// Too slow
 pub struct WaitSync<'a> {
     dma_task: Transfer<'a, DMA_CH0>,
     le_prog_offset: u8,
 }
 
 impl<'a> WaitSync<'a> {
-    pub async fn wait(self) {
+    pub fn wait(mut self) {
         // core::mem::forget(self.dma_task);
         // toooo slow 160pfs
-        self.dma_task.await;
+        // self.dma_task.await;
         // 210fps with poll
-        // let mut fut = pin!(self.dma_task);
-        // core::future::poll_fn(f)
-        // while poll_once(&mut fut).is_pending() {}
-        while !Self::le_end(self.le_prog_offset) {}
+        let mut fut = core::pin::Pin::new(&mut self.dma_task);
+        while poll_once(fut.as_mut()).is_pending() {}
+        core::mem::forget(self.dma_task);
+        // while !Self::le_end(self.le_prog_offset) {}
     }
     fn le_end(le_prog_offset: u8) -> bool {
         let addr = embassy_rp::pac::PIO0.sm(3).addr().read().addr();

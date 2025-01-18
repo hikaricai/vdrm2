@@ -4,8 +4,8 @@ mod clocks2;
 use clocks2::gen_raw_buf;
 use embassy_executor::Spawner;
 use embassy_rp::gpio;
-use {defmt_rtt as _, panic_probe as _};
-
+// use {defmt_rtt as _, panic_probe as _};
+use panic_probe as _;
 #[repr(packed)]
 pub struct Command {
     // 命令
@@ -61,7 +61,7 @@ const UMINI_CMDS: &[(mbi5264_common::CMD, u16)] = &mbi5264_common::unimi_cmds();
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
-    defmt::info!("Hello there!");
+    // defmt::info!("Hello there!");
     let p = embassy_rp::init(Default::default());
     let mut led_pin = gpio::Output::new(p.PIN_25, gpio::Level::Low);
     let mut dbg_pin = gpio::Output::new(p.PIN_11, gpio::Level::Low);
@@ -97,26 +97,25 @@ async fn main(_spawner: Spawner) {
     let mut frame = 0usize;
     loop {
         cnt += 1;
-        cmd_pio.refresh(&sync_cmd).await;
+        cmd_pio.refresh(&sync_cmd);
         if let Some(&(cmd, param)) = cmd_iter.next() {
-            cmd_pio.refresh(&confirm_cmd).await;
-            cmd_pio.refresh(&Command::new(cmd as u8, param)).await;
+            cmd_pio.refresh(&confirm_cmd);
+            cmd_pio.refresh(&Command::new(cmd as u8, param));
         }
         // vsync
         line.start();
         for idx in 0..1024 {
-            dbg_pin.set_high();
+            // dbg_pin.set_high();
             let coloum_idx = idx % 16;
             let empty_coloum_idx = (frame + 1) % 16;
-            let task = if coloum_idx == frame {
+            if coloum_idx == frame {
                 cmd_pio.refresh_raw_buf(&palette[3])
             } else if coloum_idx == empty_coloum_idx {
                 cmd_pio.refresh_raw_buf(&palette[0])
             } else {
                 cmd_pio.refresh_empty_buf()
             };
-            task.wait().await;
-            dbg_pin.set_low();
+            // dbg_pin.set_low();
         }
         line.wait_stop().await;
         frame += 1;
