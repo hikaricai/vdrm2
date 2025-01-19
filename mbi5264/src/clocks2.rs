@@ -3,7 +3,7 @@ use embassy_futures::poll_once;
 use embassy_rp::dma::{Channel, Transfer};
 use embassy_rp::interrupt::typelevel::{Handler, Interrupt, DMA_IRQ_0, PWM_IRQ_WRAP};
 use embassy_rp::peripherals::{
-    DMA_CH0, PIN_0, PIN_2, PIN_4, PIN_5, PIO0, PWM_SLICE0, PWM_SLICE1, PWM_SLICE2,
+    DMA_CH0, DMA_CH1, PIN_0, PIN_2, PIN_4, PIN_5, PIO0, PWM_SLICE0, PWM_SLICE1, PWM_SLICE2,
 };
 use embassy_rp::peripherals::{PIN_10, PIN_6, PIN_7, PIN_8, PIN_9};
 use embassy_rp::pio::{self, Pio, ShiftConfig, StateMachine};
@@ -159,11 +159,12 @@ pub struct CmdClock {
     data_ch: PeripheralRef<'static, DMA_CH0>,
     le_prog_offset: u8,
     le_sm: StateMachine<'static, PIO0, 3>,
+    le_ch: PeripheralRef<'static, DMA_CH1>,
     data_buf: [u16; CMD_BUF_SIZE],
 }
 
 impl CmdClock {
-    pub fn new(pio0: PIO0, pins: CmdClockPins, data_ch: DMA_CH0) -> Self {
+    pub fn new(pio0: PIO0, pins: CmdClockPins, data_ch: DMA_CH0, le_ch: DMA_CH1) -> Self {
         let pio0 = Pio::new(pio0, PioIrqs);
         let Pio {
             mut common,
@@ -265,12 +266,33 @@ impl CmdClock {
         let ch_no = 0;
         let data_sm_no = 1usize;
         p.write_addr()
-            .write_value(embassy_rp::pac::PIO0.txf(1).as_ptr() as u32);
+            .write_value(embassy_rp::pac::PIO0.txf(data_sm_no).as_ptr() as u32);
         p.al1_ctrl().write(|w| {
             let mut reg = embassy_rp::pac::dma::regs::CtrlTrig::default();
             // Set TX DREQ for this statemachine
             reg.set_treq_sel(embassy_rp::pac::dma::vals::TreqSel::from(
                 pio_no * 8 + data_sm_no as u8,
+            ));
+            reg.set_data_size(embassy_rp::pac::dma::vals::DataSize::SIZE_WORD);
+            reg.set_chain_to(ch_no);
+            reg.set_incr_read(true);
+            reg.set_incr_write(false);
+            reg.set_en(true);
+            reg.set_irq_quiet(true);
+            *w = reg.0;
+        });
+
+        let p = le_ch.regs();
+        let pio_no = 0;
+        let ch_no = 1;
+        let le_sm_no = 3usize;
+        p.write_addr()
+            .write_value(embassy_rp::pac::PIO0.txf(le_sm_no).as_ptr() as u32);
+        p.al1_ctrl().write(|w| {
+            let mut reg = embassy_rp::pac::dma::regs::CtrlTrig::default();
+            // Set TX DREQ for this statemachine
+            reg.set_treq_sel(embassy_rp::pac::dma::vals::TreqSel::from(
+                pio_no * 8 + le_sm_no as u8,
             ));
             reg.set_data_size(embassy_rp::pac::dma::vals::DataSize::SIZE_WORD);
             reg.set_chain_to(ch_no);
@@ -287,6 +309,7 @@ impl CmdClock {
             data_ch: data_ch.into_ref(),
             le_prog_offset,
             le_sm,
+            le_ch: le_ch.into_ref(),
             data_buf: [0; CMD_BUF_SIZE],
         }
     }
@@ -346,21 +369,35 @@ impl CmdClock {
 
     #[link_section = ".data"]
     #[inline(never)]
-    pub fn refresh_empty_buf(&mut self) {
-        static BUF: [u32; 1] = [0x00; 1];
-        let data_tx = self.data_sm.tx();
-        data_tx.push(2 - 1);
+    pub fn refresh_empty_buf(&mut self, len: usize) {
+        static LE_BUF: [u32; 32] = [0u32; 32];
+        if len >= 32 || len == 0 {
+            return;
+        }
+        let buf: &mut [u32; CMD_BUF_SIZE / 2] = unsafe { core::mem::transmute(&mut self.data_buf) };
+        for i in 0..len {
+            let idx = i * 2;
+            buf[idx] = 1;
+            buf[idx + 1] = 0;
+        }
+        // let data_tx = self.data_sm.tx();
+        // data_tx.push(2 - 1);
 
-        let p = self.data_ch.regs();
-        p.trans_count().write_value(1);
-        p.al3_read_addr_trig().write_value(BUF.as_ptr() as u32);
-        // let le_high_cnt = 1;
-        // let le_low_cnt: u32 = 1 + 1 - le_high_cnt;
-        // let le_low_cnt = le_low_cnt - 1;
-        // let le_high_cnt = le_high_cnt - 1;
-        // let le_data = (le_high_cnt << 16) | le_low_cnt;
-        self.le_sm.tx().push(0);
-        while p.ctrl_trig().read().busy() {}
+        let data_ch_reg = self.data_ch.regs();
+        let le_ch_reg = self.le_ch.regs();
+
+        data_ch_reg.trans_count().write_value(len as u32 * 2);
+        le_ch_reg.trans_count().write_value(len as u32);
+
+        data_ch_reg
+            .al3_read_addr_trig()
+            .write_value(buf.as_ptr() as u32);
+        le_ch_reg
+            .al3_read_addr_trig()
+            .write_value(LE_BUF.as_ptr() as u32);
+
+        while data_ch_reg.ctrl_trig().read().busy() {}
+        while le_ch_reg.ctrl_trig().read().busy() {}
         // let mut fut = core::pin::Pin::new(&mut dma_task);
     }
     fn wait_le_end(&self) {

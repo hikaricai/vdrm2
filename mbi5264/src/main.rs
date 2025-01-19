@@ -1,8 +1,6 @@
 #![no_std]
 #![no_main]
 mod clocks2;
-use core::hint;
-
 use clocks2::gen_raw_buf;
 use embassy_executor::Spawner;
 use embassy_rp::gpio;
@@ -76,6 +74,7 @@ async fn main(_spawner: Spawner) {
         b0_pin: p.PIN_10,
     };
     let data_ch = p.DMA_CH0;
+    let le_ch = p.DMA_CH1;
     let mut line = clocks2::LineClock::new(
         p.PWM_SLICE0,
         p.PWM_SLICE1,
@@ -85,7 +84,7 @@ async fn main(_spawner: Spawner) {
         p.PIN_4,
         p.PIN_5,
     );
-    let mut cmd_pio = clocks2::CmdClock::new(p.PIO0, pins, data_ch);
+    let mut cmd_pio = clocks2::CmdClock::new(p.PIO0, pins, data_ch, le_ch);
 
     let sync_cmd = Command::new_sync();
     let confirm_cmd = Command::new_confirm();
@@ -124,18 +123,32 @@ fn update_frame(
     palette: &[[u16; clocks2::CMD_BUF_SIZE]; 4],
     frame: usize,
 ) {
-    for idx in 0..1024 {
-        // dbg_pin.set_high();
-        let coloum_idx = idx % 16;
-        let empty_coloum_idx = (frame + 1) % 16;
-
-        if coloum_idx == frame {
-            cmd_pio.refresh_raw_buf(&palette[3])
-        } else if coloum_idx == empty_coloum_idx {
-            cmd_pio.refresh_raw_buf(&palette[0])
+    let frame = frame % 16;
+    if frame > 0 {
+        cmd_pio.refresh_empty_buf(frame);
+    }
+    let mut cnt = frame;
+    loop {
+        if cnt >= 1024 {
+            break;
+        }
+        cmd_pio.refresh_raw_buf(&palette[3]);
+        cnt += 1;
+        if cnt >= 1024 {
+            break;
+        }
+        cmd_pio.refresh_raw_buf(&palette[0]);
+        cnt += 1;
+        let remain = 1024 - cnt;
+        if remain == 0 {
+            break;
+        }
+        if remain >= 14 {
+            cmd_pio.refresh_empty_buf(14);
+            cnt += 14;
         } else {
-            cmd_pio.refresh_empty_buf()
-        };
-        // dbg_pin.set_low();
+            cmd_pio.refresh_empty_buf(remain);
+            cnt += remain;
+        }
     }
 }
