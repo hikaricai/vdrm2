@@ -1,6 +1,8 @@
 #![no_std]
 #![no_main]
 mod clocks2;
+use core::hint;
+
 use clocks2::gen_raw_buf;
 use embassy_executor::Spawner;
 use embassy_rp::gpio;
@@ -104,19 +106,7 @@ async fn main(_spawner: Spawner) {
         }
         // vsync
         line.start();
-        for idx in 0..1024 {
-            // dbg_pin.set_high();
-            let coloum_idx = idx % 16;
-            let empty_coloum_idx = (frame + 1) % 16;
-            if coloum_idx == frame {
-                cmd_pio.refresh_raw_buf(&palette[3])
-            } else if coloum_idx == empty_coloum_idx {
-                cmd_pio.refresh_raw_buf(&palette[0])
-            } else {
-                cmd_pio.refresh_empty_buf()
-            };
-            // dbg_pin.set_low();
-        }
+        update_frame(&mut cmd_pio, &palette, frame);
         line.wait_stop().await;
         frame += 1;
         frame %= 16;
@@ -124,5 +114,28 @@ async fn main(_spawner: Spawner) {
             cnt = 0;
             led_pin.toggle();
         }
+    }
+}
+
+#[link_section = ".data"]
+#[inline(never)]
+fn update_frame(
+    cmd_pio: &mut clocks2::CmdClock,
+    palette: &[[u16; clocks2::CMD_BUF_SIZE]; 4],
+    frame: usize,
+) {
+    for idx in 0..1024 {
+        // dbg_pin.set_high();
+        let coloum_idx = idx % 16;
+        let empty_coloum_idx = (frame + 1) % 16;
+
+        if coloum_idx == frame {
+            cmd_pio.refresh_raw_buf(&palette[3])
+        } else if coloum_idx == empty_coloum_idx {
+            cmd_pio.refresh_raw_buf(&palette[0])
+        } else {
+            cmd_pio.refresh_empty_buf()
+        };
+        // dbg_pin.set_low();
     }
 }

@@ -1,7 +1,7 @@
 use core::cell::RefCell;
 use embassy_futures::poll_once;
 use embassy_rp::dma::{Channel, Transfer};
-use embassy_rp::interrupt::typelevel::{Handler, Interrupt, PWM_IRQ_WRAP};
+use embassy_rp::interrupt::typelevel::{Handler, Interrupt, DMA_IRQ_0, PWM_IRQ_WRAP};
 use embassy_rp::peripherals::{
     DMA_CH0, PIN_0, PIN_2, PIN_4, PIN_5, PIO0, PWM_SLICE0, PWM_SLICE1, PWM_SLICE2,
 };
@@ -61,6 +61,7 @@ impl LineClock {
         PWM_IRQ_WRAP::unpend();
         unsafe {
             PWM_IRQ_WRAP::enable();
+            DMA_IRQ_0::disable();
         };
         let mut gclk_cfg = pwm::Config::default();
         gclk_cfg.divider = pwm_div;
@@ -320,6 +321,8 @@ impl CmdClock {
         while p.ctrl_trig().read().busy() {}
     }
 
+    #[link_section = ".data"]
+    #[inline(never)]
     pub fn refresh_raw_buf<'a>(&'a mut self, buf: &'a [u16; CMD_BUF_SIZE]) {
         let data_tx = self.data_sm.tx();
         data_tx.push(ONE_COMMAND_LOOPS);
@@ -341,6 +344,8 @@ impl CmdClock {
         while p.ctrl_trig().read().busy() {}
     }
 
+    #[link_section = ".data"]
+    #[inline(never)]
     pub fn refresh_empty_buf(&mut self) {
         static BUF: [u32; 1] = [0x00; 1];
         let data_tx = self.data_sm.tx();
