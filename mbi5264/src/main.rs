@@ -63,6 +63,10 @@ const UMINI_CMDS: &[(mbi5264_common::CMD, u16)] = &mbi5264_common::unimi_cmds();
 async fn main(_spawner: Spawner) {
     // defmt::info!("Hello there!");
     let p = embassy_rp::init(Default::default());
+    embassy_rp::pac::BUSCTRL.bus_priority().write(|w| {
+        w.set_dma_r(true);
+        w.set_dma_w(true);
+    });
     let mut led_pin = gpio::Output::new(p.PIN_25, gpio::Level::Low);
     let mut dbg_pin = gpio::Output::new(p.PIN_11, gpio::Level::Low);
     let mut dbg_pin2 = gpio::Output::new(p.PIN_12, gpio::Level::Low);
