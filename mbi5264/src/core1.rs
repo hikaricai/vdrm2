@@ -7,7 +7,7 @@ use embassy_rp::multicore::{spawn_core1, Stack};
 use embassy_rp::peripherals::USB;
 use embassy_rp::usb::{Driver, InterruptHandler};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-use embassy_sync::channel::Channel;
+use embassy_sync::zerocopy_channel;
 use embassy_time::Timer;
 use embassy_usb::driver::{Endpoint, EndpointIn, EndpointOut};
 use embassy_usb::msos::{self, windows_version};
@@ -32,15 +32,15 @@ impl embassy_rp::interrupt::typelevel::Handler<<USB as embassy_rp::usb::Instance
 
 pub static mut CORE1_STACK: Stack<4096> = Stack::new();
 static EXECUTOR: StaticCell<Executor> = StaticCell::new();
-pub fn run(usb: USB) -> ! {
+pub fn run(usb: USB, safe_sender: crate::SafeSender) -> ! {
     let executor1 = EXECUTOR.init(Executor::new());
     executor1.run(move |spawner| {
-        spawner.spawn(core1_task(usb)).unwrap();
+        spawner.spawn(core1_task(usb, safe_sender)).unwrap();
     });
 }
 
 #[embassy_executor::task]
-async fn core1_task(usb: USB) {
+async fn core1_task(usb: USB, mut safe_sender: crate::SafeSender) {
     let core_num = embassy_rp::pac::SIO.cpuid().read();
     defmt::info!("Hello from core {}", core_num);
     let driver = Driver::new(usb, Irqs);
@@ -89,6 +89,9 @@ async fn core1_task(usb: USB) {
         loop {
             read_ep.wait_enabled().await;
             defmt::info!("Connected");
+            let buf = safe_sender.sender.send().await;
+            buf[0] = [233; 4];
+            safe_sender.sender.send_done();
             loop {
                 let mut data = [0; 64];
                 match read_ep.read(&mut data).await {

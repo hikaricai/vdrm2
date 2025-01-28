@@ -5,8 +5,29 @@ mod core1;
 use clocks2::gen_raw_buf;
 use embassy_executor::Spawner;
 use embassy_rp::{gpio, multicore::spawn_core1};
+use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, zerocopy_channel};
+use static_cell::{ConstStaticCell, StaticCell};
 use {defmt_rtt as _, panic_probe as _};
 // use panic_probe as _;
+const IMG_SIZE: usize = 200;
+type RGBH = [u8; 4];
+type ImageBuffer = [RGBH; IMG_SIZE];
+// static mut BUF2: [ImageBuffer; 2] = [[[0; 4]; IMG_SIZE]; 2];
+// static IMG_CHANNEL2: ConstStaticCell<
+//     zerocopy_channel::Channel<'_, CriticalSectionRawMutex, ImageBuffer>,
+// > = ConstStaticCell::new(zerocopy_channel::Channel::new(&mut BUF2));
+
+static BUF: ConstStaticCell<[ImageBuffer; 2]> = ConstStaticCell::new([[[0; 4]; IMG_SIZE]; 2]);
+static IMG_CHANNEL: StaticCell<
+    zerocopy_channel::Channel<'_, CriticalSectionRawMutex, ImageBuffer>,
+> = StaticCell::new();
+
+struct SafeSender {
+    sender: zerocopy_channel::Sender<'static, CriticalSectionRawMutex, ImageBuffer>,
+}
+
+unsafe impl Send for SafeSender {}
+
 #[repr(packed)]
 pub struct Command {
     // 命令
@@ -71,14 +92,24 @@ async fn main(_spawner: Spawner) {
         w.set_dma_w(true);
     });
 
+    let channel = IMG_CHANNEL.init(zerocopy_channel::Channel::new(BUF.take()));
+    let (sender, mut receiver) = channel.split();
+    let safe_sender = SafeSender { sender };
     let usb = p.USB;
+    // IMG_CHANNEL.init_with(|| {});
     spawn_core1(
         p.CORE1,
         unsafe { &mut *core::ptr::addr_of_mut!(core1::CORE1_STACK) },
         move || {
-            core1::run(usb);
+            core1::run(usb, safe_sender);
         },
     );
+
+    loop {
+        let img = receiver.receive().await;
+        defmt::info!("recv img {:?}", img[0]);
+        receiver.receive_done();
+    }
 
     let mut led_pin = gpio::Output::new(p.PIN_25, gpio::Level::Low);
     let mut dbg_pin = gpio::Output::new(p.PIN_11, gpio::Level::Low);
