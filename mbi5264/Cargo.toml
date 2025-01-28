@@ -11,33 +11,37 @@ embedded-hal = "1.0.0"
 pio = "0.2.1"
 pio-proc = "0.2.2"
 mbi5264-common = { path = "../mbi5264-common" }
-embassy-embedded-hal = { version = "0.3.0", features = [] }
-embassy-sync = { version = "0.6.1", features = [] }
+embassy-embedded-hal = { version = "0.3.0", features = ["defmt"] }
+embassy-sync = { version = "0.6.1", features = ["defmt"] }
 embassy-executor = { version = "0.7.0", features = [
     "task-arena-size-98304",
     "arch-cortex-m",
     "executor-thread",
     "executor-interrupt",
+    "defmt",
 ] }
-embassy-time = { version = "0.4.0", features = [] }
+embassy-time = { version = "0.4.0", features = ["defmt"] }
 embassy-rp = { version = "0.3.0", features = [
     "unstable-pac",
     "time-driver",
     "critical-section-impl",
     "rp2040",
+    "defmt",
 ] }
-embassy-usb = { version = "0.4.0", features = [] }
+embassy-usb = { version = "0.4.0", features = ["defmt"] }
 embassy-futures = { version = "0.1.0" }
 embassy-usb-logger = { version = "0.4.0" }
 
 fixed = "1.23.1"
 fixed-macro = "1.2"
 
-# defmt = "0.3"
-# defmt-rtt = "0.4"
+defmt = "0.3"
+defmt-rtt = "0.4"
 
-panic-probe = { version = "0.3", features = [] }
+panic-probe = { version = "0.3", features = ["defmt"] }
 log = "0.4"
+static_cell = "2.1"
+portable-atomic = { version = "1.5", features = ["critical-section"] }
 
 [profile.release]
 codegen-units = 1

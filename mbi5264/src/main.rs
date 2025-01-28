@@ -1,11 +1,12 @@
 #![no_std]
 #![no_main]
 mod clocks2;
+mod core1;
 use clocks2::gen_raw_buf;
 use embassy_executor::Spawner;
-use embassy_rp::gpio;
-// use {defmt_rtt as _, panic_probe as _};
-use panic_probe as _;
+use embassy_rp::{gpio, multicore::spawn_core1};
+use {defmt_rtt as _, panic_probe as _};
+// use panic_probe as _;
 #[repr(packed)]
 pub struct Command {
     // 命令
@@ -62,11 +63,23 @@ const UMINI_CMDS: &[(mbi5264_common::CMD, u16)] = &mbi5264_common::unimi_cmds();
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
     // defmt::info!("Hello there!");
+    let core_num = embassy_rp::pac::SIO.cpuid().read();
+    defmt::info!("main core {}", core_num);
     let p = embassy_rp::init(Default::default());
     embassy_rp::pac::BUSCTRL.bus_priority().write(|w| {
         w.set_dma_r(true);
         w.set_dma_w(true);
     });
+
+    let usb = p.USB;
+    spawn_core1(
+        p.CORE1,
+        unsafe { &mut *core::ptr::addr_of_mut!(core1::CORE1_STACK) },
+        move || {
+            core1::run(usb);
+        },
+    );
+
     let mut led_pin = gpio::Output::new(p.PIN_25, gpio::Level::Low);
     let mut dbg_pin = gpio::Output::new(p.PIN_11, gpio::Level::Low);
     let mut dbg_pin2 = gpio::Output::new(p.PIN_12, gpio::Level::Low);
