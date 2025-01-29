@@ -384,3 +384,58 @@ pub const fn unimi_cmds() -> [(CMD, u16); 17] {
     ]
     // return vec![(CMD::EnableAll, 0)];
 }
+
+#[derive(Clone, Copy)]
+#[repr(u32)]
+pub enum UsbCmd {
+    QOI = 1,
+}
+
+impl UsbCmd {
+    pub fn from_u8(v: u8) -> Option<Self> {
+        match v {
+            1 => Some(UsbCmd::QOI),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+#[repr(packed, C)]
+pub struct UsbDataHead {
+    pub cmd: UsbCmd,
+    pub payload_len: u32,
+}
+
+impl UsbDataHead {
+    pub fn to_buf(&self) -> &[u8] {
+        unsafe {
+            core::slice::from_raw_parts(
+                self as *const Self as *const u8,
+                core::mem::size_of::<UsbDataHead>(),
+            )
+        }
+    }
+}
+
+#[repr(C)]
+pub struct UsbData<'a> {
+    pub hdr: &'a UsbDataHead,
+    pub payload: &'a [u8],
+}
+
+impl<'a> UsbData<'a> {
+    pub fn ref_from_buf(buf: &'a [u8]) -> Option<Self> {
+        let hdr_len = core::mem::size_of::<UsbDataHead>();
+        if buf.len() < hdr_len {
+            return None;
+        }
+        let payload = &buf[hdr_len..];
+        let hdr: &UsbDataHead = unsafe { core::mem::transmute(buf.as_ptr()) };
+        if hdr.payload_len > payload.len() as u32 {
+            return None;
+        }
+        let payload = &payload[0..hdr.payload_len as usize];
+        Some(Self { hdr, payload })
+    }
+}
