@@ -97,13 +97,7 @@ async fn main(_spawner: Spawner) {
     let channel = IMG_CHANNEL.init(zerocopy_channel::Channel::new(BUF.take()));
     let (sender, mut receiver) = channel.split();
     let safe_sender = SafeSender { sender };
-    // IMG_CHANNEL.init_with(|| {});'
     core1::spawn_usb_core1(p.CORE1, p.USB, safe_sender);
-    loop {
-        let img = receiver.receive().await;
-        defmt::info!("recv img {:?}", img[0]);
-        receiver.receive_done();
-    }
 
     let mut led_pin = gpio::Output::new(p.PIN_25, gpio::Level::Low);
     let mut dbg_pin = gpio::Output::new(p.PIN_11, gpio::Level::Low);
@@ -133,24 +127,43 @@ async fn main(_spawner: Spawner) {
     let mut cnt = 0;
     let mut cmd_iter = UMINI_CMDS.iter();
     // put buf in ram, flash is tooooooo slow
-    let palette: [[u16; clocks2::CMD_BUF_SIZE]; 4] = [0u16, 1, 1, 1].map(|idx| {
-        let color = idx * 0xffff;
-        gen_raw_buf([color; 3])
-    });
+    // let palette: [[u16; clocks2::CMD_BUF_SIZE]; 4] = [0u16, 1, 1, 1].map(|idx| {
+    //     let color = idx * 0xffff;
+    //     gen_raw_buf([color; 3])
+    // });
     let mut frame = 0usize;
+    for &(cmd, param) in cmd_iter {
+        cmd_pio.refresh(&confirm_cmd);
+        cmd_pio.refresh(&Command::new(cmd as u8, param));
+    }
     loop {
         cnt += 1;
-        cmd_pio.refresh(&sync_cmd);
-        if let Some(&(cmd, param)) = cmd_iter.next() {
-            cmd_pio.refresh(&confirm_cmd);
-            cmd_pio.refresh(&Command::new(cmd as u8, param));
-        }
+        // cmd_pio.refresh(&sync_cmd);
         // vsync
-        line.start();
-        update_frame(&mut cmd_pio, &palette, frame);
-        line.wait_stop().await;
-        frame += 1;
-        frame %= 16;
+        // line.start();
+        // update_frame(&mut cmd_pio, &palette, frame);
+        // frame += 1;
+        // frame %= 16;
+        defmt::info!("main loop");
+        let img = receiver.receive().await;
+        // for p in img.iter_mut() {
+        //     p[3] = core::cmp::min(p[3], 143);
+        // }
+        defmt::info!("acquire qoi recv buffer");
+        for (idx, coloum) in img.chunks(IMG_HEIGHT).enumerate() {
+            defmt::info!("update_frame coloum {}", idx);
+            let coloum = unsafe { core::mem::transmute(coloum.as_ptr()) };
+            cmd_pio.refresh(&sync_cmd);
+            // vsync
+            line.start();
+            // defmt::info!("[begin] update_frame2");
+            update_frame2(&mut cmd_pio, coloum);
+            // defmt::info!("[end] update_frame2");
+            line.wait_stop().await;
+        }
+        receiver.receive_done();
+        defmt::info!("release qoi recv buffer");
+        // line.wait_stop().await;
         if cnt >= 10 {
             cnt = 0;
             led_pin.toggle();
@@ -274,22 +287,20 @@ fn bubble_rgbh(slice: &mut [RGBMeta]) {
 
 #[link_section = ".data"]
 #[inline(never)]
-fn update_frame2(
-    cmd_pio: &mut clocks2::CmdClock,
-    rgbh_coloum: &[RGBH; IMG_HEIGHT],
-    palette: &[[u16; clocks2::CMD_BUF_SIZE]; 4],
-    frame: usize,
-) {
+fn update_frame2(cmd_pio: &mut clocks2::CmdClock, rgbh_coloum: &[RGBH; IMG_HEIGHT]) {
+    static EMPTY_PALETTE: [u16; clocks2::CMD_BUF_SIZE] = [0; clocks2::CMD_BUF_SIZE];
     let region0 = &rgbh_coloum[0..64];
     let region1 = &rgbh_coloum[64..128];
     let region2 = &rgbh_coloum[128..];
     let mut last_h_mod = 0u8;
     for line in 0..64usize {
+        // defmt::info!("line {}", line);
         let p0 = RGBMeta::new(region0[line], 0);
         let p1 = RGBMeta::new(region1[line], 1);
         let p2 = RGBMeta::new(region2[line], 2);
         let mut pixels = [p0, p1, p2];
         bubble_rgbh(&mut pixels);
+        // TODO align slots with three le_sel pins
         let mut slots: [Option<PixelSlot>; 3] = [None, None, None];
         for rgbh_meta in pixels {
             for slot in slots.iter_mut() {
@@ -317,17 +328,19 @@ fn update_frame2(
             };
             let mut empty = empty as usize;
             last_h_mod = slot.h_mod;
+            // defmt::info!("empty {}", empty);
             if empty != 0 {
-                cmd_pio.refresh_raw_buf(&palette[0]);
+                cmd_pio.refresh_raw_buf(&EMPTY_PALETTE);
                 empty -= 1;
                 cmd_pio.refresh_empty_buf(empty);
             }
+            // defmt::info!("refresh buf");
             cmd_pio.refresh_raw_buf(&slot.buf);
         }
     }
     let mut empty = 15 - last_h_mod;
     if empty != 0 {
-        cmd_pio.refresh_raw_buf(&palette[0]);
+        cmd_pio.refresh_raw_buf(&EMPTY_PALETTE);
         empty -= 1;
         cmd_pio.refresh_empty_buf(empty as usize);
     }

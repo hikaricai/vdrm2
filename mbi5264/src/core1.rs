@@ -86,7 +86,9 @@ async fn decode_qoi(
     loop {
         defmt::info!("decode qoi");
         let send_buf = safe_sender.sender.send().await;
-        let raw_buf: &mut [u8; crate::IMG_SIZE * 4] = unsafe { core::mem::transmute(send_buf) };
+        defmt::info!("acquire qoi send buffer");
+        let raw_buf: &mut [u8; crate::IMG_SIZE * 4] =
+            unsafe { core::mem::transmute(send_buf.as_ptr()) };
         loop {
             let usb_data_buf = usb_data_rx.receive().await;
             let Some(usb_data) = mbi5264_common::UsbData::ref_from_buf(usb_data_buf) else {
@@ -97,9 +99,13 @@ async fn decode_qoi(
             defmt::info!("usb data {}", payload_len);
             let ret = qoi::decode_to_buf(&mut *raw_buf, usb_data.payload);
             usb_data_rx.receive_done();
+            defmt::info!("decode qoi ret {}", ret.is_ok());
             if ret.is_ok() {
                 break;
             }
+        }
+        for p in send_buf.iter_mut() {
+            p[3] = core::cmp::min(p[3], 143);
         }
         safe_sender.sender.send_done();
     }
@@ -208,7 +214,7 @@ async fn handle_usb(
         let Some(usb_data) = mbi5264_common::UsbData::ref_from_buf(&buf[0..total_len]) else {
             continue;
         };
-        defmt::info!("decode succ");
+        defmt::info!("recv usb_data succ");
         match usb_data.hdr.cmd {
             mbi5264_common::UsbCmd::QOI => {}
         }
