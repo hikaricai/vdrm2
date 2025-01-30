@@ -31,7 +31,9 @@ unsafe fn SWI_IRQ_0() {
     EXECUTOR_MED.on_interrupt()
 }
 
-const QOI_BUF_SIZE: usize = crate::IMG_SIZE * 4;
+// const QOI_BUF_SIZE: usize = crate::IMG_SIZE * 4;
+// at least compress to 1/4
+const QOI_BUF_SIZE: usize = mbi5264_common::QOI_BUF_SIZE;
 type UsbDataBuf = [u8; QOI_BUF_SIZE];
 static QOI_BUF: ConstStaticCell<[UsbDataBuf; 2]> = ConstStaticCell::new([[0; QOI_BUF_SIZE]; 2]);
 static QOI_CHANNEL: StaticCell<zerocopy_channel::Channel<'_, CriticalSectionRawMutex, UsbDataBuf>> =

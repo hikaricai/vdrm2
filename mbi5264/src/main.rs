@@ -9,7 +9,9 @@ use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, zerocopy_channe
 use static_cell::{ConstStaticCell, StaticCell};
 use {defmt_rtt as _, panic_probe as _};
 // use panic_probe as _;
-const IMG_SIZE: usize = 200 * 50;
+const IMG_WIDTH: usize = mbi5264_common::IMG_WIDTH;
+const IMG_HEIGHT: usize = mbi5264_common::IMG_HEIGHT;
+const IMG_SIZE: usize = mbi5264_common::IMG_WIDTH * mbi5264_common::IMG_HEIGHT;
 type RGBH = [u8; 4];
 type ImageBuffer = [RGBH; IMG_SIZE];
 // static mut BUF2: [ImageBuffer; 2] = [[[0; 4]; IMG_SIZE]; 2];
@@ -190,5 +192,143 @@ fn update_frame(
             cmd_pio.refresh_empty_buf(remain);
             cnt += remain;
         }
+    }
+}
+
+struct RGBMeta {
+    rgbh: [u8; 4],
+    h_div: u8,
+    h_mod: u8,
+    region: u16,
+}
+
+impl RGBMeta {
+    #[inline]
+    fn new(rgbh: [u8; 4], region: u16) -> Self {
+        let h = rgbh[3];
+        let h_div = h & 0xF0;
+        let h_mod = h & 0x0F;
+        Self {
+            rgbh,
+            h_div,
+            h_mod,
+            region,
+        }
+    }
+}
+
+struct PixelSlot {
+    buf: [u16; clocks2::CMD_BUF_SIZE],
+    h_mod: u8,
+}
+
+impl PixelSlot {
+    #[inline]
+    fn new(rgbh_meta: &RGBMeta) -> Self {
+        let mut buf = [0u16; clocks2::CMD_BUF_SIZE];
+        Self::update_buf(&mut buf, rgbh_meta);
+        Self {
+            buf,
+            h_mod: rgbh_meta.h_mod,
+        }
+    }
+
+    fn update_buf(buf: &mut [u16; clocks2::CMD_BUF_SIZE], rgbh_meta: &RGBMeta) {
+        let region = rgbh_meta.region;
+        let [r, g, b, _] = rgbh_meta.rgbh;
+        // let h_idx = h / 16 * 16;
+        let h_idx = rgbh_meta.h_div;
+        let mut buf_iter = buf.iter_mut().skip(h_idx as usize);
+        for i in (0..8).rev() {
+            let buf = buf_iter.next().unwrap();
+            let r = (r >> i) & 1;
+            let g = (g >> i) & 1;
+            let b = (b >> i) & 1;
+            let rgb = (r + (g << 1) + (b << 2)) as u16;
+            *buf = rgb << 3 * region;
+        }
+    }
+
+    #[inline]
+    fn update(&mut self, rgbh_meta: &RGBMeta) -> bool {
+        if self.h_mod != rgbh_meta.h_mod {
+            return false;
+        };
+        Self::update_buf(&mut self.buf, rgbh_meta);
+        true
+    }
+}
+
+#[inline]
+fn bubble_rgbh(slice: &mut [RGBMeta]) {
+    let len = slice.len();
+    for i in 0..len {
+        for j in 0..len - 1 - i {
+            if slice[j].h_mod > slice[j + 1].h_mod {
+                // Swap elements
+                slice.swap(j, j + 1);
+            }
+        }
+    }
+}
+
+#[link_section = ".data"]
+#[inline(never)]
+fn update_frame2(
+    cmd_pio: &mut clocks2::CmdClock,
+    rgbh_coloum: &[RGBH; IMG_HEIGHT],
+    palette: &[[u16; clocks2::CMD_BUF_SIZE]; 4],
+    frame: usize,
+) {
+    let region0 = &rgbh_coloum[0..64];
+    let region1 = &rgbh_coloum[64..128];
+    let region2 = &rgbh_coloum[128..];
+    let mut last_h_mod = 0u8;
+    for line in 0..64usize {
+        let p0 = RGBMeta::new(region0[line], 0);
+        let p1 = RGBMeta::new(region1[line], 1);
+        let p2 = RGBMeta::new(region2[line], 2);
+        let mut pixels = [p0, p1, p2];
+        bubble_rgbh(&mut pixels);
+        let mut slots: [Option<PixelSlot>; 3] = [None, None, None];
+        for rgbh_meta in pixels {
+            for slot in slots.iter_mut() {
+                match slot {
+                    Some(slot) => {
+                        if slot.update(&rgbh_meta) {
+                            break;
+                        }
+                    }
+                    None => {
+                        let new_slot = PixelSlot::new(&rgbh_meta);
+                        *slot = Some(new_slot);
+                    }
+                };
+            }
+        }
+        for slot in slots {
+            let Some(slot) = slot else {
+                break;
+            };
+            let empty = if slot.h_mod >= last_h_mod {
+                slot.h_mod - last_h_mod
+            } else {
+                15 - (last_h_mod - slot.h_mod)
+            };
+            let mut empty = empty as usize;
+            last_h_mod = slot.h_mod;
+            if empty != 0 {
+                cmd_pio.refresh_raw_buf(&palette[0]);
+                empty -= 1;
+                cmd_pio.refresh_empty_buf(empty);
+            }
+            cmd_pio.refresh_raw_buf(&slot.buf);
+        }
+    }
+    let mut empty = 15 - last_h_mod;
+    if empty != 0 {
+        cmd_pio.refresh_raw_buf(&palette[0]);
+        empty -= 1;
+        cmd_pio.refresh_empty_buf(empty as usize);
     }
 }

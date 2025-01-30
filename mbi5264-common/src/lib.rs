@@ -418,6 +418,10 @@ impl UsbDataHead {
     }
 }
 
+pub const IMG_HEIGHT: usize = 192;
+pub const IMG_WIDTH: usize = IMG_HEIGHT / 4;
+pub const QOI_BUF_SIZE: usize = IMG_HEIGHT * IMG_WIDTH;
+
 #[repr(C)]
 pub struct UsbData<'a> {
     pub hdr: &'a UsbDataHead,

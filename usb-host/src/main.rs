@@ -52,7 +52,10 @@ fn send_bulk(usb_data: mbi5264_common::UsbData) {
 fn main() {
     println!("Hello, world!");
     let image = image::open("asserts/testcard_rgba.png").unwrap();
-    let crop_img = image.crop_imm(0, 0, 200, 50);
+    let image = image.rotate90();
+    let width = mbi5264_common::IMG_HEIGHT as u32;
+    let height = mbi5264_common::IMG_WIDTH as u32;
+    let crop_img = image.crop_imm(0, 0, width, height);
     let crop_rgba = crop_img.as_rgba8().unwrap();
     let mut qoi_buf: Vec<u8> = vec![];
     crop_rgba
