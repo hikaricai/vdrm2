@@ -2,10 +2,10 @@ use core::cell::RefCell;
 use embassy_futures::poll_once;
 use embassy_rp::dma::{Channel, Transfer};
 use embassy_rp::interrupt::typelevel::{Handler, Interrupt, DMA_IRQ_0, PWM_IRQ_WRAP};
+use embassy_rp::peripherals::{self, PIN_10, PIN_6, PIN_7, PIN_8, PIN_9};
 use embassy_rp::peripherals::{
     DMA_CH0, DMA_CH1, PIN_0, PIN_2, PIN_4, PIN_5, PIO0, PWM_SLICE0, PWM_SLICE1, PWM_SLICE2,
 };
-use embassy_rp::peripherals::{PIN_10, PIN_6, PIN_7, PIN_8, PIN_9};
 use embassy_rp::pio::{self, Pio, ShiftConfig, StateMachine};
 use embassy_rp::pwm::{self, Pwm, PwmBatch};
 use embassy_rp::{Peripheral, PeripheralRef};
@@ -34,7 +34,7 @@ impl Handler<PWM_IRQ_WRAP> for PwmInterruptHandler {
             let mut guard = LINE_CLOCK.borrow(cs).borrow_mut();
             let line = guard.as_mut().unwrap();
             line.stop();
-            line.pwm_a.clear_wrapped();
+            line.pwm_c.clear_wrapped();
         });
         PWM_OFF_SIGNAL.signal(());
     }
@@ -42,21 +42,24 @@ impl Handler<PWM_IRQ_WRAP> for PwmInterruptHandler {
 
 pub struct LineClock {
     pwm_gclk: Pwm<'static>,
-    pwm_a: Pwm<'static>,
-    pwm_bc: Pwm<'static>,
+    pwm_c: Pwm<'static>,
+    pwm_ba: Pwm<'static>,
     started: bool,
 }
 
 impl LineClock {
     pub fn new(
-        pwm0: PWM_SLICE0,
-        pwm1: PWM_SLICE1,
-        pwm2: PWM_SLICE2,
-        gclk_pin: PIN_0,
-        a_pin: PIN_2,
-        b_pin: PIN_4,
-        c_pin: PIN_5,
+        pwm7: peripherals::PWM_SLICE7,
+        pwm8: peripherals::PWM_SLICE0,
+        pwm1: peripherals::PWM_SLICE1,
+        c_pin: peripherals::PIN_14,
+        b_pin: peripherals::PIN_16,
+        a_pin: peripherals::PIN_17,
+        wrong_gclk_pin: peripherals::PIN_0,
+        gclk_pin: peripherals::PIN_18,
     ) -> LineClockHdl {
+        let _wrong_gclk_pin =
+            embassy_rp::gpio::Input::new(wrong_gclk_pin, embassy_rp::gpio::Pull::None);
         let pwm_div = 5.into();
         PWM_IRQ_WRAP::unpend();
         unsafe {
@@ -67,26 +70,24 @@ impl LineClock {
         gclk_cfg.divider = pwm_div;
         gclk_cfg.top = 200 - 1;
         gclk_cfg.compare_a = 100;
-        let pwm_gclk = Pwm::new_output_a(pwm0, gclk_pin, gclk_cfg);
-
-        let mut a_cfg = pwm::Config::default();
-        a_cfg.divider = pwm_div;
-        a_cfg.top = 100 * 64 - 50 - 1;
-        a_cfg.compare_a = 100;
-        let pwm_a = Pwm::new_output_a(pwm1, a_pin, a_cfg);
-        embassy_rp::pac::PWM.inte().modify(|w| w.set_ch1(true));
-
-        let mut bc_cfg = pwm::Config::default();
-        bc_cfg.divider = pwm_div;
-        bc_cfg.top = 100 - 1;
-        bc_cfg.compare_a = 3;
-        bc_cfg.compare_b = 1;
-        let pwm_bc = Pwm::new_output_ab(pwm2, b_pin, c_pin, bc_cfg);
+        let pwm_gclk = Pwm::new_output_a(pwm1, gclk_pin, gclk_cfg);
+        let mut c_cfg = pwm::Config::default();
+        c_cfg.divider = pwm_div;
+        c_cfg.top = 100 * 64 - 50 - 1;
+        c_cfg.compare_a = 100;
+        let pwm_c = Pwm::new_output_a(pwm7, c_pin, c_cfg);
+        embassy_rp::pac::PWM.inte().modify(|w| w.set_ch7(true));
+        let mut ba_cfg = pwm::Config::default();
+        ba_cfg.divider = pwm_div;
+        ba_cfg.top = 100 - 1;
+        ba_cfg.compare_a = 3;
+        ba_cfg.compare_b = 1;
+        let pwm_ba = Pwm::new_output_ab(pwm8, b_pin, a_pin, ba_cfg);
 
         let this = Self {
             pwm_gclk,
-            pwm_a,
-            pwm_bc,
+            pwm_c,
+            pwm_ba,
             started: false,
         };
         LINE_CLOCK.lock(|v| v.borrow_mut().replace(this));
@@ -98,10 +99,10 @@ impl LineClock {
         PWM_OFF_SIGNAL.reset();
         PwmBatch::set_enabled(true, |batch| {
             batch.enable(&self.pwm_gclk);
-            batch.enable(&self.pwm_a);
-            batch.enable(&self.pwm_bc);
+            batch.enable(&self.pwm_c);
+            batch.enable(&self.pwm_ba);
         });
-        self.pwm_bc.phase_retard();
+        self.pwm_ba.phase_retard();
         self.started = true;
     }
 
@@ -109,12 +110,12 @@ impl LineClock {
         self.started = false;
         PwmBatch::set_enabled(false, |batch| {
             batch.enable(&self.pwm_gclk);
-            batch.enable(&self.pwm_a);
-            batch.enable(&self.pwm_bc);
+            batch.enable(&self.pwm_c);
+            batch.enable(&self.pwm_ba);
         });
         self.pwm_gclk.set_counter(0);
-        self.pwm_a.set_counter(0);
-        self.pwm_bc.set_counter(0);
+        self.pwm_c.set_counter(0);
+        self.pwm_ba.set_counter(0);
     }
 }
 
@@ -146,11 +147,22 @@ const COLOR_BUF_SIZE: usize = 16 * 9;
 const ONE_COMMAND_LOOPS: u32 = CMD_BUF_SIZE as u32 - 1; // 多2个0u16保证数据都触发
 
 pub struct CmdClockPins {
-    pub clk_pin: PIN_6,
-    pub le_pin: PIN_7,
-    pub r0_pin: PIN_8,
-    pub g0_pin: PIN_9,
-    pub b0_pin: PIN_10,
+    pub clk_pin: peripherals::PIN_1,
+
+    pub r0_pin: peripherals::PIN_2,
+    pub g0_pin: peripherals::PIN_3,
+    pub b0_pin: peripherals::PIN_4,
+    pub le0_pin: peripherals::PIN_5,
+
+    pub r1_pin: peripherals::PIN_6,
+    pub g1_pin: peripherals::PIN_7,
+    pub b1_pin: peripherals::PIN_8,
+    pub le1_pin: peripherals::PIN_9,
+
+    pub r2_pin: peripherals::PIN_10,
+    pub g2_pin: peripherals::PIN_11,
+    pub b2_pin: peripherals::PIN_12,
+    pub le2_pin: peripherals::PIN_13,
 }
 
 pub struct CmdClock {
@@ -210,7 +222,18 @@ impl CmdClock {
         let r0_pin = common.make_pio_pin(pins.r0_pin);
         let g0_pin = common.make_pio_pin(pins.g0_pin);
         let b0_pin = common.make_pio_pin(pins.b0_pin);
-        data_sm.set_pin_dirs(pio::Direction::Out, &[&r0_pin, &g0_pin, &b0_pin]);
+        let r1_pin = common.make_pio_pin(pins.r1_pin);
+        let g1_pin = common.make_pio_pin(pins.g1_pin);
+        let b1_pin = common.make_pio_pin(pins.b1_pin);
+        let r2_pin = common.make_pio_pin(pins.r2_pin);
+        let g2_pin = common.make_pio_pin(pins.g2_pin);
+        let b2_pin = common.make_pio_pin(pins.b2_pin);
+        data_sm.set_pin_dirs(
+            pio::Direction::Out,
+            &[
+                &r0_pin, &g0_pin, &b0_pin, &r1_pin, &g1_pin, &b1_pin, &r2_pin, &g2_pin, &b2_pin,
+            ],
+        );
 
         // defmt::info!("data_sm addr {}", data_prog.origin);
         let mut cfg = pio::Config::default();
@@ -242,7 +265,7 @@ impl CmdClock {
         let le_prog = common.load_program(&le_program_data.program);
         let le_prog_offset = le_prog.origin;
         // defmt::info!("le_prog_offset {}", le_prog_offset);
-        let le_pin = common.make_pio_pin(pins.le_pin);
+        let le_pin = common.make_pio_pin(pins.le0_pin);
         // le_sm.set_pins(Level::High, &[&le_pin]);
         le_sm.set_pin_dirs(pio::Direction::Out, &[&le_pin]);
 

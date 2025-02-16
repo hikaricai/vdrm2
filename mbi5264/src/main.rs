@@ -97,28 +97,37 @@ async fn main(_spawner: Spawner) {
     let channel = IMG_CHANNEL.init(zerocopy_channel::Channel::new(BUF.take()));
     let (sender, mut receiver) = channel.split();
     let safe_sender = SafeSender { sender };
-    core1::spawn_usb_core1(p.CORE1, p.USB, safe_sender);
+    // core1::spawn_usb_core1(p.CORE1, p.USB, safe_sender);
 
     let mut led_pin = gpio::Output::new(p.PIN_25, gpio::Level::Low);
-    let mut dbg_pin = gpio::Output::new(p.PIN_11, gpio::Level::Low);
-    let mut dbg_pin2 = gpio::Output::new(p.PIN_12, gpio::Level::Low);
+    // let mut dbg_pin = gpio::Output::new(p.PIN_11, gpio::Level::Low);
+    // let mut dbg_pin2 = gpio::Output::new(p.PIN_12, gpio::Level::Low);
     let pins = clocks2::CmdClockPins {
-        clk_pin: p.PIN_6,
-        le_pin: p.PIN_7,
-        r0_pin: p.PIN_8,
-        g0_pin: p.PIN_9,
-        b0_pin: p.PIN_10,
+        clk_pin: p.PIN_1,
+        r0_pin: p.PIN_2,
+        g0_pin: p.PIN_3,
+        b0_pin: p.PIN_4,
+        le0_pin: p.PIN_5,
+        r1_pin: p.PIN_6,
+        g1_pin: p.PIN_7,
+        b1_pin: p.PIN_8,
+        le1_pin: p.PIN_9,
+        r2_pin: p.PIN_10,
+        g2_pin: p.PIN_11,
+        b2_pin: p.PIN_12,
+        le2_pin: p.PIN_13,
     };
     let data_ch = p.DMA_CH0;
     let le_ch = p.DMA_CH1;
     let mut line = clocks2::LineClock::new(
+        p.PWM_SLICE7,
         p.PWM_SLICE0,
         p.PWM_SLICE1,
-        p.PWM_SLICE2,
+        p.PIN_14,
+        p.PIN_16,
+        p.PIN_17,
         p.PIN_0,
-        p.PIN_2,
-        p.PIN_4,
-        p.PIN_5,
+        p.PIN_18,
     );
     let mut cmd_pio = clocks2::CmdClock::new(p.PIO0, pins, data_ch, le_ch);
 
@@ -136,6 +145,7 @@ async fn main(_spawner: Spawner) {
         cmd_pio.refresh(&confirm_cmd);
         cmd_pio.refresh(&Command::new(cmd as u8, param));
     }
+    let mut coloum: [RGBH; IMG_HEIGHT] = [[255, 255, 255, 0]; IMG_HEIGHT];
     loop {
         cnt += 1;
         // cmd_pio.refresh(&sync_cmd);
@@ -144,26 +154,41 @@ async fn main(_spawner: Spawner) {
         // update_frame(&mut cmd_pio, &palette, frame);
         // frame += 1;
         // frame %= 16;
-        defmt::info!("main loop");
-        let img = receiver.receive().await;
+        // defmt::info!("main loop");
+        // let img = receiver.receive().await;
         // for p in img.iter_mut() {
         //     p[3] = core::cmp::min(p[3], 143);
         // }
-        defmt::info!("acquire qoi recv buffer");
-        for (idx, coloum) in img.chunks(IMG_HEIGHT).enumerate() {
-            defmt::info!("update_frame coloum {}", idx);
-            let coloum = unsafe { core::mem::transmute(coloum.as_ptr()) };
+        // defmt::info!("acquire qoi recv buffer");
+        // for (idx, coloum) in img.chunks(IMG_HEIGHT).enumerate() {
+        //     defmt::info!("update_frame coloum {}", idx);
+        //     let coloum = unsafe { core::mem::transmute(coloum.as_ptr()) };
+        //     cmd_pio.refresh(&sync_cmd);
+        //     // vsync
+        //     line.start();
+        //     // defmt::info!("[begin] update_frame2");
+        //     update_frame2(&mut cmd_pio, coloum);
+        //     // defmt::info!("[end] update_frame2");
+        //     line.wait_stop().await;
+        // }
+        // receiver.receive_done();
+        // defmt::info!("release qoi recv buffer");
+        // line.wait_stop().await;
+        //
+        let h = cnt % IMG_WIDTH as u8;
+        for c in coloum.iter_mut() {
+            c[3] = h;
+        }
+        for _idx in 0..IMG_WIDTH {
             cmd_pio.refresh(&sync_cmd);
             // vsync
             line.start();
             // defmt::info!("[begin] update_frame2");
-            update_frame2(&mut cmd_pio, coloum);
+            update_frame2(&mut cmd_pio, &coloum);
             // defmt::info!("[end] update_frame2");
             line.wait_stop().await;
         }
-        receiver.receive_done();
-        defmt::info!("release qoi recv buffer");
-        // line.wait_stop().await;
+
         if cnt >= 10 {
             cnt = 0;
             led_pin.toggle();
@@ -258,17 +283,13 @@ impl PixelSlot {
             let g = (g >> i) & 1;
             let b = (b >> i) & 1;
             let rgb = (r + (g << 1) + (b << 2)) as u16;
-            *buf = rgb << 3 * region;
+            *buf |= rgb << (4 * region);
         }
     }
 
     #[inline]
-    fn update(&mut self, rgbh_meta: &RGBMeta) -> bool {
-        if self.h_mod != rgbh_meta.h_mod {
-            return false;
-        };
+    fn update(&mut self, rgbh_meta: &RGBMeta) {
         Self::update_buf(&mut self.buf, rgbh_meta);
-        true
     }
 }
 
@@ -306,22 +327,25 @@ fn update_frame2(cmd_pio: &mut clocks2::CmdClock, rgbh_coloum: &[RGBH; IMG_HEIGH
             for slot in slots.iter_mut() {
                 match slot {
                     Some(slot) => {
-                        if slot.update(&rgbh_meta) {
+                        if slot.h_mod == rgbh_meta.h_mod {
+                            slot.update(&rgbh_meta);
                             break;
                         }
                     }
                     None => {
                         let new_slot = PixelSlot::new(&rgbh_meta);
                         *slot = Some(new_slot);
+                        break;
                     }
                 };
             }
         }
+
         for slot in slots {
             let Some(slot) = slot else {
                 break;
             };
-            let empty = if slot.h_mod >= last_h_mod {
+            let empty = if slot.h_mod > last_h_mod {
                 slot.h_mod - last_h_mod
             } else {
                 15 - (last_h_mod - slot.h_mod)

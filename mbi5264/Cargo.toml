@@ -38,7 +38,7 @@ fixed-macro = "1.2"
 defmt = "0.3"
 defmt-rtt = "0.4"
 
-panic-probe = { version = "0.3", features = ["defmt"] }
+panic-probe = { version = "0.3", features = ["print-defmt"] }
 log = "0.4"
 static_cell = "2.1"
 portable-atomic = { version = "1.5", features = ["critical-section"] }
