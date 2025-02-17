@@ -222,12 +222,17 @@ impl CmdClock {
         let r0_pin = common.make_pio_pin(pins.r0_pin);
         let g0_pin = common.make_pio_pin(pins.g0_pin);
         let b0_pin = common.make_pio_pin(pins.b0_pin);
+        let le0_pin = common.make_pio_pin(pins.le0_pin);
+
         let r1_pin = common.make_pio_pin(pins.r1_pin);
         let g1_pin = common.make_pio_pin(pins.g1_pin);
         let b1_pin = common.make_pio_pin(pins.b1_pin);
+        let le1_pin = common.make_pio_pin(pins.le1_pin);
+
         let r2_pin = common.make_pio_pin(pins.r2_pin);
         let g2_pin = common.make_pio_pin(pins.g2_pin);
         let b2_pin = common.make_pio_pin(pins.b2_pin);
+        let le2_pin = common.make_pio_pin(pins.le2_pin);
         data_sm.set_pin_dirs(
             pio::Direction::Out,
             &[
@@ -238,7 +243,10 @@ impl CmdClock {
         // defmt::info!("data_sm addr {}", data_prog.origin);
         let mut cfg = pio::Config::default();
         cfg.use_program(&data_prog, &[]);
-        cfg.set_out_pins(&[&r0_pin, &g0_pin, &b0_pin]);
+        cfg.set_out_pins(&[
+            &r0_pin, &g0_pin, &b0_pin, &le0_pin, &r1_pin, &g1_pin, &b1_pin, &le1_pin, &r2_pin,
+            &g2_pin, &b2_pin, &le2_pin,
+        ]);
         cfg.fifo_join = pio::FifoJoin::TxOnly;
         cfg.shift_out = ShiftConfig {
             auto_fill: true,
@@ -265,12 +273,12 @@ impl CmdClock {
         let le_prog = common.load_program(&le_program_data.program);
         let le_prog_offset = le_prog.origin;
         // defmt::info!("le_prog_offset {}", le_prog_offset);
-        let le_pin = common.make_pio_pin(pins.le0_pin);
+        // let le_pin = common.make_pio_pin(le0_pin);
         // le_sm.set_pins(Level::High, &[&le_pin]);
-        le_sm.set_pin_dirs(pio::Direction::Out, &[&le_pin]);
+        le_sm.set_pin_dirs(pio::Direction::Out, &[&le0_pin]);
 
         let mut cfg = pio::Config::default();
-        cfg.use_program(&le_prog, &[&le_pin]);
+        cfg.use_program(&le_prog, &[&le0_pin]);
         cfg.fifo_join = pio::FifoJoin::TxOnly;
         cfg.shift_out = ShiftConfig {
             auto_fill: true,

@@ -175,7 +175,7 @@ async fn main(_spawner: Spawner) {
         // defmt::info!("release qoi recv buffer");
         // line.wait_stop().await;
         //
-        let h = cnt % IMG_WIDTH as u8;
+        let h = cnt % 144 as u8;
         for c in coloum.iter_mut() {
             c[3] = h;
         }
@@ -189,8 +189,7 @@ async fn main(_spawner: Spawner) {
             line.wait_stop().await;
         }
 
-        if cnt >= 10 {
-            cnt = 0;
+        if cnt & 0x10 != 0 {
             led_pin.toggle();
         }
     }
@@ -316,6 +315,7 @@ fn update_frame2(cmd_pio: &mut clocks2::CmdClock, rgbh_coloum: &[RGBH; IMG_HEIGH
     let mut last_h_mod = 0u8;
     for line in 0..64usize {
         // defmt::info!("line {}", line);
+        // TODO optimize speed
         let p0 = RGBMeta::new(region0[line], 0);
         let p1 = RGBMeta::new(region1[line], 1);
         let p2 = RGBMeta::new(region2[line], 2);
