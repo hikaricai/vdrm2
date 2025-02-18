@@ -312,7 +312,8 @@ fn update_frame2(cmd_pio: &mut clocks2::CmdClock, rgbh_coloum: &[RGBH; IMG_HEIGH
     let region0 = &rgbh_coloum[0..64];
     let region1 = &rgbh_coloum[64..128];
     let region2 = &rgbh_coloum[128..];
-    let mut last_h_mod = 0u8;
+    // init last_h_mod with 15, so the first line's "empty" is first h_mod
+    let mut last_h_mod = 15u8;
     for line in 0..64usize {
         // defmt::info!("line {}", line);
         // TODO optimize speed
