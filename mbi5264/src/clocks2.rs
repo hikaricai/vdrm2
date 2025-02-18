@@ -1,6 +1,7 @@
 use core::cell::RefCell;
 use embassy_futures::poll_once;
 use embassy_rp::dma::{Channel, Transfer};
+use embassy_rp::gpio::Pin;
 use embassy_rp::interrupt::typelevel::{Handler, Interrupt, DMA_IRQ_0, PWM_IRQ_WRAP};
 use embassy_rp::peripherals::{self, PIN_10, PIN_6, PIN_7, PIN_8, PIN_9};
 use embassy_rp::peripherals::{
@@ -8,7 +9,7 @@ use embassy_rp::peripherals::{
 };
 use embassy_rp::pio::{self, Pio, ShiftConfig, StateMachine};
 use embassy_rp::pwm::{self, Pwm, PwmBatch};
-use embassy_rp::{Peripheral, PeripheralRef};
+use embassy_rp::{gpio, pac, Peripheral, PeripheralRef, Peripherals};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::signal::Signal;
@@ -34,6 +35,7 @@ impl Handler<PWM_IRQ_WRAP> for PwmInterruptHandler {
             let mut guard = LINE_CLOCK.borrow(cs).borrow_mut();
             let line = guard.as_mut().unwrap();
             line.stop();
+            line.set_pwm_ba_high();
             line.pwm_c.clear_wrapped();
         });
         PWM_OFF_SIGNAL.signal(());
@@ -116,6 +118,23 @@ impl LineClock {
         self.pwm_gclk.set_counter(0);
         self.pwm_c.set_counter(0);
         self.pwm_ba.set_counter(0);
+    }
+    fn set_pwm_ba_high(&self) {
+        let p = unsafe { Peripherals::steal() };
+        let pin_b = gpio::Output::new(p.PIN_16, gpio::Level::High);
+        let pin_a = gpio::Output::new(p.PIN_17, gpio::Level::Low);
+        PwmBatch::set_enabled(true, |batch| {
+            batch.enable(&self.pwm_ba);
+        });
+        PwmBatch::set_enabled(false, |batch| {
+            batch.enable(&self.pwm_ba);
+        });
+        self.pwm_ba.set_counter(0);
+
+        core::mem::drop(pin_b);
+        core::mem::drop(pin_a);
+        pac::IO_BANK0.gpio(16).ctrl().write(|w| w.set_funcsel(4));
+        pac::IO_BANK0.gpio(17).ctrl().write(|w| w.set_funcsel(4));
     }
 }
 

@@ -4,7 +4,7 @@ mod clocks2;
 mod core1;
 use clocks2::gen_raw_buf;
 use embassy_executor::Spawner;
-use embassy_rp::{gpio, multicore::spawn_core1};
+use embassy_rp::{gpio, multicore::spawn_core1, Peripherals};
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, zerocopy_channel};
 use static_cell::{ConstStaticCell, StaticCell};
 use {defmt_rtt as _, panic_probe as _};
