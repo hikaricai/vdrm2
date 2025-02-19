@@ -372,7 +372,8 @@ impl CmdClock {
                 let r = (r >> i) & 1;
                 let g = (g >> i) & 1;
                 let b = (b >> i) & 1;
-                *buf = r + (g << 1) + (b << 2);
+                let rgb = r | (g << 1) | (b << 2);
+                *buf = rgb | (rgb << 4) | (rgb << 8);
             }
         }
 

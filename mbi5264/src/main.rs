@@ -145,9 +145,13 @@ async fn main(_spawner: Spawner) {
         cmd_pio.refresh(&confirm_cmd);
         cmd_pio.refresh(&Command::new(cmd as u8, param));
     }
+    let mut cmd_iter = core::iter::repeat(UMINI_CMDS.iter()).flatten();
     let mut coloum: [RGBH; IMG_HEIGHT] = [[255, 255, 255, 0]; IMG_HEIGHT];
     loop {
         cnt += 1;
+        let &(cmd, param) = cmd_iter.next().unwrap();
+        cmd_pio.refresh(&confirm_cmd);
+        cmd_pio.refresh(&Command::new(cmd as u8, param));
         // cmd_pio.refresh(&sync_cmd);
         // vsync
         // line.start();
