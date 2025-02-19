@@ -281,7 +281,7 @@ impl PixelSlot {
             let r = (r >> i) & 1;
             let g = (g >> i) & 1;
             let b = (b >> i) & 1;
-            let rgb = (r + (g << 1) + (b << 2)) as u16;
+            let rgb = (r | (g << 1) | (b << 2)) as u16;
             *buf |= rgb << (4 * region);
         }
     }
