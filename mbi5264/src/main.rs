@@ -3,6 +3,7 @@
 mod clocks2;
 mod core1;
 use clocks2::gen_raw_buf;
+use core::ptr::NonNull;
 use embassy_executor::Spawner;
 use embassy_rp::{gpio, multicore::spawn_core1, Peripherals};
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, zerocopy_channel};
@@ -372,5 +373,48 @@ fn update_frame2(cmd_pio: &mut clocks2::CmdClock, rgbh_coloum: &[RGBH; IMG_HEIGH
         cmd_pio.refresh_raw_buf(&EMPTY_PALETTE);
         empty -= 1;
         cmd_pio.refresh_empty_buf(empty as usize);
+    }
+}
+
+struct PixelSlot2 {
+    buf: [u16; 8],
+    h_div: u8,
+    h_mod: u8,
+}
+
+impl PixelSlot2 {
+    #[inline]
+    fn new(rgbh_meta: &RGBMeta) -> Self {
+        let mut buf = [0u16; 8];
+        let &RGBMeta {
+            rgbh,
+            h_div,
+            h_mod,
+            region,
+        } = rgbh_meta;
+        let [r, g, b, h] = rgbh;
+        for (i, buf) in (0..8).rev().zip(buf.iter_mut()) {
+            let r = (r >> i) & 1;
+            let g = (g >> i) & 1;
+            let b = (b >> i) & 1;
+            let rgb = (r | (g << 1) | (b << 2)) as u16;
+            *buf |= rgb << (4 * region);
+        }
+        Self { buf, h_div, h_mod }
+    }
+}
+
+fn encode_coloum(rgbh_coloum: &[RGBH; IMG_HEIGHT]) {
+    let region0 = &rgbh_coloum[0..64];
+    let region1 = &rgbh_coloum[64..128];
+    let region2 = &rgbh_coloum[128..];
+    // init last_h_mod with 15, so the first line's "empty" is first h_mod
+    let mut last_h_mod = 15u8;
+    for line in 0..64usize {
+        let p0 = RGBMeta::new(region0[line], 0);
+        let p1 = RGBMeta::new(region1[line], 1);
+        let p2 = RGBMeta::new(region2[line], 2);
+        let mut pixels = [p0, p1, p2];
+        bubble_rgbh(&mut pixels);
     }
 }
