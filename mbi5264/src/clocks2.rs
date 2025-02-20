@@ -1,31 +1,84 @@
 use core::cell::RefCell;
 use embassy_futures::poll_once;
 use embassy_rp::dma::{Channel, Transfer};
-use embassy_rp::gpio::Pin;
-use embassy_rp::interrupt::typelevel::{Handler, Interrupt, DMA_IRQ_0, PWM_IRQ_WRAP};
+use embassy_rp::interrupt::typelevel::{Handler, Interrupt, DMA_IRQ_0, DMA_IRQ_1, PWM_IRQ_WRAP};
 use embassy_rp::peripherals::{self, PIN_10, PIN_6, PIN_7, PIN_8, PIN_9};
 use embassy_rp::peripherals::{
     DMA_CH0, DMA_CH1, PIN_0, PIN_2, PIN_4, PIN_5, PIO0, PWM_SLICE0, PWM_SLICE1, PWM_SLICE2,
 };
 use embassy_rp::pio::{self, Pio, ShiftConfig, StateMachine};
 use embassy_rp::pwm::{self, Pwm, PwmBatch};
-use embassy_rp::{gpio, pac, Peripheral, PeripheralRef, Peripherals};
+use embassy_rp::{gpio, interrupt, pac, Peripheral, PeripheralRef, Peripherals};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::signal::Signal;
+use embassy_sync::waitqueue::AtomicWaker;
 
 static LINE_CLOCK: Mutex<CriticalSectionRawMutex, RefCell<Option<LineClock>>> =
     Mutex::new(RefCell::new(None));
 
+// TODO delete this?
 embassy_rp::bind_interrupts!(struct PioIrqs {
     PIO0_IRQ_0 => pio::InterruptHandler<PIO0>;
 });
+
+embassy_rp::bind_interrupts!(struct Dma1Irq {
+    DMA_IRQ_1 => Dma1InterruptHandler;
+});
+
+static DMA_DATA_CH0_WAKER: AtomicWaker = AtomicWaker::new();
+static DMA_LE_CH0_WAKER: AtomicWaker = AtomicWaker::new();
+
+struct Dma1InterruptHandler {}
+
+impl Handler<DMA_IRQ_1> for Dma1InterruptHandler {
+    unsafe fn on_interrupt() {
+        let ints0 = pac::DMA.ints(0).read();
+        pac::DMA.ints(0).write_value(ints0);
+        DMA_DATA_CH0_WAKER.wake();
+    }
+}
+
+unsafe fn init_dma1() {
+    DMA_IRQ_1::disable();
+    DMA_IRQ_1::set_priority(interrupt::Priority::P3);
+    embassy_rp::pac::DMA.inte(1).write_value(0xFFFF);
+    DMA_IRQ_1::enable();
+}
+
+static PWM_OFF_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
 embassy_rp::bind_interrupts!(struct PwmIrq {
     PWM_IRQ_WRAP => PwmInterruptHandler;
 });
 
-static PWM_OFF_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+struct DataTransfer {
+    ch: pac::dma::Channel,
+}
+
+impl DataTransfer {
+    fn new(ch: pac::dma::Channel) -> Self {
+        Self { ch }
+    }
+}
+
+impl core::future::Future for DataTransfer {
+    type Output = ();
+    fn poll(
+        self: core::pin::Pin<&mut Self>,
+        cx: &mut core::task::Context<'_>,
+    ) -> core::task::Poll<Self::Output> {
+        // We need to register/re-register the waker for each poll because any
+        // calls to wake will deregister the waker.
+        DMA_DATA_CH0_WAKER.register(cx.waker());
+
+        if self.ch.ctrl_trig().read().busy() {
+            core::task::Poll::Pending
+        } else {
+            core::task::Poll::Ready(())
+        }
+    }
+}
 
 struct PwmInterruptHandler {}
 
@@ -67,6 +120,7 @@ impl LineClock {
         unsafe {
             PWM_IRQ_WRAP::enable();
             DMA_IRQ_0::disable();
+            init_dma1();
         };
         let mut gclk_cfg = pwm::Config::default();
         gclk_cfg.divider = pwm_div;
@@ -416,6 +470,29 @@ impl CmdClock {
         let le_tx = self.le_sm.tx();
         le_tx.push(LE_DATA);
         while p.ctrl_trig().read().busy() {}
+    }
+
+    #[link_section = ".data"]
+    #[inline(never)]
+    pub async fn refresh_raw_buf2<'a>(&'a mut self, buf: &'a [u16; CMD_BUF_SIZE]) {
+        let data_tx = self.data_sm.tx();
+        data_tx.push(ONE_COMMAND_LOOPS);
+        let p = self.data_ch.regs();
+        p.trans_count().write_value(CMD_BUF_SIZE as u32 / 2);
+        p.al3_read_addr_trig().write_value(buf.as_ptr() as u32);
+
+        const LE_DATA: u32 = {
+            let le_high_cnt = 1;
+            let le_low_cnt: u32 = 16 * 9 + 1 - le_high_cnt;
+            let le_low_cnt = le_low_cnt - 1;
+            let le_high_cnt = le_high_cnt - 1;
+            let le_data = (le_high_cnt << 16) | le_low_cnt;
+            le_data
+        };
+
+        let le_tx = self.le_sm.tx();
+        le_tx.push(LE_DATA);
+        DataTransfer::new(self.data_ch.regs()).await;
     }
 
     #[link_section = ".data"]
