@@ -214,10 +214,10 @@ impl LineClockHdl {
     }
 }
 
-//16(chip bits) x 9(chips) + 2(empty)
-pub const CMD_BUF_SIZE: usize = 16 * 9 + 2;
+// 2(loop_size) + 2(empty_size) + 2(cmd_size) + 16(chip bits) x 9(chips) + 2(empty)
+pub const CMD_BUF_SIZE: usize = 2 + 2 + 2 + 16 * 9 + 2;
 const COLOR_BUF_SIZE: usize = 16 * 9;
-const ONE_COMMAND_LOOPS: u32 = CMD_BUF_SIZE as u32 - 1; // 多2个0u16保证数据都触发
+const ONE_COMMAND_LOOPS: u32 = 16 * 9 + 1; // 多2个0u16保证数据都触发
 
 pub struct CmdClockPins {
     pub clk_pin: peripherals::PIN_1,
@@ -263,10 +263,8 @@ impl CmdClock {
         let clk_program_data = pio_proc::pio_asm!(
             ".side_set 1",
             ".wrap_target",
-            "irq 5           side 0b0",     // 5 first to be faster
-            "irq 4           side 0b0 [5]", // increase the delay if something get wrong
-            "irq 5           side 0b1",
-            "irq 4           side 0b1 [5]",
+            "irq 4           side 0b0 [6]", // increase the delay if something get wrong
+            "irq 4           side 0b1 [6]",
             ".wrap",
         );
         let clk_prog = common.load_program(&clk_program_data.program);
@@ -279,16 +277,22 @@ impl CmdClock {
 
         let data_program_data = pio_proc::pio_asm!(
             ".wrap_target",
-            "out x, 32", // save loop_cnt to isr
-            "irq wait 6" // sync clk sm0
+            "out y, 32",    // save loop_cnt to y
             "wait 1 irq 4", // pre wait to clear old irq
             "loop:",
+            //
+            "out x, 32", // save empty_cnt to x
+            "loop_empty:",
+            "wait 1 irq 4",
+            "mov pins null",
+            "jmp x-- loop_empty",
+            //
+            "out x, 32", // save data_cnt to x
+            "loop_data:",
             "wait 1 irq 4",
             "out pins, 16",
-            // TODO try loop with !OSRE
-            "jmp x-- loop",
-            // "wait 1 irq 4", // 再wait一个edge将数据写入 由app多填充一个0u32实现
-            // "out pins, 32",
+            "jmp x-- loop_data",
+            "jmp y-- loop",
             ".wrap",
         );
         let data_prog = common.load_program(&data_program_data.program);
@@ -362,7 +366,7 @@ impl CmdClock {
 
         clk_sm.set_enable(true);
         data_sm.set_enable(true);
-        le_sm.set_enable(true);
+        // le_sm.set_enable(true);
 
         let p = data_ch.regs();
 
@@ -446,6 +450,40 @@ impl CmdClock {
 
         let le_tx = self.le_sm.tx();
         le_tx.push(le_data);
+        while p.ctrl_trig().read().busy() {}
+    }
+
+    pub fn refresh2(&mut self, transaction: &super::Command) {
+        let mut buf_iter = self.data_buf.iter_mut().skip(6);
+        for [r, g, b] in transaction.regs {
+            for i in (0..16).rev() {
+                let buf = buf_iter.next().unwrap();
+                let r = (r >> i) & 1;
+                let g = (g >> i) & 1;
+                let b = (b >> i) & 1;
+                let rgb = r | (g << 1) | (b << 2);
+                *buf = rgb | (rgb << 4) | (rgb << 8);
+            }
+        }
+        // set le
+        for b in self
+            .data_buf
+            .iter_mut()
+            .rev()
+            .skip(2)
+            .take(transaction.cmd as usize)
+        {
+            *b |= 0x8;
+        }
+        let buf: &mut [u32; CMD_BUF_SIZE / 2] = unsafe { core::mem::transmute(&mut self.data_buf) };
+        buf[0] = 0;
+        buf[1] = 0;
+        buf[2] = ONE_COMMAND_LOOPS;
+        *buf.last_mut().unwrap() = 0;
+
+        let p = self.data_ch.regs();
+        p.trans_count().write_value(buf.len() as u32);
+        p.al3_read_addr_trig().write_value(buf.as_ptr() as u32);
         while p.ctrl_trig().read().busy() {}
     }
 

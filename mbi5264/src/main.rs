@@ -143,16 +143,16 @@ async fn main(_spawner: Spawner) {
     // });
     let mut frame = 0usize;
     for &(cmd, param) in cmd_iter {
-        cmd_pio.refresh(&confirm_cmd);
-        cmd_pio.refresh(&Command::new(cmd as u8, param));
+        cmd_pio.refresh2(&confirm_cmd);
+        cmd_pio.refresh2(&Command::new(cmd as u8, param));
     }
     let mut cmd_iter = core::iter::repeat(UMINI_CMDS.iter()).flatten();
     let mut coloum: [RGBH; IMG_HEIGHT] = [[255, 255, 255, 0]; IMG_HEIGHT];
     loop {
         cnt += 1;
         let &(cmd, param) = cmd_iter.next().unwrap();
-        cmd_pio.refresh(&confirm_cmd);
-        cmd_pio.refresh(&Command::new(cmd as u8, param));
+        cmd_pio.refresh2(&confirm_cmd);
+        cmd_pio.refresh2(&Command::new(cmd as u8, param));
         // cmd_pio.refresh(&sync_cmd);
         // vsync
         // line.start();
@@ -184,7 +184,8 @@ async fn main(_spawner: Spawner) {
         for c in coloum.iter_mut() {
             c[3] = h;
         }
-        for _idx in 0..IMG_WIDTH {
+        // for _idx in 0..IMG_WIDTH {
+        for _idx in 0..0 {
             cmd_pio.refresh(&sync_cmd);
             // vsync
             line.start();
