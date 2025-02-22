@@ -134,7 +134,7 @@ async fn main(_spawner: Spawner) {
 
     let sync_cmd = Command::new_sync();
     let confirm_cmd = Command::new_confirm();
-    let mut cnt = 0;
+    let mut cnt: usize = 0;
     let mut cmd_iter = UMINI_CMDS.iter();
     // put buf in ram, flash is tooooooo slow
     // let palette: [[u16; clocks2::CMD_BUF_SIZE]; 4] = [0u16, 1, 1, 1].map(|idx| {
@@ -148,11 +148,11 @@ async fn main(_spawner: Spawner) {
     // }
     let mut cmd_iter = core::iter::repeat(UMINI_CMDS.iter()).flatten();
     let mut coloum: [RGBH; IMG_HEIGHT] = [[255, 255, 255, 0]; IMG_HEIGHT];
+    let mut buf = [0u16; 1024];
     loop {
-        cnt += 1;
         let &(cmd, param) = cmd_iter.next().unwrap();
-        cmd_pio.refresh2(&confirm_cmd);
-        cmd_pio.refresh2(&Command::new(cmd as u8, param));
+        // cmd_pio.refresh2(&confirm_cmd);
+        // cmd_pio.refresh2(&Command::new(cmd as u8, param));
 
         // cmd_pio.refresh(&sync_cmd);
         // vsync
@@ -181,7 +181,7 @@ async fn main(_spawner: Spawner) {
         // defmt::info!("release qoi recv buffer");
         // line.wait_stop().await;
         //
-        let h = cnt % 144 as u8;
+        let h = cnt as u8 % 144;
         for c in coloum.iter_mut() {
             c[3] = h;
         }
@@ -197,11 +197,33 @@ async fn main(_spawner: Spawner) {
         // }
         let color = [[255u8; 3]; 3];
         let idx = cnt as usize % 9;
-        cmd_pio.refresh_color(color, idx);
+        // cmd_pio.refresh_color(color, idx);
+
+        let buf_ptr = buf.as_ptr();
+        let mut parser = clocks2::ColorParser::new(&mut buf);
+        parser.add_color(color, idx as u32);
+        parser.add_color(color, idx as u32);
+        parser.add_empty(idx as u32);
+        parser.add_color(color, idx as u32);
+        parser.add_empty(idx as u32);
+        if cnt == 0 {
+            let buf_t: &[u16; 20] = unsafe { core::mem::transmute(parser.buf_ori) };
+            defmt::info!("buf_t {:?}", buf_t);
+            defmt::info!(
+                "buf {} buf_ori {} buf_t {} loop {}",
+                buf_ptr,
+                parser.buf_ori,
+                parser.buf,
+                parser.loops as *mut u32
+            );
+        }
+        parser.run(&mut cmd_pio);
+        buf = [0u16; 1024];
 
         if cnt & 0x10 != 0 {
             led_pin.toggle();
         }
+        cnt += 1;
     }
 }
 

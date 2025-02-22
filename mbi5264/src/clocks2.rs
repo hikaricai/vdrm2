@@ -489,6 +489,13 @@ impl CmdClock {
         while p.ctrl_trig().read().busy() {}
     }
 
+    pub fn refresh_ptr(&mut self, ptr: u32, len: u32) {
+        let p = self.data_ch.regs();
+        p.trans_count().write_value(len);
+        p.al3_read_addr_trig().write_value(ptr);
+        while p.ctrl_trig().read().busy() {}
+    }
+
     pub fn refresh_color(&mut self, color: [[u8; 3]; 3], chip_idx: usize) {
         if chip_idx >= 9 {
             return;
@@ -700,6 +707,7 @@ struct ColorTranser {
 
 impl ColorTranser {
     fn update(&mut self, color: [[u8; 3]; 3], chip_idx: u32) {
+        // TODO clear self.buf
         for (region, rgb) in color.into_iter().enumerate() {
             let [r, g, b] = rgb;
             for (i, buf) in (0..8).rev().zip(self.buf.iter_mut()) {
@@ -754,4 +762,98 @@ impl ColorTransers {
         assert_eq!(len, 40);
         len
     }
+}
+
+#[repr(C)]
+struct TranserMeta {
+    empty_loops: u32,
+    data_loops: u32,
+}
+
+pub struct ColorParser<'a> {
+    pub loops: &'a mut u32,
+    pub buf: *mut u16,
+    pub buf_ori: *mut u16,
+    pub cnt: usize,
+}
+
+impl<'a> ColorParser<'a> {
+    pub fn new(buf: &'a mut [u16]) -> Self {
+        let buf_ori = buf.as_mut_ptr();
+        let buf = unsafe { buf.as_mut_ptr().add(2) };
+        let loops: &mut u32 = unsafe { core::mem::transmute(buf_ori) };
+        *loops = 0;
+        Self {
+            loops,
+            buf,
+            buf_ori,
+            cnt: 0,
+        }
+    }
+    pub fn add_empty(&mut self, empty_size: u32) {
+        unsafe {
+            *self.loops += 1;
+
+            // empty with le
+            let meta: &mut TranserMeta = core::mem::transmute(self.buf);
+            self.buf = self.buf.add(core::mem::size_of::<TranserMeta>() / 2);
+            meta.empty_loops = 16 * 9 - 1;
+            meta.data_loops = 2 - 1;
+            *self.buf = 0;
+            self.buf = self.buf.add(1);
+            *self.buf = 0x8;
+            self.buf = self.buf.add(1);
+
+            // many le
+            if empty_size <= 1 {
+                return;
+            }
+            *self.loops += 1;
+            let empty_size = empty_size - 1;
+            let meta: &mut TranserMeta = core::mem::transmute(self.buf);
+            self.buf = self.buf.add(core::mem::size_of::<TranserMeta>() / 2);
+            meta.empty_loops = 0;
+            meta.data_loops = empty_size * 2 - 1;
+            let mut u32_buf = self.buf as *mut u32;
+            for _ in 0..empty_size {
+                *u32_buf = 0x0008_0000;
+                u32_buf = u32_buf.add(1);
+            }
+            self.buf = u32_buf as *mut u16;
+        }
+    }
+    pub fn add_color(&mut self, color: [[u8; 3]; 3], chip_idx: u32) {
+        unsafe {
+            *self.loops += 1;
+
+            let transfer: &mut ColorTranser = add_buf_ptr(&mut self.buf);
+            transfer.update(color, chip_idx);
+            if chip_idx == 8 {
+                transfer.set_le();
+                return;
+            }
+
+            *self.loops += 1;
+            let tail: &mut ColorTranserTail = add_buf_ptr(&mut self.buf);
+            tail.empty_loops = (8 - chip_idx) * 16 - 2 - 1;
+            tail.data_loops = 2 - 1;
+            // LE
+            tail.buf[0] = 0;
+            tail.buf[1] = 8;
+        }
+    }
+
+    pub fn run(&mut self, cmd_pio: &mut CmdClock) {
+        *self.loops -= 1;
+        let ptr = self.buf_ori as u32;
+        let len = unsafe { self.buf.offset_from(self.buf_ori) } as u32 / 2;
+        cmd_pio.refresh_ptr(ptr, len);
+        self.cnt += 1;
+    }
+}
+
+unsafe fn add_buf_ptr<B, T>(buf: &mut *mut B) -> &mut T {
+    let t: &mut T = core::mem::transmute(*buf);
+    *buf = buf.add(core::mem::size_of::<T>() / core::mem::size_of::<B>());
+    t
 }
