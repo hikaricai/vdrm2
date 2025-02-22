@@ -214,10 +214,10 @@ impl LineClockHdl {
     }
 }
 
-// 2(loop_size) + 2(empty_size) + 2(cmd_size) + 16(chip bits) x 9(chips) + 2(empty)
-pub const CMD_BUF_SIZE: usize = 2 + 2 + 2 + 16 * 9 + 2;
+// 2(loop_size) + 2(empty_size) + 2(cmd_size) + 16(chip bits) x 9(chips)
+pub const CMD_BUF_SIZE: usize = 2 + 2 + 2 + 16 * 9;
 const COLOR_BUF_SIZE: usize = 16 * 9;
-const ONE_COMMAND_LOOPS: u32 = 16 * 9 + 1; // 多2个0u16保证数据都触发
+const ONE_COMMAND_LOOPS: u32 = 16 * 9 - 1;
 
 pub struct CmdClockPins {
     pub clk_pin: peripherals::PIN_1,
@@ -277,6 +277,8 @@ impl CmdClock {
 
         let data_program_data = pio_proc::pio_asm!(
             ".wrap_target",
+            "wait 1 irq 4",
+            "mov pins null",
             "out y, 32",    // save loop_cnt to y
             "wait 1 irq 4", // pre wait to clear old irq
             "loop:",
@@ -470,7 +472,6 @@ impl CmdClock {
             .data_buf
             .iter_mut()
             .rev()
-            .skip(2)
             .take(transaction.cmd as usize)
         {
             *b |= 0x8;
@@ -479,11 +480,27 @@ impl CmdClock {
         buf[0] = 0;
         buf[1] = 0;
         buf[2] = ONE_COMMAND_LOOPS;
-        *buf.last_mut().unwrap() = 0;
 
         let p = self.data_ch.regs();
         p.trans_count().write_value(buf.len() as u32);
         p.al3_read_addr_trig().write_value(buf.as_ptr() as u32);
+        while p.ctrl_trig().read().busy() {}
+    }
+
+    pub fn refresh_color(&mut self, color: [[u8; 3]; 3], chip_idx: usize) {
+        if chip_idx >= 9 {
+            return;
+        }
+        self.data_buf = [0; CMD_BUF_SIZE];
+        let color_transfer: &mut ColorTransers =
+            unsafe { core::mem::transmute(&mut self.data_buf) };
+        color_transfer.update(color, chip_idx as u32);
+
+        let p = self.data_ch.regs();
+        p.trans_count()
+            .write_value(1 + core::mem::size_of::<ColorTranser>() as u32);
+        p.al3_read_addr_trig()
+            .write_value(self.data_buf.as_ptr() as u32);
         while p.ctrl_trig().read().busy() {}
     }
 
@@ -671,4 +688,65 @@ pub fn gen_raw_buf(regs: [u16; 3]) -> [u16; CMD_BUF_SIZE] {
         }
     }
     buf
+}
+
+struct ColorTranser {
+    empty_loops: u32,
+    data_loops: u32,
+    buf: [u16; 8],
+}
+
+impl ColorTranser {
+    fn update(&mut self, color: [[u8; 3]; 3], chip_idx: u32) {
+        for (region, rgb) in color.into_iter().enumerate() {
+            let [r, g, b] = rgb;
+            for (i, buf) in (0..8).rev().zip(self.buf.iter_mut()) {
+                let r = (r >> i) & 1;
+                let g = (g >> i) & 1;
+                let b = (b >> i) & 1;
+                let rgb = (r | (g << 1) | (b << 2)) as u16;
+                *buf |= rgb << (4 * region);
+            }
+        }
+        self.data_loops = self.buf.len() as u32 - 1;
+        self.empty_loops = 7 + chip_idx * 16;
+    }
+
+    fn set_le(&mut self) {
+        self.buf[7] |= 0x8;
+    }
+}
+
+struct ColorTranserTail {
+    empty_loops: u32,
+    data_loops: u32,
+    buf: [u16; 2],
+}
+
+struct ColorTransers {
+    loops: u32,
+    transfer: ColorTranser,
+    tail: ColorTranserTail,
+}
+
+impl ColorTransers {
+    fn update(&mut self, color: [[u8; 3]; 3], chip_idx: u32) -> u32 {
+        self.transfer.update(color, chip_idx);
+        if chip_idx == 8 {
+            self.transfer.set_le();
+            self.loops = 0;
+            let len = (core::mem::size_of::<ColorTransers>()
+                - core::mem::size_of::<ColorTranserTail>()) as u32;
+            assert_eq!(len, 28);
+            return len;
+        }
+        self.tail.empty_loops = (8 - chip_idx) * 16 - 2 - 1;
+        self.tail.data_loops = 2 - 1;
+        // LE
+        self.tail.buf[1] = 8;
+        self.loops = 1;
+        let len = core::mem::size_of::<ColorTransers>() as u32;
+        assert_eq!(len, 40);
+        len
+    }
 }
