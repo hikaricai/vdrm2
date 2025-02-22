@@ -142,10 +142,10 @@ async fn main(_spawner: Spawner) {
     //     gen_raw_buf([color; 3])
     // });
     let mut frame = 0usize;
-    for &(cmd, param) in cmd_iter {
-        cmd_pio.refresh2(&confirm_cmd);
-        cmd_pio.refresh2(&Command::new(cmd as u8, param));
-    }
+    // for &(cmd, param) in cmd_iter {
+    //     cmd_pio.refresh2(&confirm_cmd);
+    //     cmd_pio.refresh2(&Command::new(cmd as u8, param));
+    // }
     let mut cmd_iter = core::iter::repeat(UMINI_CMDS.iter()).flatten();
     let mut coloum: [RGBH; IMG_HEIGHT] = [[255, 255, 255, 0]; IMG_HEIGHT];
     loop {
@@ -153,6 +153,7 @@ async fn main(_spawner: Spawner) {
         let &(cmd, param) = cmd_iter.next().unwrap();
         cmd_pio.refresh2(&confirm_cmd);
         cmd_pio.refresh2(&Command::new(cmd as u8, param));
+
         // cmd_pio.refresh(&sync_cmd);
         // vsync
         // line.start();
@@ -185,15 +186,18 @@ async fn main(_spawner: Spawner) {
             c[3] = h;
         }
         // for _idx in 0..IMG_WIDTH {
-        for _idx in 0..0 {
-            cmd_pio.refresh(&sync_cmd);
-            // vsync
-            line.start();
-            // defmt::info!("[begin] update_frame2");
-            update_frame2(&mut cmd_pio, &coloum);
-            // defmt::info!("[end] update_frame2");
-            line.wait_stop().await;
-        }
+        // for _idx in 0..0 {
+        //     cmd_pio.refresh(&sync_cmd);
+        //     // vsync
+        //     line.start();
+        //     // defmt::info!("[begin] update_frame2");
+        //     update_frame2(&mut cmd_pio, &coloum);
+        //     // defmt::info!("[end] update_frame2");
+        //     line.wait_stop().await;
+        // }
+        let color = [[255u8; 3]; 3];
+        let idx = cnt as usize % 9;
+        cmd_pio.refresh_color(color, idx);
 
         if cnt & 0x10 != 0 {
             led_pin.toggle();

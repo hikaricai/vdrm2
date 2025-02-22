@@ -245,7 +245,8 @@ pub struct CmdClock {
     le_prog_offset: u8,
     le_sm: StateMachine<'static, PIO0, 3>,
     le_ch: PeripheralRef<'static, DMA_CH1>,
-    data_buf: [u16; CMD_BUF_SIZE],
+    pub data_buf: [u16; CMD_BUF_SIZE],
+    cnt: u32,
 }
 
 impl CmdClock {
@@ -421,6 +422,7 @@ impl CmdClock {
             le_sm,
             le_ch: le_ch.into_ref(),
             data_buf: [0; CMD_BUF_SIZE],
+            cnt: 0,
         }
     }
 
@@ -491,17 +493,17 @@ impl CmdClock {
         if chip_idx >= 9 {
             return;
         }
+
         self.data_buf = [0; CMD_BUF_SIZE];
         let color_transfer: &mut ColorTransers =
             unsafe { core::mem::transmute(&mut self.data_buf) };
-        color_transfer.update(color, chip_idx as u32);
-
+        let len = color_transfer.update(color, chip_idx as u32);
         let p = self.data_ch.regs();
-        p.trans_count()
-            .write_value(1 + core::mem::size_of::<ColorTranser>() as u32);
+        p.trans_count().write_value(len / 4);
         p.al3_read_addr_trig()
             .write_value(self.data_buf.as_ptr() as u32);
         while p.ctrl_trig().read().busy() {}
+        self.cnt += 1;
     }
 
     #[link_section = ".data"]
@@ -689,7 +691,7 @@ pub fn gen_raw_buf(regs: [u16; 3]) -> [u16; CMD_BUF_SIZE] {
     }
     buf
 }
-
+#[repr(C)]
 struct ColorTranser {
     empty_loops: u32,
     data_loops: u32,
@@ -709,7 +711,8 @@ impl ColorTranser {
             }
         }
         self.data_loops = self.buf.len() as u32 - 1;
-        self.empty_loops = 7 + chip_idx * 16;
+        assert_eq!(self.data_loops, 7);
+        self.empty_loops = 8 + chip_idx * 16 - 1;
     }
 
     fn set_le(&mut self) {
@@ -717,12 +720,14 @@ impl ColorTranser {
     }
 }
 
+#[repr(C)]
 struct ColorTranserTail {
     empty_loops: u32,
     data_loops: u32,
     buf: [u16; 2],
 }
 
+#[repr(C)]
 struct ColorTransers {
     loops: u32,
     transfer: ColorTranser,
