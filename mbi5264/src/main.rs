@@ -148,9 +148,8 @@ async fn main(_spawner: Spawner) {
     // }
     let mut cmd_iter = core::iter::repeat(UMINI_CMDS.iter()).flatten();
     let mut coloum: [RGBH; IMG_HEIGHT] = [[255, 255, 255, 0]; IMG_HEIGHT];
-    let mut buf = [0u16; 1024];
-    let rgb_meta = RGBMeta::new([255, 255, 255, 0], 0);
-    let pixel_slot = PixelSlot2::new(&rgb_meta, 0);
+    // let mut buf = [0u16; 8192];
+    // let mut parser = clocks2::ColorParser::new(&mut buf);
     loop {
         let &(cmd, param) = cmd_iter.next().unwrap();
         // cmd_pio.refresh2(&confirm_cmd);
@@ -184,8 +183,9 @@ async fn main(_spawner: Spawner) {
         // line.wait_stop().await;
         //
         let h = cnt as u8 % 144;
-        for c in coloum.iter_mut() {
-            c[3] = 0;
+        for (idx, c) in coloum.iter_mut().enumerate() {
+            c[3] = (0 + (idx as u8 / 64) << 4) % 144;
+            // c[3] = 0;
         }
         for _idx in 0..IMG_WIDTH {
             // cmd_pio.refresh(&sync_cmd);
@@ -231,43 +231,6 @@ async fn main(_spawner: Spawner) {
     }
 }
 
-#[link_section = ".data"]
-#[inline(never)]
-fn update_frame(
-    cmd_pio: &mut clocks2::CmdClock,
-    palette: &[[u16; clocks2::CMD_BUF_SIZE]; 4],
-    frame: usize,
-) {
-    let frame = frame % 16;
-    if frame > 0 {
-        cmd_pio.refresh_empty_buf(frame);
-    }
-    let mut cnt = frame;
-    loop {
-        if cnt >= 1024 {
-            break;
-        }
-        cmd_pio.refresh_raw_buf(&palette[3]);
-        cnt += 1;
-        if cnt >= 1024 {
-            break;
-        }
-        cmd_pio.refresh_raw_buf(&palette[0]);
-        cnt += 1;
-        let remain = 1024 - cnt;
-        if remain == 0 {
-            break;
-        }
-        if remain >= 14 {
-            cmd_pio.refresh_empty_buf(14);
-            cnt += 14;
-        } else {
-            cmd_pio.refresh_empty_buf(remain);
-            cnt += remain;
-        }
-    }
-}
-
 struct RGBMeta {
     rgbh: [u8; 4],
     h_div: u8,
@@ -279,7 +242,7 @@ impl RGBMeta {
     #[inline]
     fn new(rgbh: [u8; 4], region: u16) -> Self {
         let h = rgbh[3];
-        let h_div = h & 0xF0;
+        let h_div = (h >> 4) & 0x0F;
         let h_mod = h & 0x0F;
         Self {
             rgbh,
@@ -290,127 +253,13 @@ impl RGBMeta {
     }
 }
 
-struct PixelSlot {
-    buf: [u16; clocks2::CMD_BUF_SIZE],
-    h_mod: u8,
-}
-
-impl PixelSlot {
-    #[inline]
-    fn new(rgbh_meta: &RGBMeta) -> Self {
-        let mut buf = [0u16; clocks2::CMD_BUF_SIZE];
-        Self::update_buf(&mut buf, rgbh_meta);
-        Self {
-            buf,
-            h_mod: rgbh_meta.h_mod,
-        }
-    }
-
-    fn update_buf(buf: &mut [u16; clocks2::CMD_BUF_SIZE], rgbh_meta: &RGBMeta) {
-        let region = rgbh_meta.region;
-        let [r, g, b, _] = rgbh_meta.rgbh;
-        // let h_idx = h / 16 * 16;
-        let h_idx = rgbh_meta.h_div;
-        let mut buf_iter = buf.iter_mut().skip(h_idx as usize);
-        for i in (0..8).rev() {
-            let buf = buf_iter.next().unwrap();
-            let r = (r >> i) & 1;
-            let g = (g >> i) & 1;
-            let b = (b >> i) & 1;
-            let rgb = (r | (g << 1) | (b << 2)) as u16;
-            *buf |= rgb << (4 * region);
-        }
-    }
-
-    #[inline]
-    fn update(&mut self, rgbh_meta: &RGBMeta) {
-        Self::update_buf(&mut self.buf, rgbh_meta);
-    }
-}
-
-#[inline]
-fn bubble_rgbh(slice: &mut [RGBMeta]) {
-    let len = slice.len();
-    for i in 0..len {
-        for j in 0..len - 1 - i {
-            if slice[j].h_mod > slice[j + 1].h_mod {
-                // Swap elements
-                slice.swap(j, j + 1);
-            }
-        }
-    }
-}
-
-#[link_section = ".data"]
-#[inline(never)]
-fn update_frame2(cmd_pio: &mut clocks2::CmdClock, rgbh_coloum: &[RGBH; IMG_HEIGHT]) {
-    static EMPTY_PALETTE: [u16; clocks2::CMD_BUF_SIZE] = [0; clocks2::CMD_BUF_SIZE];
-    let region0 = &rgbh_coloum[0..64];
-    let region1 = &rgbh_coloum[64..128];
-    let region2 = &rgbh_coloum[128..];
-    // init last_h_mod with 15, so the first line's "empty" is first h_mod
-    let mut last_h_mod = 15u8;
-    for line in 0..64usize {
-        // defmt::info!("line {}", line);
-        // TODO optimize speed
-        let p0 = RGBMeta::new(region0[line], 0);
-        let p1 = RGBMeta::new(region1[line], 1);
-        let p2 = RGBMeta::new(region2[line], 2);
-        let mut pixels = [p0, p1, p2];
-        bubble_rgbh(&mut pixels);
-        // TODO align slots with three le_sel pins
-        let mut slots: [Option<PixelSlot>; 3] = [None, None, None];
-        for rgbh_meta in pixels {
-            for slot in slots.iter_mut() {
-                match slot {
-                    Some(slot) => {
-                        if slot.h_mod == rgbh_meta.h_mod {
-                            slot.update(&rgbh_meta);
-                            break;
-                        }
-                    }
-                    None => {
-                        let new_slot = PixelSlot::new(&rgbh_meta);
-                        *slot = Some(new_slot);
-                        break;
-                    }
-                };
-            }
-        }
-
-        for slot in slots {
-            let Some(slot) = slot else {
-                break;
-            };
-            let empty = if slot.h_mod > last_h_mod {
-                slot.h_mod - last_h_mod
-            } else {
-                15 - (last_h_mod - slot.h_mod)
-            };
-            let mut empty = empty as usize;
-            last_h_mod = slot.h_mod;
-            // defmt::info!("empty {}", empty);
-            if empty != 0 {
-                cmd_pio.refresh_raw_buf(&EMPTY_PALETTE);
-                empty -= 1;
-                cmd_pio.refresh_empty_buf(empty);
-            }
-            // defmt::info!("refresh buf");
-            cmd_pio.refresh_raw_buf(&slot.buf);
-        }
-    }
-    let mut empty = 15 - last_h_mod;
-    if empty != 0 {
-        cmd_pio.refresh_raw_buf(&EMPTY_PALETTE);
-        empty -= 1;
-        cmd_pio.refresh_empty_buf(empty as usize);
-    }
-}
-
-fn update_frame3(cmd_pio: &mut clocks2::CmdClock, rgbh_coloum: &[RGBH; IMG_HEIGHT]) {
-    let mut buf = [0u16; 4096];
+fn update_frame3(
+    // parser: &mut clocks2::ColorParser,
+    cmd_pio: &mut clocks2::CmdClock,
+    rgbh_coloum: &[RGBH; IMG_HEIGHT],
+) {
+    let mut buf = [0u16; 8192];
     let mut parser = clocks2::ColorParser::new(&mut buf);
-
     let region0 = &rgbh_coloum[0..64];
     let region1 = &rgbh_coloum[64..128];
     let region2 = &rgbh_coloum[128..];
@@ -471,25 +320,13 @@ fn update_frame3(cmd_pio: &mut clocks2::CmdClock, rgbh_coloum: &[RGBH; IMG_HEIGH
     parser.run(cmd_pio);
 }
 
-struct RGBMeta2 {
-    rgbh: [u8; 4],
-    region: u16,
-}
-
-impl RGBMeta2 {
-    #[inline]
-    fn new(rgbh: [u8; 4], region: u16) -> Self {
-        Self { rgbh, region }
-    }
-}
-
 #[inline]
 fn bubble_rgbh2(slice: &mut [RGBMeta]) {
     let len = slice.len();
     for i in 0..len {
         for j in 0..len - 1 - i {
             let (l, r) = (&slice[j], &slice[j + 1]);
-            if (l.h_mod, l.h_div) < (r.h_mod, r.h_div) {
+            if (l.h_mod, l.h_div) > (r.h_mod, r.h_div) {
                 // Swap elements
                 slice.swap(j, j + 1);
             }
@@ -543,20 +380,5 @@ impl PixelSlot2 {
             let rgb = (r | (g << 1) | (b << 2)) as u16;
             *buf |= rgb << (4 * region);
         }
-    }
-}
-
-fn encode_coloum(rgbh_coloum: &[RGBH; IMG_HEIGHT]) {
-    let region0 = &rgbh_coloum[0..64];
-    let region1 = &rgbh_coloum[64..128];
-    let region2 = &rgbh_coloum[128..];
-    // init last_h_mod with 15, so the first line's "empty" is first h_mod
-    let mut last_h_mod = 15u8;
-    for line in 0..64usize {
-        let p0 = RGBMeta::new(region0[line], 0);
-        let p1 = RGBMeta::new(region1[line], 1);
-        let p2 = RGBMeta::new(region2[line], 2);
-        let mut pixels = [p0, p1, p2];
-        bubble_rgbh(&mut pixels);
     }
 }

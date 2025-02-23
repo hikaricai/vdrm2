@@ -496,23 +496,6 @@ impl CmdClock {
         while p.ctrl_trig().read().busy() {}
     }
 
-    pub fn refresh_color(&mut self, color: [[u8; 3]; 3], chip_idx: usize) {
-        if chip_idx >= 9 {
-            return;
-        }
-
-        self.data_buf = [0; CMD_BUF_SIZE];
-        let color_transfer: &mut ColorTransers =
-            unsafe { core::mem::transmute(&mut self.data_buf) };
-        let len = color_transfer.update(color, chip_idx as u32);
-        let p = self.data_ch.regs();
-        p.trans_count().write_value(len / 4);
-        p.al3_read_addr_trig()
-            .write_value(self.data_buf.as_ptr() as u32);
-        while p.ctrl_trig().read().busy() {}
-        self.cnt += 1;
-    }
-
     #[link_section = ".data"]
     #[inline(never)]
     pub fn refresh_raw_buf<'a>(&'a mut self, buf: &'a [u16; CMD_BUF_SIZE]) {
@@ -706,23 +689,6 @@ struct ColorTranser {
 }
 
 impl ColorTranser {
-    fn update(&mut self, color: [[u8; 3]; 3], chip_idx: u32) {
-        // TODO clear self.buf
-        for (region, rgb) in color.into_iter().enumerate() {
-            let [r, g, b] = rgb;
-            for (i, buf) in (0..8).rev().zip(self.buf.iter_mut()) {
-                let r = (r >> i) & 1;
-                let g = (g >> i) & 1;
-                let b = (b >> i) & 1;
-                let rgb = (r | (g << 1) | (b << 2)) as u16;
-                *buf |= rgb << (4 * region);
-            }
-        }
-        self.data_loops = self.buf.len() as u32 - 1;
-        assert_eq!(self.data_loops, 7);
-        self.empty_loops = 8 + chip_idx * 16 - 1;
-    }
-
     fn set_le(&mut self) {
         self.buf[7] |= 0x8;
     }
@@ -742,27 +708,7 @@ struct ColorTransers {
     tail: ColorTranserTail,
 }
 
-impl ColorTransers {
-    fn update(&mut self, color: [[u8; 3]; 3], chip_idx: u32) -> u32 {
-        self.transfer.update(color, chip_idx);
-        if chip_idx == 8 {
-            self.transfer.set_le();
-            self.loops = 0;
-            let len = (core::mem::size_of::<ColorTransers>()
-                - core::mem::size_of::<ColorTranserTail>()) as u32;
-            assert_eq!(len, 28);
-            return len;
-        }
-        self.tail.empty_loops = (8 - chip_idx) * 16 - 2 - 1;
-        self.tail.data_loops = 2 - 1;
-        // LE
-        self.tail.buf[1] = 8;
-        self.loops = 1;
-        let len = core::mem::size_of::<ColorTransers>() as u32;
-        assert_eq!(len, 40);
-        len
-    }
-}
+impl ColorTransers {}
 
 #[repr(C)]
 struct TranserMeta {
@@ -790,10 +736,26 @@ impl<'a> ColorParser<'a> {
             cnt: 0,
         }
     }
-    pub fn add_empty_les(&mut self, empty_size: u32) {
-        // if empty_size == 0 {
-        //     return;
+    pub fn run(&mut self, cmd_pio: &mut CmdClock) {
+        *self.loops -= 1;
+        let ptr = self.buf_ori as u32;
+        let len = unsafe { self.buf.offset_from(self.buf_ori) } as u32 / 2;
+        // if self.cnt == 0 {
+        //     defmt::info!("buf len {} bytes", len * 4);
         // }
+        cmd_pio.refresh_ptr(ptr, len);
+        // embassy_time::block_for(embassy_time::Duration::from_millis(10));
+        // let buf: &mut [u16; 8192] = unsafe { core::mem::transmute(self.buf_ori) };
+        // *buf = [0u16; 8192];
+        // *self.loops = 0;
+        // self.buf = self.buf_ori;
+        // self.cnt += 1;
+    }
+
+    pub fn add_empty_les(&mut self, empty_size: u32) {
+        if empty_size == 0 {
+            return;
+        }
         unsafe {
             *self.loops += 1;
 
@@ -823,27 +785,6 @@ impl<'a> ColorParser<'a> {
                 u32_buf = u32_buf.add(1);
             }
             self.buf = u32_buf as *mut u16;
-        }
-    }
-
-    pub fn add_color(&mut self, color: [[u8; 3]; 3], chip_idx: u32) {
-        unsafe {
-            *self.loops += 1;
-
-            let transfer: &mut ColorTranser = add_buf_ptr(&mut self.buf);
-            transfer.update(color, chip_idx);
-            if chip_idx == 8 {
-                transfer.set_le();
-                return;
-            }
-
-            *self.loops += 1;
-            let tail: &mut ColorTranserTail = add_buf_ptr(&mut self.buf);
-            tail.empty_loops = (8 - chip_idx) * 16 - 2 - 1;
-            tail.data_loops = 2 - 1;
-            // LE
-            tail.buf[0] = 0;
-            tail.buf[1] = 8;
         }
     }
 
@@ -881,17 +822,6 @@ impl<'a> ColorParser<'a> {
         if !le {
             self.add_empty_le(8 - chip_index as u32);
         }
-    }
-
-    pub fn run(&mut self, cmd_pio: &mut CmdClock) {
-        *self.loops -= 1;
-        let ptr = self.buf_ori as u32;
-        let len = unsafe { self.buf.offset_from(self.buf_ori) } as u32 / 2;
-        // if self.cnt == 0 {
-        //     defmt::info!("buf len {}", len);
-        // }
-        cmd_pio.refresh_ptr(ptr, len);
-        self.cnt += 1;
     }
 }
 
