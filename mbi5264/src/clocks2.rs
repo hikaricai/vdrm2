@@ -241,7 +241,7 @@ pub struct CmdClock {
 }
 
 impl CmdClock {
-    pub fn new(pio0: PIO0, pins: CmdClockPins, data_ch: DMA_CH0, le_ch: DMA_CH1) -> Self {
+    pub fn new(pio0: PIO0, pins: CmdClockPins, data_ch: DMA_CH0) -> Self {
         let pio0 = Pio::new(pio0, PioIrqs);
         let Pio {
             mut common,
@@ -346,28 +346,7 @@ impl CmdClock {
             reg.set_incr_read(true);
             reg.set_incr_write(false);
             reg.set_en(true);
-            reg.set_irq_quiet(true);
-            *w = reg.0;
-        });
-
-        let p = le_ch.regs();
-        let pio_no = 0;
-        let ch_no = 1;
-        let le_sm_no = 3usize;
-        p.write_addr()
-            .write_value(embassy_rp::pac::PIO0.txf(le_sm_no).as_ptr() as u32);
-        p.al1_ctrl().write(|w| {
-            let mut reg = embassy_rp::pac::dma::regs::CtrlTrig::default();
-            // Set TX DREQ for this statemachine
-            reg.set_treq_sel(embassy_rp::pac::dma::vals::TreqSel::from(
-                pio_no * 8 + le_sm_no as u8,
-            ));
-            reg.set_data_size(embassy_rp::pac::dma::vals::DataSize::SIZE_WORD);
-            reg.set_chain_to(ch_no);
-            reg.set_incr_read(true);
-            reg.set_incr_write(false);
-            reg.set_en(true);
-            reg.set_irq_quiet(true);
+            reg.set_irq_quiet(false);
             *w = reg.0;
         });
 
@@ -415,7 +394,16 @@ impl CmdClock {
         let p = self.data_ch.regs();
         p.trans_count().write_value(len);
         p.al3_read_addr_trig().write_value(ptr);
+    }
+
+    pub fn block_wait(&self) {
+        let p = self.data_ch.regs();
         while p.ctrl_trig().read().busy() {}
+    }
+
+    pub async fn wait(&mut self) {
+        let p = self.data_ch.regs();
+        DataTransfer::new(p).await;
     }
 }
 
@@ -465,17 +453,37 @@ impl<'a> ColorParser<'a> {
             cnt: 0,
         }
     }
-    pub fn run(&mut self, cmd_pio: &mut CmdClock) {
-        *self.loops -= 1;
+
+    #[inline]
+    fn start(&mut self, cmd_pio: &mut CmdClock) {
         let ptr = self.buf_ori as u32;
         let len = unsafe { self.buf.offset_from(self.buf_ori) } as u32 / 2;
-        // let buf: &mut [u16; 8192] = unsafe { core::mem::transmute(self.buf_ori) };
         cmd_pio.refresh_ptr(ptr, len);
+    }
 
-        // *buf = [0u16; 8192];
+    #[inline]
+    fn reinit(&mut self) {
         *self.loops = 0;
         self.buf = unsafe { self.buf_ori.add(2) };
         self.cnt += 1;
+    }
+
+    pub fn run(&mut self, cmd_pio: &mut CmdClock) {
+        self.start(cmd_pio);
+        cmd_pio.block_wait();
+        self.reinit();
+    }
+
+    pub fn encode(&mut self) -> u32 {
+        *self.loops -= 1;
+        let len = unsafe { self.buf.offset_from(self.buf_ori) } as u32 / 2;
+        len
+    }
+
+    pub async fn async_run(&mut self, cmd_pio: &mut CmdClock) {
+        self.start(cmd_pio);
+        cmd_pio.wait().await;
+        self.reinit();
     }
 
     pub fn add_empty_les(&mut self, empty_size: u32) {

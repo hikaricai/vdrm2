@@ -4,7 +4,10 @@ mod clocks2;
 mod core1;
 use embassy_executor::Spawner;
 use embassy_rp::gpio;
-use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, zerocopy_channel};
+use embassy_sync::{
+    blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex},
+    zerocopy_channel,
+};
 use static_cell::{ConstStaticCell, StaticCell};
 use {defmt_rtt as _, panic_probe as _};
 // use panic_probe as _;
@@ -13,6 +16,11 @@ const IMG_HEIGHT: usize = mbi5264_common::IMG_HEIGHT;
 const IMG_SIZE: usize = mbi5264_common::IMG_WIDTH * mbi5264_common::IMG_HEIGHT;
 type RGBH = [u8; 4];
 type ImageBuffer = [RGBH; IMG_SIZE];
+
+static MBI_BUF: ConstStaticCell<[MbiBuf2; 2]> =
+    ConstStaticCell::new([MbiBuf2::new(), MbiBuf2::new()]);
+static MBI_CHANNEL: StaticCell<zerocopy_channel::Channel<'_, NoopRawMutex, MbiBuf2>> =
+    StaticCell::new();
 // static mut BUF2: [ImageBuffer; 2] = [[[0; 4]; IMG_SIZE]; 2];
 // static IMG_CHANNEL2: ConstStaticCell<
 //     zerocopy_channel::Channel<'_, CriticalSectionRawMutex, ImageBuffer>,
@@ -63,7 +71,7 @@ impl Command {
 const UMINI_CMDS: &[(mbi5264_common::CMD, u16)] = &mbi5264_common::unimi_cmds();
 
 #[embassy_executor::main]
-async fn main(_spawner: Spawner) {
+async fn main(spawner: Spawner) {
     // defmt::info!("Hello there!");
     let core_num = embassy_rp::pac::SIO.cpuid().read();
     defmt::info!("main core {}", core_num);
@@ -77,6 +85,9 @@ async fn main(_spawner: Spawner) {
     let (sender, mut receiver) = channel.split();
     let safe_sender = SafeSender { sender };
     // core1::spawn_usb_core1(p.CORE1, p.USB, safe_sender);
+    let mbi_channel = MBI_CHANNEL.init(zerocopy_channel::Channel::new(MBI_BUF.take()));
+    let (mbi_tx, mut mbi_rx) = mbi_channel.split();
+    spawner.spawn(encode_mbi(mbi_tx)).unwrap();
 
     let mut led_pin = gpio::Output::new(p.PIN_25, gpio::Level::Low);
     // let mut dbg_pin = gpio::Output::new(p.PIN_11, gpio::Level::Low);
@@ -97,7 +108,6 @@ async fn main(_spawner: Spawner) {
         le2_pin: p.PIN_13,
     };
     let data_ch = p.DMA_CH0;
-    let le_ch = p.DMA_CH1;
     let mut line = clocks2::LineClock::new(
         p.PWM_SLICE7,
         p.PWM_SLICE0,
@@ -108,7 +118,7 @@ async fn main(_spawner: Spawner) {
         p.PIN_0,
         p.PIN_18,
     );
-    let mut cmd_pio = clocks2::CmdClock::new(p.PIO0, pins, data_ch, le_ch);
+    let mut cmd_pio = clocks2::CmdClock::new(p.PIO0, pins, data_ch);
 
     let sync_cmd = Command::new_sync();
     let confirm_cmd = Command::new_confirm();
@@ -121,8 +131,8 @@ async fn main(_spawner: Spawner) {
     }
     let mut cmd_iter = core::iter::repeat(UMINI_CMDS.iter()).flatten();
     let mut coloum: [RGBH; IMG_HEIGHT] = [[255, 255, 255, 0]; IMG_HEIGHT];
-    let mut buf = [0u16; 8192];
-    let mut parser = clocks2::ColorParser::new(&mut buf);
+    // let mut buf = [0u16; 8192];
+    // let mut parser = clocks2::ColorParser::new(&mut buf);
     loop {
         let &(cmd, param) = cmd_iter.next().unwrap();
         cmd_pio.refresh2(&confirm_cmd);
@@ -164,8 +174,11 @@ async fn main(_spawner: Spawner) {
             cmd_pio.refresh2(&sync_cmd);
             // vsync
             line.start();
+            let buf = mbi_rx.receive().await;
+            cmd_pio.refresh_ptr(buf.buf.as_ptr() as u32, buf.len);
+            cmd_pio.wait().await;
             // defmt::info!("[begin] update_frame2");
-            update_frame3(&mut parser, &mut cmd_pio, &coloum);
+            // block_update_frame(&mut parser, &mut cmd_pio, &coloum);
             // defmt::info!("[end] update_frame2");
             line.wait_stop().await;
         }
@@ -199,11 +212,16 @@ impl RGBMeta {
     }
 }
 
-fn update_frame3(
+fn block_update_frame(
     parser: &mut clocks2::ColorParser,
     cmd_pio: &mut clocks2::CmdClock,
     rgbh_coloum: &[RGBH; IMG_HEIGHT],
 ) {
+    let _len = update_frame(parser, rgbh_coloum);
+    parser.run(cmd_pio);
+}
+
+fn update_frame(parser: &mut clocks2::ColorParser, rgbh_coloum: &[RGBH; IMG_HEIGHT]) -> u32 {
     let region0 = &rgbh_coloum[0..64];
     let region1 = &rgbh_coloum[64..128];
     let region2 = &rgbh_coloum[128..];
@@ -261,7 +279,7 @@ fn update_frame3(
         );
     }
     parser.add_empty_les(15 - last_h_mod as u32);
-    parser.run(cmd_pio);
+    parser.encode()
 }
 
 #[inline]
@@ -324,5 +342,31 @@ impl PixelSlot2 {
             let rgb = (r | (g << 1) | (b << 2)) as u16;
             *buf |= rgb << (4 * region);
         }
+    }
+}
+
+struct MbiBuf2 {
+    len: u32,
+    buf: [u16; 8192],
+}
+
+impl MbiBuf2 {
+    const fn new() -> Self {
+        Self {
+            len: 0,
+            buf: [0u16; 8192],
+        }
+    }
+}
+
+#[embassy_executor::task]
+async fn encode_mbi(mut tx: zerocopy_channel::Sender<'static, NoopRawMutex, MbiBuf2>) {
+    let mut coloum: [RGBH; IMG_HEIGHT] = [[255, 255, 255, 0]; IMG_HEIGHT];
+    loop {
+        let buf = tx.send().await;
+        let mut parser = clocks2::ColorParser::new(&mut buf.buf);
+        let len = update_frame(&mut parser, &coloum);
+        buf.len = len;
+        tx.send_done();
     }
 }
