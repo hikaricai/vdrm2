@@ -790,7 +790,10 @@ impl<'a> ColorParser<'a> {
             cnt: 0,
         }
     }
-    pub fn add_empty(&mut self, empty_size: u32) {
+    pub fn add_empty_les(&mut self, empty_size: u32) {
+        // if empty_size == 0 {
+        //     return;
+        // }
         unsafe {
             *self.loops += 1;
 
@@ -822,6 +825,7 @@ impl<'a> ColorParser<'a> {
             self.buf = u32_buf as *mut u16;
         }
     }
+
     pub fn add_color(&mut self, color: [[u8; 3]; 3], chip_idx: u32) {
         unsafe {
             *self.loops += 1;
@@ -840,6 +844,41 @@ impl<'a> ColorParser<'a> {
             // LE
             tail.buf[0] = 0;
             tail.buf[1] = 8;
+        }
+    }
+
+    pub fn add_color2(&mut self, buf: &[u16; 8], chip_index: u32, last_chip_idx: u32) {
+        let le = chip_index == 8;
+        let chip_inc_index = chip_index - last_chip_idx;
+        unsafe {
+            *self.loops += 1;
+
+            let transfer: &mut ColorTranser = add_buf_ptr(&mut self.buf);
+            transfer.empty_loops = 8 + chip_inc_index * 16 - 1;
+            transfer.buf = *buf;
+            if le {
+                transfer.set_le();
+            }
+        }
+    }
+
+    pub fn add_empty_le(&mut self, chip_inc_index: u32) {
+        unsafe {
+            *self.loops += 1;
+            let tail: &mut ColorTranserTail = add_buf_ptr(&mut self.buf);
+            tail.empty_loops = chip_inc_index * 16 - 2 - 1;
+            tail.data_loops = 2 - 1;
+            // LE
+            tail.buf[0] = 0;
+            tail.buf[1] = 8;
+        }
+    }
+
+    pub fn add_color_end(&mut self, buf: &[u16; 8], chip_index: u32, last_chip_idx: u32) {
+        let le = chip_index == 8;
+        self.add_color2(buf, chip_index, last_chip_idx);
+        if !le {
+            self.add_empty_le(8 - chip_index as u32);
         }
     }
 
