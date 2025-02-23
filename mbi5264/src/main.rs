@@ -2,10 +2,8 @@
 #![no_main]
 mod clocks2;
 mod core1;
-use clocks2::gen_raw_buf;
-use core::ptr::NonNull;
 use embassy_executor::Spawner;
-use embassy_rp::{gpio, multicore::spawn_core1, Peripherals};
+use embassy_rp::gpio;
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, zerocopy_channel};
 use static_cell::{ConstStaticCell, StaticCell};
 use {defmt_rtt as _, panic_probe as _};
@@ -40,13 +38,6 @@ pub struct Command {
 }
 
 impl Command {
-    fn mock(cmd: u8) -> Self {
-        Self {
-            cmd,
-            regs: [[0xff00 + cmd as u16; 3]; 9],
-        }
-    }
-
     fn new(cmd: u8, param: u16) -> Self {
         Self {
             cmd,
@@ -68,20 +59,7 @@ impl Command {
         }
     }
 }
-fn gen_colors() -> [Command; 1024] {
-    let mut cmds = unsafe { core::mem::MaybeUninit::<[Command; 1024]>::zeroed().assume_init() };
-    for y in 0..64u16 {
-        for x in 0..16u16 {
-            let regs = [[(y * 16 + x) << 2; 3]; 9];
-            // let regs = [[0x1555; 3]; 9];
-            let cmd = Command { cmd: 1, regs };
-            cmds[(y * 16 + x) as usize] = cmd;
-        }
-    }
-    cmds
-}
 
-// const COLOR_RAW_BUF: [[u16; clocks2::CMD_BUF_SIZE]; 1024] = clocks2::gen_colors_raw_buf();
 const UMINI_CMDS: &[(mbi5264_common::CMD, u16)] = &mbi5264_common::unimi_cmds();
 
 #[embassy_executor::main]
@@ -136,24 +114,19 @@ async fn main(_spawner: Spawner) {
     let confirm_cmd = Command::new_confirm();
     let mut cnt: usize = 0;
     let mut cmd_iter = UMINI_CMDS.iter();
-    // put buf in ram, flash is tooooooo slow
-    // let palette: [[u16; clocks2::CMD_BUF_SIZE]; 4] = [0u16, 1, 1, 1].map(|idx| {
-    //     let color = idx * 0xffff;
-    //     gen_raw_buf([color; 3])
-    // });
-    let mut frame = 0usize;
-    // for &(cmd, param) in cmd_iter {
-    //     cmd_pio.refresh2(&confirm_cmd);
-    //     cmd_pio.refresh2(&Command::new(cmd as u8, param));
-    // }
+
+    for &(cmd, param) in cmd_iter {
+        cmd_pio.refresh2(&confirm_cmd);
+        cmd_pio.refresh2(&Command::new(cmd as u8, param));
+    }
     let mut cmd_iter = core::iter::repeat(UMINI_CMDS.iter()).flatten();
     let mut coloum: [RGBH; IMG_HEIGHT] = [[255, 255, 255, 0]; IMG_HEIGHT];
     let mut buf = [0u16; 8192];
     let mut parser = clocks2::ColorParser::new(&mut buf);
     loop {
         let &(cmd, param) = cmd_iter.next().unwrap();
-        // cmd_pio.refresh2(&confirm_cmd);
-        // cmd_pio.refresh2(&Command::new(cmd as u8, param));
+        cmd_pio.refresh2(&confirm_cmd);
+        cmd_pio.refresh2(&Command::new(cmd as u8, param));
 
         // cmd_pio.refresh(&sync_cmd);
         // vsync
@@ -184,11 +157,11 @@ async fn main(_spawner: Spawner) {
         //
         let h = cnt as u8 % 144;
         for (idx, c) in coloum.iter_mut().enumerate() {
-            c[3] = (0 + (idx as u8 / 64) << 4) % 144;
+            // c[3] = (0 + (idx as u8 / 64)) % 144;
             // c[3] = 0;
         }
-        for _idx in 0..IMG_WIDTH {
-            // cmd_pio.refresh(&sync_cmd);
+        for _idx in 0..1 {
+            cmd_pio.refresh2(&sync_cmd);
             // vsync
             line.start();
             // defmt::info!("[begin] update_frame2");
@@ -196,33 +169,6 @@ async fn main(_spawner: Spawner) {
             // defmt::info!("[end] update_frame2");
             line.wait_stop().await;
         }
-
-        // let color = [[255u8; 3]; 3];
-        // let idx = cnt as usize % 9;
-        // // cmd_pio.refresh_color(color, idx);
-
-        // let buf_ptr = buf.as_ptr();
-        // let mut parser = clocks2::ColorParser::new(&mut buf);
-        // parser.add_color2(&pixel_slot.buf, 0, 0);
-        // parser.add_color_end(&pixel_slot.buf, 8, 1);
-        // // parser.add_color(color, idx as u32);
-        // // parser.add_empty_les(idx as u32);
-        // // parser.add_color(color, idx as u32);
-        // // parser.add_empty_les(idx as u32);
-        // if cnt == 0 {
-        //     let buf_t: &[u16; 20] = unsafe { core::mem::transmute(parser.buf_ori) };
-        //     defmt::info!("buf_t {:?}", buf_t);
-        //     defmt::info!(
-        //         "buf {} buf_ori {} buf_t {} loop {}",
-        //         buf_ptr,
-        //         parser.buf_ori,
-        //         parser.buf,
-        //         parser.loops as *mut u32
-        //     );
-        // }
-        // parser.run(&mut cmd_pio);
-        // // clear the buf
-        // buf = [0u16; 1024];
 
         if cnt & 0x10 != 0 {
             led_pin.toggle();
