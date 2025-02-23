@@ -148,8 +148,8 @@ async fn main(_spawner: Spawner) {
     // }
     let mut cmd_iter = core::iter::repeat(UMINI_CMDS.iter()).flatten();
     let mut coloum: [RGBH; IMG_HEIGHT] = [[255, 255, 255, 0]; IMG_HEIGHT];
-    // let mut buf = [0u16; 8192];
-    // let mut parser = clocks2::ColorParser::new(&mut buf);
+    let mut buf = [0u16; 8192];
+    let mut parser = clocks2::ColorParser::new(&mut buf);
     loop {
         let &(cmd, param) = cmd_iter.next().unwrap();
         // cmd_pio.refresh2(&confirm_cmd);
@@ -192,7 +192,7 @@ async fn main(_spawner: Spawner) {
             // vsync
             line.start();
             // defmt::info!("[begin] update_frame2");
-            update_frame3(&mut cmd_pio, &coloum);
+            update_frame3(&mut parser, &mut cmd_pio, &coloum);
             // defmt::info!("[end] update_frame2");
             line.wait_stop().await;
         }
@@ -254,12 +254,10 @@ impl RGBMeta {
 }
 
 fn update_frame3(
-    // parser: &mut clocks2::ColorParser,
+    parser: &mut clocks2::ColorParser,
     cmd_pio: &mut clocks2::CmdClock,
     rgbh_coloum: &[RGBH; IMG_HEIGHT],
 ) {
-    let mut buf = [0u16; 8192];
-    let mut parser = clocks2::ColorParser::new(&mut buf);
     let region0 = &rgbh_coloum[0..64];
     let region1 = &rgbh_coloum[64..128];
     let region2 = &rgbh_coloum[128..];

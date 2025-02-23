@@ -740,16 +740,13 @@ impl<'a> ColorParser<'a> {
         *self.loops -= 1;
         let ptr = self.buf_ori as u32;
         let len = unsafe { self.buf.offset_from(self.buf_ori) } as u32 / 2;
-        // if self.cnt == 0 {
-        //     defmt::info!("buf len {} bytes", len * 4);
-        // }
-        cmd_pio.refresh_ptr(ptr, len);
-        // embassy_time::block_for(embassy_time::Duration::from_millis(10));
         // let buf: &mut [u16; 8192] = unsafe { core::mem::transmute(self.buf_ori) };
+        cmd_pio.refresh_ptr(ptr, len);
+
         // *buf = [0u16; 8192];
-        // *self.loops = 0;
-        // self.buf = self.buf_ori;
-        // self.cnt += 1;
+        *self.loops = 0;
+        self.buf = unsafe { self.buf_ori.add(2) };
+        self.cnt += 1;
     }
 
     pub fn add_empty_les(&mut self, empty_size: u32) {
