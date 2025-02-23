@@ -145,18 +145,24 @@ class Decoder(srd.Decoder):
             if clk != last_clk:
                 clks += 1
                 value <<= 1
-                value &= 0xffff
+                # value &= 0xffff
                 value |= dio
                 if le > 0:
                     cmd += 1
-            if clks == 16 and show_width != 160:
-                show_width = self.samplenum
+            # if clks == 16 and show_width != 160:
+            #     show_width = self.samplenum
             # le下降锁存命令
             if le == 0 and last_le > 0:
                 start = self.samplenum - show_width if self.samplenum > show_width else 0
                 end = self.samplenum
+                shift_cnt = 0;
+                while value & 0xffff == 0 and shift_cnt < 9:
+                    value >>= 16
+                    shift_cnt += 1
+                value &= 0xffff
                 row1 = '%02X' % cmd
-                row2 = '%02X' % value
+                row2 = '%02X_%d' % (value, shift_cnt)
+                value = 0
                 self.put_ann(start, end, 0, [row1])
                 self.put_ann(start, end, 1, [row2])
             if le == 0:

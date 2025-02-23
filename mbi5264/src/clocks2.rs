@@ -855,6 +855,7 @@ impl<'a> ColorParser<'a> {
 
             let transfer: &mut ColorTranser = add_buf_ptr(&mut self.buf);
             transfer.empty_loops = 8 + chip_inc_index * 16 - 1;
+            transfer.data_loops = 7;
             transfer.buf = *buf;
             if le {
                 transfer.set_le();
@@ -886,6 +887,9 @@ impl<'a> ColorParser<'a> {
         *self.loops -= 1;
         let ptr = self.buf_ori as u32;
         let len = unsafe { self.buf.offset_from(self.buf_ori) } as u32 / 2;
+        // if self.cnt == 0 {
+        //     defmt::info!("buf len {}", len);
+        // }
         cmd_pio.refresh_ptr(ptr, len);
         self.cnt += 1;
     }

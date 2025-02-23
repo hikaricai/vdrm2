@@ -149,6 +149,8 @@ async fn main(_spawner: Spawner) {
     let mut cmd_iter = core::iter::repeat(UMINI_CMDS.iter()).flatten();
     let mut coloum: [RGBH; IMG_HEIGHT] = [[255, 255, 255, 0]; IMG_HEIGHT];
     let mut buf = [0u16; 1024];
+    let rgb_meta = RGBMeta::new([255, 255, 255, 0], 0);
+    let pixel_slot = PixelSlot2::new(&rgb_meta, 0);
     loop {
         let &(cmd, param) = cmd_iter.next().unwrap();
         // cmd_pio.refresh2(&confirm_cmd);
@@ -183,41 +185,44 @@ async fn main(_spawner: Spawner) {
         //
         let h = cnt as u8 % 144;
         for c in coloum.iter_mut() {
-            c[3] = h;
+            c[3] = 0;
         }
-        // for _idx in 0..IMG_WIDTH {
-        //     // cmd_pio.refresh(&sync_cmd);
-        //     // vsync
-        //     line.start();
-        //     // defmt::info!("[begin] update_frame2");
-        //     update_frame3(&mut cmd_pio, &coloum);
-        //     // defmt::info!("[end] update_frame2");
-        //     line.wait_stop().await;
+        for _idx in 0..IMG_WIDTH {
+            // cmd_pio.refresh(&sync_cmd);
+            // vsync
+            line.start();
+            // defmt::info!("[begin] update_frame2");
+            update_frame3(&mut cmd_pio, &coloum);
+            // defmt::info!("[end] update_frame2");
+            line.wait_stop().await;
+        }
+
+        // let color = [[255u8; 3]; 3];
+        // let idx = cnt as usize % 9;
+        // // cmd_pio.refresh_color(color, idx);
+
+        // let buf_ptr = buf.as_ptr();
+        // let mut parser = clocks2::ColorParser::new(&mut buf);
+        // parser.add_color2(&pixel_slot.buf, 0, 0);
+        // parser.add_color_end(&pixel_slot.buf, 8, 1);
+        // // parser.add_color(color, idx as u32);
+        // // parser.add_empty_les(idx as u32);
+        // // parser.add_color(color, idx as u32);
+        // // parser.add_empty_les(idx as u32);
+        // if cnt == 0 {
+        //     let buf_t: &[u16; 20] = unsafe { core::mem::transmute(parser.buf_ori) };
+        //     defmt::info!("buf_t {:?}", buf_t);
+        //     defmt::info!(
+        //         "buf {} buf_ori {} buf_t {} loop {}",
+        //         buf_ptr,
+        //         parser.buf_ori,
+        //         parser.buf,
+        //         parser.loops as *mut u32
+        //     );
         // }
-
-        let color = [[255u8; 3]; 3];
-        let idx = cnt as usize % 9;
-        // cmd_pio.refresh_color(color, idx);
-
-        let buf_ptr = buf.as_ptr();
-        let mut parser = clocks2::ColorParser::new(&mut buf);
-        parser.add_color(color, idx as u32);
-        parser.add_color(color, idx as u32);
-        parser.add_empty_les(idx as u32);
-        parser.add_color(color, idx as u32);
-        parser.add_empty_les(idx as u32);
-        if cnt == 0 {
-            let buf_t: &[u16; 20] = unsafe { core::mem::transmute(parser.buf_ori) };
-            defmt::info!("buf_t {:?}", buf_t);
-            defmt::info!(
-                "buf {} buf_ori {} buf_t {} loop {}",
-                buf_ptr,
-                parser.buf_ori,
-                parser.buf,
-                parser.loops as *mut u32
-            );
-        }
-        parser.run(&mut cmd_pio);
+        // parser.run(&mut cmd_pio);
+        // // clear the buf
+        // buf = [0u16; 1024];
 
         if cnt & 0x10 != 0 {
             led_pin.toggle();
@@ -403,8 +408,7 @@ fn update_frame2(cmd_pio: &mut clocks2::CmdClock, rgbh_coloum: &[RGBH; IMG_HEIGH
 }
 
 fn update_frame3(cmd_pio: &mut clocks2::CmdClock, rgbh_coloum: &[RGBH; IMG_HEIGHT]) {
-    let mut buf = [0u16; 2560];
-    static EMPTY_PALETTE: [u16; clocks2::CMD_BUF_SIZE] = [0; clocks2::CMD_BUF_SIZE];
+    let mut buf = [0u16; 4096];
     let mut parser = clocks2::ColorParser::new(&mut buf);
 
     let region0 = &rgbh_coloum[0..64];
@@ -441,7 +445,7 @@ fn update_frame3(cmd_pio: &mut clocks2::CmdClock, rgbh_coloum: &[RGBH; IMG_HEIGH
                     // new chip_idx
                     let last_chip_idx = last_solt.h_div as u32;
                     parser.add_color2(&last_solt.buf, last_chip_idx, last_solt.last_chip_idx);
-                    last_solt = PixelSlot2::new(rgbh_meta, last_chip_idx);
+                    last_solt = PixelSlot2::new(rgbh_meta, last_chip_idx + 1);
                 }
                 continue;
             }
