@@ -267,7 +267,7 @@ impl CmdClock {
 
         let data_program_data = pio_proc::pio_asm!(
             ".wrap_target",
-            "wait 1 irq 4",
+            "wait 1 irq 4 [1]", // [1] fix emi
             "mov pins null",
             "out y, 32",    // save loop_cnt to y
             "wait 1 irq 4", // pre wait to clear old irq
@@ -275,13 +275,13 @@ impl CmdClock {
             //
             "out x, 32", // save empty_cnt to x
             "loop_empty:",
-            "wait 1 irq 4",
+            "wait 1 irq 4 [1]",
             "mov pins null",
             "jmp x-- loop_empty",
             //
             "out x, 32", // save data_cnt to x
             "loop_data:",
-            "wait 1 irq 4",
+            "wait 1 irq 4 [1]",
             "out pins, 16",
             "jmp x-- loop_data",
             "jmp y-- loop",
@@ -412,11 +412,12 @@ struct ColorTranser {
     empty_loops: u32,
     data_loops: u32,
     buf: [u16; 8],
+    empty_buf: [u16; 6],
 }
 
 impl ColorTranser {
     fn set_le(&mut self) {
-        self.buf[7] |= 0x8;
+        self.empty_buf[5] |= 0x8;
     }
 }
 
@@ -529,9 +530,11 @@ impl<'a> ColorParser<'a> {
             *self.loops += 1;
 
             let transfer: &mut ColorTranser = add_buf_ptr(&mut self.buf);
-            transfer.empty_loops = 8 + chip_inc_index * 16 - 1;
-            transfer.data_loops = 7;
+            // -1
+            transfer.empty_loops = 2 + chip_inc_index * 16 - 1;
+            transfer.data_loops = 8 + 6 - 1;
             transfer.buf = *buf;
+            transfer.empty_buf = [0; 6];
             if le {
                 transfer.set_le();
             }

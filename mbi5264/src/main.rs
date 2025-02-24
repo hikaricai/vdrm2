@@ -84,10 +84,10 @@ async fn main(spawner: Spawner) {
     let channel = IMG_CHANNEL.init(zerocopy_channel::Channel::new(BUF.take()));
     let (sender, img_rx) = channel.split();
     let img_tx = SafeSender { sender };
-    core1::spawn_usb_core1(p.CORE1, p.USB, img_tx);
+    // core1::spawn_usb_core1(p.CORE1, p.USB, img_tx);
     let mbi_channel = MBI_CHANNEL.init(zerocopy_channel::Channel::new(MBI_BUF.take()));
     let (mbi_tx, mut mbi_rx) = mbi_channel.split();
-    spawner.spawn(encode_mbi(mbi_tx, img_rx)).unwrap();
+    // spawner.spawn(encode_mbi(mbi_tx, img_rx)).unwrap();
 
     let mut led_pin = gpio::Output::new(p.PIN_25, gpio::Level::Low);
     // let mut dbg_pin = gpio::Output::new(p.PIN_11, gpio::Level::Low);
@@ -131,13 +131,14 @@ async fn main(spawner: Spawner) {
     }
     let mut cmd_iter = core::iter::repeat(UMINI_CMDS.iter()).flatten();
     let mut coloum: [RGBH; IMG_HEIGHT] = [[255, 255, 255, 0]; IMG_HEIGHT];
-    // let mut buf = [0u16; 8192];
-    // let mut parser = clocks2::ColorParser::new(&mut buf);
+    let mut buf = [0u16; 16384];
+    let mut parser = clocks2::ColorParser::new(&mut buf);
     loop {
         let &(cmd, param) = cmd_iter.next().unwrap();
+        // embassy_time::block_for(embassy_time::Duration::from_millis(2));
         cmd_pio.refresh2(&confirm_cmd);
         cmd_pio.refresh2(&Command::new(cmd as u8, param));
-
+        // embassy_time::block_for(embassy_time::Duration::from_millis(2));
         // cmd_pio.refresh(&sync_cmd);
         // vsync
         // line.start();
@@ -168,20 +169,21 @@ async fn main(spawner: Spawner) {
         let h = cnt as u8 % 144;
         for (idx, c) in coloum.iter_mut().enumerate() {
             // c[3] = (0 + (idx as u8 / 64)) % 144;
-            // c[3] = 0;
+            c[3] = h;
         }
         for _idx in 0..1 {
             cmd_pio.refresh2(&sync_cmd);
             // vsync
             line.start();
-            let buf = mbi_rx.receive().await;
-            cmd_pio.refresh_ptr(buf.buf.as_ptr() as u32, buf.len);
-            cmd_pio.wait().await;
+            // let buf = mbi_rx.receive().await;
+            // cmd_pio.refresh_ptr(buf.buf.as_ptr() as u32, buf.len);
+            // cmd_pio.wait().await;
             // defmt::info!("[begin] update_frame2");
-            // block_update_frame(&mut parser, &mut cmd_pio, &coloum);
+            block_update_frame(&mut parser, &mut cmd_pio, &coloum);
             // defmt::info!("[end] update_frame2");
             line.wait_stop().await;
         }
+        // embassy_time::block_for(embassy_time::Duration::from_millis(1000));
 
         if cnt & 0x10 != 0 {
             led_pin.toggle();
