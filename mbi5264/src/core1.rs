@@ -40,16 +40,16 @@ static QOI_CHANNEL: StaticCell<zerocopy_channel::Channel<'_, CriticalSectionRawM
     StaticCell::new();
 
 // usb interrupt is running on core1
-struct UsbInterruptHandler {}
-impl embassy_rp::interrupt::typelevel::Handler<<USB as embassy_rp::usb::Instance>::Interrupt>
-    for UsbInterruptHandler
-{
-    unsafe fn on_interrupt() {
-        let core_num = embassy_rp::pac::SIO.cpuid().read();
-        defmt::info!("usb interrupt core {}", core_num);
-        InterruptHandler::<USB>::on_interrupt();
-    }
-}
+// struct UsbInterruptHandler {}
+// impl embassy_rp::interrupt::typelevel::Handler<<USB as embassy_rp::usb::Instance>::Interrupt>
+//     for UsbInterruptHandler
+// {
+//     unsafe fn on_interrupt() {
+//         let core_num = embassy_rp::pac::SIO.cpuid().read();
+//         defmt::info!("usb interrupt core {}", core_num);
+//         InterruptHandler::<USB>::on_interrupt();
+//     }
+// }
 
 pub static mut CORE1_STACK: Stack<4096> = Stack::new();
 static EXECUTOR: StaticCell<Executor> = StaticCell::new();
@@ -83,31 +83,35 @@ async fn decode_qoi(
     mut usb_data_rx: zerocopy_channel::Receiver<'static, CriticalSectionRawMutex, UsbDataBuf>,
     mut safe_sender: crate::SafeSender<crate::ImageBuffer>,
 ) {
+    let mut cnt = 0_u8;
     loop {
-        defmt::info!("decode qoi");
+        // defmt::info!("decode qoi");
         let send_buf = safe_sender.sender.send().await;
-        defmt::info!("acquire qoi send buffer");
-        let raw_buf: &mut [u8; crate::IMG_SIZE * 4] =
-            unsafe { core::mem::transmute(send_buf.as_ptr()) };
-        loop {
-            let usb_data_buf = usb_data_rx.receive().await;
-            let Some(usb_data) = mbi5264_common::UsbData::ref_from_buf(usb_data_buf) else {
-                usb_data_rx.receive_done();
-                continue;
-            };
-            let payload_len = usb_data.hdr.payload_len;
-            defmt::info!("usb data {}", payload_len);
-            let ret = qoi::decode_to_buf(&mut *raw_buf, usb_data.payload);
-            usb_data_rx.receive_done();
-            defmt::info!("decode qoi ret {}", ret.is_ok());
-            if ret.is_ok() {
-                break;
-            }
-        }
+        // defmt::info!("acquire qoi send buffer");
+        // let raw_buf: &mut [u8; crate::IMG_SIZE * 4] =
+        //     unsafe { core::mem::transmute(send_buf.as_ptr()) };
+        // loop {
+        //     let usb_data_buf = usb_data_rx.receive().await;
+        //     let Some(usb_data) = mbi5264_common::UsbData::ref_from_buf(usb_data_buf) else {
+        //         usb_data_rx.receive_done();
+        //         continue;
+        //     };
+        //     let payload_len = usb_data.hdr.payload_len;
+        //     defmt::info!("usb data {}", payload_len);
+        //     let ret = qoi::decode_to_buf(raw_buf.as_mut(), usb_data.payload);
+        //     usb_data_rx.receive_done();
+        //     defmt::info!("decode qoi ret {}", ret.is_ok());
+        //     if ret.is_ok() {
+        //         break;
+        //     }
+        // }
         for p in send_buf.iter_mut() {
-            p[3] = core::cmp::min(p[3], 143);
+            *p = [255, 255, 255, cnt];
+            // p[3] = core::cmp::min(p[3], 143);
         }
         safe_sender.sender.send_done();
+        cnt += 1;
+        cnt %= 144;
     }
 }
 

@@ -82,12 +82,12 @@ async fn main(spawner: Spawner) {
     });
 
     let channel = IMG_CHANNEL.init(zerocopy_channel::Channel::new(BUF.take()));
-    let (sender, mut receiver) = channel.split();
-    let safe_sender = SafeSender { sender };
-    // core1::spawn_usb_core1(p.CORE1, p.USB, safe_sender);
+    let (sender, img_rx) = channel.split();
+    let img_tx = SafeSender { sender };
+    core1::spawn_usb_core1(p.CORE1, p.USB, img_tx);
     let mbi_channel = MBI_CHANNEL.init(zerocopy_channel::Channel::new(MBI_BUF.take()));
     let (mbi_tx, mut mbi_rx) = mbi_channel.split();
-    spawner.spawn(encode_mbi(mbi_tx)).unwrap();
+    spawner.spawn(encode_mbi(mbi_tx, img_rx)).unwrap();
 
     let mut led_pin = gpio::Output::new(p.PIN_25, gpio::Level::Low);
     // let mut dbg_pin = gpio::Output::new(p.PIN_11, gpio::Level::Low);
@@ -298,7 +298,6 @@ fn bubble_rgbh2(slice: &mut [RGBMeta]) {
 
 struct PixelSlot2 {
     buf: [u16; 8],
-    h: u8,
     h_div: u8,
     h_mod: u8,
     last_chip_idx: u32,
@@ -314,7 +313,7 @@ impl PixelSlot2 {
             h_div,
             h_mod,
         } = rgbh_meta;
-        let [r, g, b, h] = rgbh;
+        let [r, g, b, _h] = rgbh;
         for (i, buf) in (0..8).rev().zip(buf.iter_mut()) {
             let r = (r >> i) & 1;
             let g = (g >> i) & 1;
@@ -324,7 +323,6 @@ impl PixelSlot2 {
         }
         Self {
             buf,
-            h,
             h_div,
             h_mod,
             last_chip_idx,
@@ -360,13 +358,20 @@ impl MbiBuf2 {
 }
 
 #[embassy_executor::task]
-async fn encode_mbi(mut tx: zerocopy_channel::Sender<'static, NoopRawMutex, MbiBuf2>) {
-    let mut coloum: [RGBH; IMG_HEIGHT] = [[255, 255, 255, 0]; IMG_HEIGHT];
+async fn encode_mbi(
+    mut mbi_tx: zerocopy_channel::Sender<'static, NoopRawMutex, MbiBuf2>,
+    mut img_rx: zerocopy_channel::Receiver<'static, CriticalSectionRawMutex, ImageBuffer>,
+) {
     loop {
-        let buf = tx.send().await;
-        let mut parser = clocks2::ColorParser::new(&mut buf.buf);
-        let len = update_frame(&mut parser, &coloum);
-        buf.len = len;
-        tx.send_done();
+        let img_buf = img_rx.receive().await;
+        for coloum in img_buf.chunks_exact(IMG_HEIGHT) {
+            let buf = mbi_tx.send().await;
+            let mut parser = clocks2::ColorParser::new(&mut buf.buf);
+            let coloum: &[RGBH; IMG_HEIGHT] = unsafe { core::mem::transmute(coloum.as_ptr()) };
+            let len = update_frame(&mut parser, &coloum);
+            buf.len = len;
+            mbi_tx.send_done();
+        }
+        img_rx.receive_done();
     }
 }
