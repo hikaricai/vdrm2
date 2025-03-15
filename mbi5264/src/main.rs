@@ -3,11 +3,12 @@
 mod clocks2;
 mod core1;
 use embassy_executor::Spawner;
-use embassy_rp::gpio;
+use embassy_rp::gpio::{self, Input};
 use embassy_sync::{
     blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex},
     zerocopy_channel,
 };
+use embassy_time::{Duration, Instant, Timer};
 use static_cell::{ConstStaticCell, StaticCell};
 use {defmt_rtt as _, panic_probe as _};
 // use panic_probe as _;
@@ -16,6 +17,7 @@ const IMG_HEIGHT: usize = mbi5264_common::IMG_HEIGHT;
 const IMG_SIZE: usize = mbi5264_common::IMG_WIDTH * mbi5264_common::IMG_HEIGHT;
 type RGBH = [u8; 4];
 type ImageBuffer = [RGBH; IMG_SIZE];
+const TOTAL_ANGLES: u32 = 180;
 
 static MBI_BUF: ConstStaticCell<[MbiBuf2; 2]> =
     ConstStaticCell::new([MbiBuf2::new(), MbiBuf2::new()]);
@@ -88,10 +90,9 @@ async fn main(spawner: Spawner) {
     let mbi_channel = MBI_CHANNEL.init(zerocopy_channel::Channel::new(MBI_BUF.take()));
     let (mbi_tx, mut mbi_rx) = mbi_channel.split();
     // spawner.spawn(encode_mbi(mbi_tx, img_rx)).unwrap();
+    spawner.spawn(encode_mbi2(mbi_tx)).unwrap();
 
     let mut led_pin = gpio::Output::new(p.PIN_25, gpio::Level::Low);
-    // let mut dbg_pin = gpio::Output::new(p.PIN_11, gpio::Level::Low);
-    // let mut dbg_pin2 = gpio::Output::new(p.PIN_12, gpio::Level::Low);
     let pins = clocks2::CmdClockPins {
         clk_pin: p.PIN_1,
         r0_pin: p.PIN_2,
@@ -119,72 +120,102 @@ async fn main(spawner: Spawner) {
         p.PIN_18,
     );
     let mut cmd_pio = clocks2::CmdClock::new(p.PIO0, pins, data_ch);
+    test_screen(&mut cmd_pio, &mut line, &mut mbi_rx, &mut led_pin).await;
 
     let sync_cmd = Command::new_sync();
     let confirm_cmd = Command::new_confirm();
     let mut cnt: usize = 0;
-    let mut cmd_iter = UMINI_CMDS.iter();
+    let cmd_iter = UMINI_CMDS.iter();
 
     for &(cmd, param) in cmd_iter {
         cmd_pio.refresh2(&confirm_cmd);
         cmd_pio.refresh2(&Command::new(cmd as u8, param));
     }
+
+    let start_angle = TOTAL_ANGLES / 4;
+    let end_angle = start_angle + TOTAL_ANGLES / 2 - 1;
+    let mut sync_signal = Input::new(p.PIN_22, gpio::Pull::None);
+    sync_signal.wait_for_falling_edge().await;
+    let mut last_sync_tick = Instant::now();
+
+    let mut angle = start_angle;
     let mut cmd_iter = core::iter::repeat(UMINI_CMDS.iter()).flatten();
-    let mut coloum: [RGBH; IMG_HEIGHT] = [[255, 255, 255, 0]; IMG_HEIGHT];
-    let mut buf = [0u16; 16384];
-    let mut parser = clocks2::ColorParser::new(&mut buf);
     loop {
         let &(cmd, param) = cmd_iter.next().unwrap();
-        // embassy_time::block_for(embassy_time::Duration::from_millis(2));
         cmd_pio.refresh2(&confirm_cmd);
         cmd_pio.refresh2(&Command::new(cmd as u8, param));
-        // embassy_time::block_for(embassy_time::Duration::from_millis(2));
-        // cmd_pio.refresh(&sync_cmd);
-        // vsync
-        // line.start();
-        // update_frame(&mut cmd_pio, &palette, frame);
-        // frame += 1;
-        // frame %= 16;
-        // defmt::info!("main loop");
-        // let img = receiver.receive().await;
-        // for p in img.iter_mut() {
-        //     p[3] = core::cmp::min(p[3], 143);
-        // }
-        // defmt::info!("acquire qoi recv buffer");
-        // for (idx, coloum) in img.chunks(IMG_HEIGHT).enumerate() {
-        //     defmt::info!("update_frame coloum {}", idx);
-        //     let coloum = unsafe { core::mem::transmute(coloum.as_ptr()) };
-        //     cmd_pio.refresh(&sync_cmd);
-        //     // vsync
-        //     line.start();
-        //     // defmt::info!("[begin] update_frame2");
-        //     update_frame2(&mut cmd_pio, coloum);
-        //     // defmt::info!("[end] update_frame2");
-        //     line.wait_stop().await;
-        // }
-        // receiver.receive_done();
-        // defmt::info!("release qoi recv buffer");
-        // line.wait_stop().await;
-        //
-        let h = cnt as u8 % 144;
-        for (idx, c) in coloum.iter_mut().enumerate() {
-            // c[3] = (0 + (idx as u8 / 64)) % 144;
-            c[3] = h;
-        }
-        for _idx in 0..1 {
+
+        sync_signal.wait_for_falling_edge().await;
+        let now = Instant::now();
+        let ticks_per_angle = (now - last_sync_tick).as_ticks() as u32 / TOTAL_ANGLES;
+        last_sync_tick = now;
+        Timer::at(now + Duration::from_ticks((angle * ticks_per_angle) as u64)).await;
+
+        loop {
+            if angle >= end_angle {
+                break;
+            }
             cmd_pio.refresh2(&sync_cmd);
             // vsync
             line.start();
-            // let buf = mbi_rx.receive().await;
-            // cmd_pio.refresh_ptr(buf.buf.as_ptr() as u32, buf.len);
-            // cmd_pio.wait().await;
+            // need sleep at least 15 micros , or there will be emi problem
+            Timer::after_micros(15).await;
+            let buf = mbi_rx.receive().await;
+            cmd_pio.refresh_ptr(buf.buf.as_ptr() as u32, buf.len);
+            cmd_pio.wait().await;
+            mbi_rx.receive_done();
+            line.wait_stop().await;
+            angle += 1;
+            Timer::at(now + Duration::from_ticks((angle * ticks_per_angle) as u64)).await;
+        }
+        angle = start_angle;
+        if cnt & 0x10 != 0 {
+            led_pin.toggle();
+        }
+        cnt += 1;
+    }
+}
+
+async fn test_screen(
+    cmd_pio: &mut clocks2::CmdClock,
+    line: &mut clocks2::LineClockHdl,
+    mbi_rx: &mut zerocopy_channel::Receiver<'static, NoopRawMutex, MbiBuf2>,
+    led_pin: &mut gpio::Output<'_>,
+) {
+    let sync_cmd = Command::new_sync();
+    let confirm_cmd = Command::new_confirm();
+    let mut cnt: usize = 0;
+    let cmd_iter = UMINI_CMDS.iter();
+    for &(cmd, param) in cmd_iter {
+        cmd_pio.refresh2(&confirm_cmd);
+        cmd_pio.refresh2(&Command::new(cmd as u8, param));
+    }
+    let mut cmd_iter = core::iter::repeat(UMINI_CMDS.iter()).flatten();
+
+    let mut buf = [0u16; 16384];
+    let mut coloum: [RGBH; IMG_HEIGHT] = [[255, 255, 255, 0]; IMG_HEIGHT];
+    loop {
+        let &(cmd, param) = cmd_iter.next().unwrap();
+        cmd_pio.refresh2(&confirm_cmd);
+        cmd_pio.refresh2(&Command::new(cmd as u8, param));
+        let h = cnt % 48;
+        for c in coloum.iter_mut() {
+            c[3] = h as u8;
+        }
+        {
+            cmd_pio.refresh2(&sync_cmd);
+            // vsync
+            line.start();
+            // need sleep at least 15 micros , or there will be emi problem
+            Timer::after_micros(15).await;
             // defmt::info!("[begin] update_frame2");
-            block_update_frame(&mut parser, &mut cmd_pio, &coloum);
+            let mut parser = clocks2::ColorParser::new(&mut buf);
+            // block_update_frame(&mut parser, cmd_pio, &coloum);
+            // async_update_frame(&mut parser, cmd_pio, &coloum).await;
+            async_update_frame2(cmd_pio, mbi_rx).await;
             // defmt::info!("[end] update_frame2");
             line.wait_stop().await;
         }
-        // embassy_time::block_for(embassy_time::Duration::from_millis(1000));
-
         if cnt & 0x10 != 0 {
             led_pin.toggle();
         }
@@ -221,6 +252,26 @@ fn block_update_frame(
 ) {
     let _len = update_frame(parser, rgbh_coloum);
     parser.run(cmd_pio);
+}
+
+async fn async_update_frame(
+    parser: &mut clocks2::ColorParser<'_>,
+    cmd_pio: &mut clocks2::CmdClock,
+    rgbh_coloum: &[RGBH; IMG_HEIGHT],
+) {
+    let len = update_frame(parser, rgbh_coloum);
+    cmd_pio.refresh_ptr(parser.buf_ori as u32, len);
+    cmd_pio.wait().await;
+}
+
+async fn async_update_frame2(
+    cmd_pio: &mut clocks2::CmdClock,
+    mbi_rx: &mut zerocopy_channel::Receiver<'static, NoopRawMutex, MbiBuf2>,
+) {
+    let buf = mbi_rx.receive().await;
+    cmd_pio.refresh_ptr(buf.buf.as_ptr() as u32, buf.len);
+    cmd_pio.wait().await;
+    mbi_rx.receive_done();
 }
 
 fn update_frame(parser: &mut clocks2::ColorParser, rgbh_coloum: &[RGBH; IMG_HEIGHT]) -> u32 {
@@ -347,14 +398,14 @@ impl PixelSlot2 {
 
 struct MbiBuf2 {
     len: u32,
-    buf: [u16; 8192],
+    buf: [u16; 16384],
 }
 
 impl MbiBuf2 {
     const fn new() -> Self {
         Self {
             len: 0,
-            buf: [0u16; 8192],
+            buf: [0u16; 16384],
         }
     }
 }
@@ -375,5 +426,25 @@ async fn encode_mbi(
             mbi_tx.send_done();
         }
         img_rx.receive_done();
+    }
+}
+
+#[embassy_executor::task]
+async fn encode_mbi2(mut mbi_tx: zerocopy_channel::Sender<'static, NoopRawMutex, MbiBuf2>) {
+    let mut img_buf = [[255, 255, 255, 0]; IMG_SIZE];
+    for (idx, coloum) in img_buf.chunks_exact_mut(IMG_HEIGHT).enumerate() {
+        for p in coloum {
+            p[3] = idx as u8;
+        }
+    }
+    loop {
+        for coloum in img_buf.chunks_exact(IMG_HEIGHT) {
+            let buf = mbi_tx.send().await;
+            let mut parser = clocks2::ColorParser::new(&mut buf.buf);
+            let coloum: &[RGBH; IMG_HEIGHT] = unsafe { core::mem::transmute(coloum.as_ptr()) };
+            let len = update_frame(&mut parser, &coloum);
+            buf.len = len;
+            mbi_tx.send_done();
+        }
     }
 }
