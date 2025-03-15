@@ -8,7 +8,7 @@ use embassy_sync::{
     blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex},
     zerocopy_channel,
 };
-use embassy_time::{Duration, Instant, Timer};
+use embassy_time::{block_for, Duration, Instant, Timer};
 use static_cell::{ConstStaticCell, StaticCell};
 use {defmt_rtt as _, panic_probe as _};
 // use panic_probe as _;
@@ -194,32 +194,50 @@ async fn test_screen(
 
     let mut buf = [0u16; 16384];
     let mut coloum: [RGBH; IMG_HEIGHT] = [[255, 255, 255, 0]; IMG_HEIGHT];
+    let mut last = Instant::now();
     loop {
-        let &(cmd, param) = cmd_iter.next().unwrap();
-        cmd_pio.refresh2(&confirm_cmd);
-        cmd_pio.refresh2(&Command::new(cmd as u8, param));
-        let h = cnt % 48;
-        for c in coloum.iter_mut() {
-            c[3] = h as u8;
-        }
+        // if cnt & 0x10 != 0 {
+        //     let &(cmd, param) = cmd_iter.next().unwrap();
+        //     cmd_pio.refresh2(&confirm_cmd);
+        //     cmd_pio.refresh2(&Command::new(cmd as u8, param));
+        // }
+        // let h = cnt % 16;
+        // for c in coloum.iter_mut() {
+        //     c[3] = h as u8;
+        // }
         {
-            cmd_pio.refresh2(&sync_cmd);
             // vsync
             line.start();
             // need sleep at least 15 micros , or there will be emi problem
-            Timer::after_micros(15).await;
+            // Timer::after_micros(5).await;
+            // block_for(Duration::from_micros(250)); // no emi with 710fps
+            block_for(Duration::from_micros(10)); // no emi with 718fps
+
+            // let &(cmd, param) = cmd_iter.next().unwrap();
+            // cmd_pio.refresh2(&confirm_cmd);
+            // cmd_pio.refresh2(&Command::new(cmd as u8, param));
+            // block_for(Duration::from_micros(120));
+
             // defmt::info!("[begin] update_frame2");
-            let mut parser = clocks2::ColorParser::new(&mut buf);
+            // let mut parser = clocks2::ColorParser::new(&mut buf);
             // block_update_frame(&mut parser, cmd_pio, &coloum);
             // async_update_frame(&mut parser, cmd_pio, &coloum).await;
             async_update_frame2(cmd_pio, mbi_rx).await;
+            // cmd_pio.refresh2(&sync_cmd);
             // defmt::info!("[end] update_frame2");
-            line.wait_stop().await;
+            // line.wait_stop().await;
         }
         if cnt & 0x10 != 0 {
             led_pin.toggle();
         }
         cnt += 1;
+        if cnt % 5_000 == 0 {
+            let now = Instant::now();
+            let duration_ms = (now - last).as_millis();
+            last = now;
+            let fps = 5_000 * 1000 / duration_ms;
+            defmt::info!("5000 frames in {} ms, {} fps", duration_ms, fps);
+        }
     }
 }
 
@@ -280,6 +298,7 @@ fn update_frame(parser: &mut clocks2::ColorParser, rgbh_coloum: &[RGBH; IMG_HEIG
     let region2 = &rgbh_coloum[128..];
     // init last_h_mod with 15, so the first line's "empty" is first h_mod
     let mut last_h_mod = 15;
+    parser.add_empty(20 * 200);
     for line in 0..64usize {
         // defmt::info!("line {}", line);
         // TODO optimize speed
@@ -332,6 +351,7 @@ fn update_frame(parser: &mut clocks2::ColorParser, rgbh_coloum: &[RGBH; IMG_HEIG
         );
     }
     parser.add_empty_les(15 - last_h_mod as u32);
+    parser.add_sync();
     parser.encode()
 }
 

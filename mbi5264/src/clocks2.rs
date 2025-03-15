@@ -560,6 +560,30 @@ impl<'a> ColorParser<'a> {
             self.add_empty_le(8 - chip_index as u32);
         }
     }
+
+    pub fn add_sync(&mut self) {
+        unsafe {
+            *self.loops += 1;
+            let tail: &mut ColorTranserTail = add_buf_ptr(&mut self.buf);
+            tail.empty_loops = 8 * 1 - 2 - 1;
+            tail.data_loops = 2 - 1;
+            // LE
+            tail.buf[0] = 8;
+            tail.buf[1] = 8;
+        }
+    }
+
+    pub fn add_empty(&mut self, empty_loops: u32) {
+        unsafe {
+            *self.loops += 1;
+            let tail: &mut ColorTranserTail = add_buf_ptr(&mut self.buf);
+            tail.empty_loops = empty_loops + 8 * 1 - 2 - 1;
+            tail.data_loops = 2 - 1;
+            // LE
+            tail.buf[0] = 0;
+            tail.buf[1] = 0;
+        }
+    }
 }
 
 unsafe fn add_buf_ptr<B, T>(buf: &mut *mut B) -> &mut T {
