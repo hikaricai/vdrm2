@@ -56,7 +56,7 @@ impl ErrDetect {
 
 #[bitfield(u16)]
 struct RegCfg1 {
-    #[bits(6, default = 0b111_111)]
+    #[bits(6, default = 0b11_1111)]
     current_gain: u8,
     #[bits(1)]
     _reserved0: u8,
@@ -71,13 +71,11 @@ struct RegCfg1 {
 
 impl RegCfg1 {
     const fn umini_default() -> u16 {
-        let exp = 0x9FA5;
-        let exp2 = 0b1001_1111_1010_0101;
-        let exp = 0x9F2D;
-        let exp2 = 0b1001_1111_0010_1101;
+        let exp = 0x9F3F;
+        let exp2 = 0b1001_1111_0011_1111;
         assert_eq_const(exp, exp2, concat!("line", line!()));
         let v = Self::new()
-            .with_current_gain(0x2D)
+            .with_current_gain(0x3F)
             .with_scan_lines_low(31)
             .0;
         assert_eq_const(v, exp, concat!("line", line!()));
@@ -149,9 +147,6 @@ struct RegCfg4 {
 
 impl RegCfg4 {
     const fn umini_default() -> u16 {
-        let exp = 0xCC1F;
-        let exp2 = 0b1100_1100_0001_1111;
-
         let exp = 0xAC1F;
         let exp2 = 0b1010_1100_0001_1111;
         assert_eq_const(exp, exp2, concat!("line", line!()));
@@ -159,6 +154,8 @@ impl RegCfg4 {
             .with_dimm_compensation2(0x00)
             .with_dimm_compensation1(0x0B)
             .0;
+        // let v = Self::new().0; //only show red
+        // let exp = 0xffff;
         assert_eq_const(v, exp, concat!("line", line!()));
         v
     }

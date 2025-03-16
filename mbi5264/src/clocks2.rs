@@ -122,13 +122,17 @@ impl LineClock {
         gclk_cfg.divider = pwm_div;
         gclk_cfg.top = 200 - 1;
         gclk_cfg.compare_a = 100;
+
         let pwm_gclk = Pwm::new_output_a(pwm1, gclk_pin, gclk_cfg);
         let mut c_cfg = pwm::Config::default();
         c_cfg.divider = pwm_div;
-        c_cfg.top = 100 * 64 - 50 - 1;
+        // let c_ount = 64;
+        let c_ount = 64;
+        c_cfg.top = 100 * c_ount - 50 - 1;
         c_cfg.compare_a = 100;
         let pwm_c = Pwm::new_output_a(pwm7, c_pin, c_cfg);
         embassy_rp::pac::PWM.inte().modify(|w| w.set_ch7(true));
+
         let mut ba_cfg = pwm::Config::default();
         ba_cfg.divider = pwm_div;
         ba_cfg.top = 100 - 1;
@@ -274,10 +278,13 @@ impl CmdClock {
             "loop:",
             //
             "out x, 32", // save empty_cnt to x
+            "jmp x-- loop_empty",
+            "jmp skip_empty",
             "loop_empty:",
             "wait 1 irq 4 [1]",
             "mov pins null",
             "jmp x-- loop_empty",
+            "skip_empty:",
             //
             "out x, 32", // save data_cnt to x
             "loop_data:",
@@ -412,7 +419,7 @@ struct ColorTranser {
     empty_loops: u32,
     data_loops: u32,
     buf: [u16; 8],
-    empty_buf: [u16; 6],
+    empty_buf: [u16; 8],
 }
 
 impl ColorTranser {
@@ -497,7 +504,7 @@ impl<'a> ColorParser<'a> {
             // empty with le
             let meta: &mut TranserMeta = core::mem::transmute(self.buf);
             self.buf = self.buf.add(core::mem::size_of::<TranserMeta>() / 2);
-            meta.empty_loops = 16 * 9 - 1;
+            meta.empty_loops = 16 * 9;
             meta.data_loops = 2 - 1;
             *self.buf = 0;
             self.buf = self.buf.add(1);
@@ -531,10 +538,10 @@ impl<'a> ColorParser<'a> {
 
             let transfer: &mut ColorTranser = add_buf_ptr(&mut self.buf);
             // -1
-            transfer.empty_loops = 2 + chip_inc_index * 16 - 1;
-            transfer.data_loops = 8 + 6 - 1;
+            transfer.empty_loops = chip_inc_index * 16;
+            transfer.data_loops = 8 + 8 - 1;
             transfer.buf = *buf;
-            transfer.empty_buf = [0; 6];
+            transfer.empty_buf = [0; 8];
             if le {
                 transfer.set_le();
             }
@@ -545,7 +552,7 @@ impl<'a> ColorParser<'a> {
         unsafe {
             *self.loops += 1;
             let tail: &mut ColorTranserTail = add_buf_ptr(&mut self.buf);
-            tail.empty_loops = chip_inc_index * 16 - 2 - 1;
+            tail.empty_loops = chip_inc_index * 16 - 2;
             tail.data_loops = 2 - 1;
             // LE
             tail.buf[0] = 0;
@@ -565,7 +572,7 @@ impl<'a> ColorParser<'a> {
         unsafe {
             *self.loops += 1;
             let tail: &mut ColorTranserTail = add_buf_ptr(&mut self.buf);
-            tail.empty_loops = 8 * 1 - 2 - 1;
+            tail.empty_loops = 8 * 1 - 2;
             tail.data_loops = 2 - 1;
             // LE
             tail.buf[0] = 8;
@@ -577,7 +584,7 @@ impl<'a> ColorParser<'a> {
         unsafe {
             *self.loops += 1;
             let tail: &mut ColorTranserTail = add_buf_ptr(&mut self.buf);
-            tail.empty_loops = empty_loops + 8 * 1 - 2 - 1;
+            tail.empty_loops = empty_loops + 8 * 1 - 2;
             tail.data_loops = 2 - 1;
             // LE
             tail.buf[0] = 0;
