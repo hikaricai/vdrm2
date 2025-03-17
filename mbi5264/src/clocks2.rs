@@ -118,24 +118,25 @@ impl LineClock {
             DMA_IRQ_0::disable();
             init_dma1();
         };
+        let w = 100u16;
         let mut gclk_cfg = pwm::Config::default();
         gclk_cfg.divider = pwm_div;
-        gclk_cfg.top = 200 - 1;
-        gclk_cfg.compare_a = 100;
+        gclk_cfg.top = w * 2 - 1;
+        gclk_cfg.compare_a = w;
 
         let pwm_gclk = Pwm::new_output_a(pwm1, gclk_pin, gclk_cfg);
         let mut c_cfg = pwm::Config::default();
         c_cfg.divider = pwm_div;
         // let c_ount = 64;
-        let c_ount = 66;
-        c_cfg.top = 100 * c_ount - 50 - 1;
-        c_cfg.compare_a = 100;
+        let c_ount = 64;
+        c_cfg.top = w * c_ount - 50 - 1;
+        c_cfg.compare_a = w;
         let pwm_c = Pwm::new_output_a(pwm7, c_pin, c_cfg);
         embassy_rp::pac::PWM.inte().modify(|w| w.set_ch7(true));
 
         let mut ba_cfg = pwm::Config::default();
         ba_cfg.divider = pwm_div;
-        ba_cfg.top = 100 - 1;
+        ba_cfg.top = w - 1;
         ba_cfg.compare_a = 3;
         ba_cfg.compare_b = 1;
         let pwm_ba = Pwm::new_output_ab(pwm8, b_pin, a_pin, ba_cfg);
@@ -568,11 +569,11 @@ impl<'a> ColorParser<'a> {
         }
     }
 
-    pub fn add_sync(&mut self) {
+    pub fn add_sync(&mut self, empty_loops: u32) {
         unsafe {
             *self.loops += 1;
             let tail: &mut ColorTranserTail = add_buf_ptr(&mut self.buf);
-            tail.empty_loops = 8;
+            tail.empty_loops = empty_loops;
             tail.data_loops = 2 - 1;
             // LE
             tail.buf[0] = 8;
@@ -581,6 +582,9 @@ impl<'a> ColorParser<'a> {
     }
 
     pub fn add_empty(&mut self, empty_loops: u32) {
+        if empty_loops == 0 {
+            return;
+        }
         unsafe {
             *self.loops += 1;
             let tail: &mut ColorTranserTail = add_buf_ptr(&mut self.buf);

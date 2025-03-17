@@ -129,7 +129,7 @@ impl RegCfg3 {
             .with_dark_compensation2(0x17)
             .0;
         assert_eq_const(v, exp, concat!("line", line!()));
-        0x8000
+        v
     }
 }
 

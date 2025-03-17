@@ -299,7 +299,7 @@ fn update_frame(parser: &mut clocks2::ColorParser, rgbh_coloum: &[RGBH; IMG_HEIG
     let region2 = &rgbh_coloum[128..];
     // init last_h_mod with 15, so the first line's "empty" is first h_mod
     let mut last_h_mod = 15;
-    parser.add_empty(4500);
+    parser.add_empty(4200);
     for line in 0..64usize {
         // defmt::info!("line {}", line);
         // TODO optimize speed
@@ -352,8 +352,8 @@ fn update_frame(parser: &mut clocks2::ColorParser, rgbh_coloum: &[RGBH; IMG_HEIG
         );
     }
     parser.add_empty_les(15 - last_h_mod as u32);
-    parser.add_sync();
-    parser.add_empty(64);
+    parser.add_sync(8);
+    parser.add_empty(8);
     parser.encode()
 }
 
@@ -459,7 +459,7 @@ async fn encode_mbi2(mut mbi_tx: zerocopy_channel::Sender<'static, NoopRawMutex,
     for (idx, coloum) in img_buf.chunks_exact_mut(IMG_HEIGHT).enumerate() {
         for p in coloum {
             p[3] = idx as u8;
-            let gray = 1 * (idx as u8 / 6);
+            let gray = 16 * ((idx as u8 / 12) + 12);
             *p = [gray, gray, gray, idx as u8];
         }
     }
