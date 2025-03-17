@@ -127,7 +127,7 @@ impl LineClock {
         let mut c_cfg = pwm::Config::default();
         c_cfg.divider = pwm_div;
         // let c_ount = 64;
-        let c_ount = 64;
+        let c_ount = 66;
         c_cfg.top = 100 * c_ount - 50 - 1;
         c_cfg.compare_a = 100;
         let pwm_c = Pwm::new_output_a(pwm7, c_pin, c_cfg);
@@ -541,7 +541,7 @@ impl<'a> ColorParser<'a> {
             transfer.empty_loops = chip_inc_index * 16;
             transfer.data_loops = 8 + 8 - 1;
             transfer.buf = *buf;
-            transfer.empty_buf = [0; 8];
+            transfer.empty_buf = [0x0777; 8];
             if le {
                 transfer.set_le();
             }
@@ -572,7 +572,7 @@ impl<'a> ColorParser<'a> {
         unsafe {
             *self.loops += 1;
             let tail: &mut ColorTranserTail = add_buf_ptr(&mut self.buf);
-            tail.empty_loops = 8 * 1 - 2;
+            tail.empty_loops = 8;
             tail.data_loops = 2 - 1;
             // LE
             tail.buf[0] = 8;
