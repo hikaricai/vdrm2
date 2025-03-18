@@ -129,7 +129,7 @@ impl LineClock {
         c_cfg.divider = pwm_div;
         // let c_ount = 64;
         let c_ount = 64;
-        c_cfg.top = w * c_ount - 50 - 1;
+        c_cfg.top = w * c_ount - w / 2 - 1;
         c_cfg.compare_a = w;
         let pwm_c = Pwm::new_output_a(pwm7, c_pin, c_cfg);
         embassy_rp::pac::PWM.inte().modify(|w| w.set_ch7(true));
@@ -254,11 +254,19 @@ impl CmdClock {
             ..
         } = pio0;
 
+        // delay param
+        // clk    data   irq
+        // 3      2
+        // 4      3
+        // 5      4      2
+        // 6      5      3   // ok
         let clk_program_data = pio_proc::pio_asm!(
+            ".define public DELAY 6",
             ".side_set 1",
             ".wrap_target",
-            "irq 4           side 0b0 [3]", // increase the delay if something get wrong
-            "irq 4           side 0b1 [3]",
+            "nop             side 0b0 [DELAY - 1]", // increase the delay if something get wrong
+            "irq 4           side 0b0 [0]",
+            "nop             side 0b1 [DELAY]"
             ".wrap",
         );
         let clk_prog = common.load_program(&clk_program_data.program);
@@ -270,12 +278,13 @@ impl CmdClock {
         clk_sm.set_config(&cfg);
 
         let data_program_data = pio_proc::pio_asm!(
-            ".define public DELAY 2"
+            ".define public DELAY 5"
+            ".define public IRQ_DELAY 3"
             ".wrap_target",
             "mov pins null [DELAY]"
             "out y, 32",    // save loop_cnt to y
             "wait 1 irq 4",
-            "wait 1 irq 4", // sync irq
+            "wait 1 irq 4 [IRQ_DELAY]", // sync irq
             "loop:",
             "mov pins null [DELAY]"
             "out x, 32", // save empty_cnt to x, at least 3 empty

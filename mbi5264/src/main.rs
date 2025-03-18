@@ -196,11 +196,11 @@ async fn test_screen(
     let mut coloum: [RGBH; IMG_HEIGHT] = [[255, 255, 255, 0]; IMG_HEIGHT];
     let mut last = Instant::now();
     loop {
-        // if cnt & 0x10 != 0 {
-        //     let &(cmd, param) = cmd_iter.next().unwrap();
-        //     cmd_pio.refresh2(&confirm_cmd);
-        //     cmd_pio.refresh2(&Command::new(cmd as u8, param));
-        // }
+        if cnt & 0x10 != 0 {
+            // let &(cmd, param) = cmd_iter.next().unwrap();
+            // cmd_pio.refresh2(&confirm_cmd);
+            // cmd_pio.refresh2(&Command::new(cmd as u8, param));
+        }
         // let h = cnt % 16;
         // for c in coloum.iter_mut() {
         //     c[3] = h as u8;
@@ -456,13 +456,13 @@ async fn encode_mbi2(mut mbi_tx: zerocopy_channel::Sender<'static, NoopRawMutex,
     let gray = 0b11111_111_0_00000_00;
     let gray = 126u8;
     let mut img_buf = [[gray, gray, gray, 16]; IMG_SIZE];
-    // for (idx, coloum) in img_buf.chunks_exact_mut(IMG_HEIGHT).enumerate() {
-    //     for p in coloum {
-    //         p[3] = idx as u8;
-    //         let gray = idx as u8 / 3;
-    //         *p = [gray, gray, gray, idx as u8];
-    //     }
-    // }
+    for (idx, coloum) in img_buf.chunks_exact_mut(IMG_HEIGHT).enumerate() {
+        for p in coloum {
+            p[3] = idx as u8;
+            let gray = 16 * (idx as u8 / 3);
+            *p = [gray, gray, gray, idx as u8];
+        }
+    }
     loop {
         for coloum in img_buf.chunks_exact(IMG_HEIGHT) {
             let buf = mbi_tx.send().await;
