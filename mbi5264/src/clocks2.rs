@@ -217,7 +217,6 @@ impl LineClockHdl {
 
 // 2(loop_size) + 2(empty_size) + 2(cmd_size) + 16(chip bits) x 9(chips)
 pub const CMD_BUF_SIZE: usize = 2 + 2 + 2 + 16 * 9;
-const ONE_COMMAND_LOOPS: u32 = 16 * 9 - 1;
 
 pub struct CmdClockPins {
     pub clk_pin: peripherals::PIN_1,
@@ -258,8 +257,8 @@ impl CmdClock {
         let clk_program_data = pio_proc::pio_asm!(
             ".side_set 1",
             ".wrap_target",
-            "irq 4           side 0b0 [6]", // increase the delay if something get wrong
-            "irq 4           side 0b1 [6]",
+            "irq 4           side 0b0 [3]", // increase the delay if something get wrong
+            "irq 4           side 0b1 [3]",
             ".wrap",
         );
         let clk_prog = common.load_program(&clk_program_data.program);
@@ -271,27 +270,25 @@ impl CmdClock {
         clk_sm.set_config(&cfg);
 
         let data_program_data = pio_proc::pio_asm!(
+            ".define public DELAY 2"
             ".wrap_target",
-            "wait 1 irq 4 [1]", // [1] fix emi
-            "mov pins null",
+            "mov pins null [DELAY]"
             "out y, 32",    // save loop_cnt to y
-            "wait 1 irq 4", // pre wait to clear old irq
+            "wait 1 irq 4",
+            "wait 1 irq 4", // sync irq
             "loop:",
-            //
-            "out x, 32", // save empty_cnt to x
-            "jmp x-- loop_empty",
-            "jmp skip_empty",
+            "mov pins null [DELAY]"
+            "out x, 32", // save empty_cnt to x, at least 3 empty
             "loop_empty:",
-            "wait 1 irq 4 [1]",
-            "mov pins null",
+            "mov pins null [DELAY]",
             "jmp x-- loop_empty",
-            "skip_empty:",
             //
-            "out x, 32", // save data_cnt to x
+            "mov pins null [DELAY]"
+            "out x, 32", // save data_cnt to x, at least 2 data
             "loop_data:",
-            "wait 1 irq 4 [1]",
-            "out pins, 16",
+            "out pins, 16 [DELAY]",
             "jmp x-- loop_data",
+            "out pins, 16 [DELAY]", // more one data
             "jmp y-- loop",
             ".wrap",
         );
@@ -388,9 +385,9 @@ impl CmdClock {
             *b |= 0x8;
         }
         let buf: &mut [u32; CMD_BUF_SIZE / 2] = unsafe { core::mem::transmute(&mut self.data_buf) };
-        buf[0] = 0;
-        buf[1] = 0;
-        buf[2] = ONE_COMMAND_LOOPS;
+        buf[0] = 0; // loop cnt
+        buf[1] = 3 - 3; // empty cnt
+        buf[2] = 16 * 9 - 2;
 
         let p = self.data_ch.regs();
         p.trans_count().write_value(buf.len() as u32);
@@ -420,13 +417,6 @@ struct ColorTranser {
     empty_loops: u32,
     data_loops: u32,
     buf: [u16; 8],
-    empty_buf: [u16; 8],
-}
-
-impl ColorTranser {
-    fn set_le(&mut self) {
-        self.empty_buf[5] |= 0x8;
-    }
 }
 
 #[repr(C)]
@@ -503,14 +493,10 @@ impl<'a> ColorParser<'a> {
             *self.loops += 1;
 
             // empty with le
-            let meta: &mut TranserMeta = core::mem::transmute(self.buf);
-            self.buf = self.buf.add(core::mem::size_of::<TranserMeta>() / 2);
-            meta.empty_loops = 16 * 9;
-            meta.data_loops = 2 - 1;
-            *self.buf = 0;
-            self.buf = self.buf.add(1);
-            *self.buf = 0x8;
-            self.buf = self.buf.add(1);
+            let meta: &mut ColorTranserTail = add_buf_ptr(&mut self.buf);
+            meta.empty_loops = 16 * 9 - 3;
+            meta.data_loops = 2 - 2;
+            meta.buf = [0, 8];
 
             // many le
             if empty_size <= 1 {
@@ -518,43 +504,43 @@ impl<'a> ColorParser<'a> {
             }
             *self.loops += 1;
             let empty_size = empty_size - 1;
-            let meta: &mut TranserMeta = core::mem::transmute(self.buf);
-            self.buf = self.buf.add(core::mem::size_of::<TranserMeta>() / 2);
+            let meta: &mut TranserMeta = add_buf_ptr(&mut self.buf);
             meta.empty_loops = 0;
-            meta.data_loops = empty_size * 2 - 1;
-            let mut u32_buf = self.buf as *mut u32;
+            meta.data_loops = empty_size * 2 - 2;
             for _ in 0..empty_size {
+                let u32_buf: &mut u32 = add_buf_ptr(&mut self.buf);
                 *u32_buf = 0x0008_0000;
-                u32_buf = u32_buf.add(1);
             }
-            self.buf = u32_buf as *mut u16;
         }
     }
 
     pub fn add_color2(&mut self, buf: &[u16; 8], chip_index: u32, last_chip_idx: u32) {
         let le = chip_index == 8;
         let chip_inc_index = chip_index - last_chip_idx;
+        let empty_loops = chip_inc_index * 16 + 8 - 3;
         unsafe {
             *self.loops += 1;
 
             let transfer: &mut ColorTranser = add_buf_ptr(&mut self.buf);
             // -1
-            transfer.empty_loops = chip_inc_index * 16;
-            transfer.data_loops = 8 + 8 - 1;
+            transfer.empty_loops = empty_loops;
+            transfer.data_loops = 8 - 2;
             transfer.buf = *buf;
-            transfer.empty_buf = [0x0777; 8];
             if le {
-                transfer.set_le();
+                transfer.data_loops += 8;
+                let le_buf: &mut [u16; 8] = add_buf_ptr(&mut self.buf);
+                *le_buf = [0; 8];
+                le_buf[7] = 0x8;
             }
         }
     }
 
-    pub fn add_empty_le(&mut self, chip_inc_index: u32) {
+    fn add_empty_le(&mut self, chip_inc_index: u32) {
         unsafe {
             *self.loops += 1;
             let tail: &mut ColorTranserTail = add_buf_ptr(&mut self.buf);
-            tail.empty_loops = chip_inc_index * 16 - 2;
-            tail.data_loops = 2 - 1;
+            tail.empty_loops = chip_inc_index * 16 + 8 - 2 - 3;
+            tail.data_loops = 2 - 2;
             // LE
             tail.buf[0] = 0;
             tail.buf[1] = 8;
@@ -574,7 +560,7 @@ impl<'a> ColorParser<'a> {
             *self.loops += 1;
             let tail: &mut ColorTranserTail = add_buf_ptr(&mut self.buf);
             tail.empty_loops = empty_loops;
-            tail.data_loops = 2 - 1;
+            tail.data_loops = 2 - 2;
             // LE
             tail.buf[0] = 8;
             tail.buf[1] = 8;
@@ -588,8 +574,8 @@ impl<'a> ColorParser<'a> {
         unsafe {
             *self.loops += 1;
             let tail: &mut ColorTranserTail = add_buf_ptr(&mut self.buf);
-            tail.empty_loops = empty_loops + 8 * 1 - 2;
-            tail.data_loops = 2 - 1;
+            tail.empty_loops = empty_loops + 8 * 1 - 3;
+            tail.data_loops = 2 - 2;
             // LE
             tail.buf[0] = 0;
             tail.buf[1] = 0;

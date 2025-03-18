@@ -454,15 +454,15 @@ async fn encode_mbi(
 #[embassy_executor::task]
 async fn encode_mbi2(mut mbi_tx: zerocopy_channel::Sender<'static, NoopRawMutex, MbiBuf2>) {
     let gray = 0b11111_111_0_00000_00;
-    let gray = 192u8;
-    let mut img_buf = [[gray, gray, gray, 0]; IMG_SIZE];
-    for (idx, coloum) in img_buf.chunks_exact_mut(IMG_HEIGHT).enumerate() {
-        for p in coloum {
-            p[3] = idx as u8;
-            let gray = 16 * ((idx as u8 / 12) + 12);
-            *p = [gray, gray, gray, idx as u8];
-        }
-    }
+    let gray = 126u8;
+    let mut img_buf = [[gray, gray, gray, 16]; IMG_SIZE];
+    // for (idx, coloum) in img_buf.chunks_exact_mut(IMG_HEIGHT).enumerate() {
+    //     for p in coloum {
+    //         p[3] = idx as u8;
+    //         let gray = idx as u8 / 3;
+    //         *p = [gray, gray, gray, idx as u8];
+    //     }
+    // }
     loop {
         for coloum in img_buf.chunks_exact(IMG_HEIGHT) {
             let buf = mbi_tx.send().await;
