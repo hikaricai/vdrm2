@@ -87,7 +87,9 @@ async fn main(spawner: Spawner) {
         .as_mut()
         .unwrap();
     sys_pll.fbdiv = 125;
-    sys_pll.post_div1 = 4;
+    // overclock
+    // sys_pll.post_div1 = 4;
+    sys_pll.post_div1 = 6;
     let p = embassy_rp::init(config);
     embassy_rp::pac::BUSCTRL.bus_priority().write(|w| {
         w.set_dma_r(true);
