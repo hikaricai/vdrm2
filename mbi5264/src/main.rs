@@ -312,7 +312,9 @@ fn update_frame(parser: &mut clocks2::ColorParser, rgbh_coloum: &[RGBH; IMG_HEIG
     let region2 = &rgbh_coloum[128..];
     // init last_h_mod with 15, so the first line's "empty" is first h_mod
     let mut last_h_mod = 15;
-    parser.add_empty(4200);
+    // FIXME maybe gclk share same sram
+    // will cause image brocken if too small
+    parser.add_empty(5000);
     for line in 0..64usize {
         // defmt::info!("line {}", line);
         // TODO optimize speed

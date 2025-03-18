@@ -118,7 +118,7 @@ impl LineClock {
             DMA_IRQ_0::disable();
             init_dma1();
         };
-        let w = 100u16;
+        let w = 70u16;
         let mut gclk_cfg = pwm::Config::default();
         gclk_cfg.divider = pwm_div;
         gclk_cfg.top = w * 2 - 1;
@@ -256,12 +256,12 @@ impl CmdClock {
 
         // delay param
         // clk    data   irq
-        // 3      2
-        // 4      3
+        // 3      2      2
+        // 4      3      2
         // 5      4      2
-        // 6      5      3   // ok
+        // 6      5      3
         let clk_program_data = pio_proc::pio_asm!(
-            ".define public DELAY 4",
+            ".define public DELAY 3",
             ".side_set 1",
             ".wrap_target",
             "nop             side 0b0 [DELAY - 1]", // increase the delay if something get wrong
@@ -278,7 +278,7 @@ impl CmdClock {
         clk_sm.set_config(&cfg);
 
         let data_program_data = pio_proc::pio_asm!(
-            ".define public DELAY 3"
+            ".define public DELAY 2"
             ".define public IRQ_DELAY 2"
             ".wrap_target",
             "mov pins null [DELAY]"
