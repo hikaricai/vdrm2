@@ -515,10 +515,14 @@ impl<'a> ColorParser<'a> {
             let empty_size = empty_size - 1;
             let meta: &mut TranserMeta = add_buf_ptr(&mut self.buf);
             meta.empty_loops = 0;
-            meta.data_loops = empty_size * 2 - 2;
+            meta.data_loops = empty_size * 4 - 2;
+            // cmd to cmd time is at least 50ns when 3.3v
+            // here is about 100ns
             for _ in 0..empty_size {
                 let u32_buf: &mut u32 = add_buf_ptr(&mut self.buf);
                 *u32_buf = 0x0008_0000;
+                let u32_buf: &mut u32 = add_buf_ptr(&mut self.buf);
+                *u32_buf = 0x0000_0000;
             }
         }
     }

@@ -77,7 +77,18 @@ async fn main(spawner: Spawner) {
     // defmt::info!("Hello there!");
     let core_num = embassy_rp::pac::SIO.cpuid().read();
     defmt::info!("main core {}", core_num);
-    let p = embassy_rp::init(Default::default());
+    let mut config = embassy_rp::config::Config::default();
+    let sys_pll = config
+        .clocks
+        .xosc
+        .as_mut()
+        .unwrap()
+        .sys_pll
+        .as_mut()
+        .unwrap();
+    sys_pll.fbdiv = 125;
+    sys_pll.post_div1 = 4;
+    let p = embassy_rp::init(config);
     embassy_rp::pac::BUSCTRL.bus_priority().write(|w| {
         w.set_dma_r(true);
         w.set_dma_w(true);
