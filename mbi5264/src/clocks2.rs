@@ -446,6 +446,7 @@ pub struct ColorParser<'a> {
     pub buf: *mut u16,
     pub buf_ori: *mut u16,
     pub cnt: usize,
+    pub last_empties: u32,
 }
 
 impl<'a> ColorParser<'a> {
@@ -459,6 +460,7 @@ impl<'a> ColorParser<'a> {
             buf,
             buf_ori,
             cnt: 0,
+            last_empties: 0,
         }
     }
 
@@ -494,6 +496,18 @@ impl<'a> ColorParser<'a> {
         self.reinit();
     }
 
+    #[inline]
+    fn reduce_empty_loops(last_empties: u32, required_empty_loops: u32) -> u32 {
+        let mut empty_loops = if last_empties > required_empty_loops {
+            0u32
+        } else {
+            required_empty_loops - last_empties
+        };
+        if empty_loops >= 3 {
+            empty_loops -= 3;
+        }
+        empty_loops
+    }
     pub fn add_empty_les(&mut self, empty_size: u32) {
         if empty_size == 0 {
             return;
@@ -503,7 +517,8 @@ impl<'a> ColorParser<'a> {
 
             // empty with le
             let meta: &mut ColorTranserTail = add_buf_ptr(&mut self.buf);
-            meta.empty_loops = 16 * 9 - 3;
+            let empty_loops: u32 = 16 * 9;
+            meta.empty_loops = Self::reduce_empty_loops(self.last_empties, empty_loops);
             meta.data_loops = 2 - 2;
             meta.buf = [0, 8];
 
@@ -525,18 +540,19 @@ impl<'a> ColorParser<'a> {
                 *u32_buf = 0x0000_0000;
             }
         }
+        self.last_empties = 16 * 9;
     }
 
     pub fn add_color2(&mut self, buf: &[u16; 8], chip_index: u32, last_chip_idx: u32) {
         let le = chip_index == 8;
         let chip_inc_index = chip_index - last_chip_idx;
-        let empty_loops = chip_inc_index * 16 + 8 - 3;
+        let empty_loops = chip_inc_index * 16 + 8;
         unsafe {
             *self.loops += 1;
 
             let transfer: &mut ColorTranser = add_buf_ptr(&mut self.buf);
             // -1
-            transfer.empty_loops = empty_loops;
+            transfer.empty_loops = Self::reduce_empty_loops(self.last_empties, empty_loops);
             transfer.data_loops = 8 - 2;
             transfer.buf = *buf;
             if le {
@@ -546,18 +562,21 @@ impl<'a> ColorParser<'a> {
                 le_buf[7] = 0x8;
             }
         }
+        self.last_empties = 0;
     }
 
     fn add_empty_le(&mut self, chip_inc_index: u32) {
+        let empty_loops = chip_inc_index * 16 + 8 - 2;
         unsafe {
             *self.loops += 1;
             let tail: &mut ColorTranserTail = add_buf_ptr(&mut self.buf);
-            tail.empty_loops = chip_inc_index * 16 + 8 - 2 - 3;
+            tail.empty_loops = empty_loops - 3;
             tail.data_loops = 2 - 2;
             // LE
             tail.buf[0] = 0;
             tail.buf[1] = 8;
         }
+        self.last_empties = empty_loops;
     }
 
     pub fn add_color_end(&mut self, buf: &[u16; 8], chip_index: u32, last_chip_idx: u32) {
