@@ -474,7 +474,7 @@ async fn encode_mbi2(mut mbi_tx: zerocopy_channel::Sender<'static, NoopRawMutex,
     for (idx, coloum) in img_buf.chunks_exact_mut(IMG_HEIGHT).enumerate() {
         for (col, p) in coloum.iter_mut().enumerate() {
             let h = (col / 16 + idx) as u8;
-            let gray = 8 * ((idx as u8) / 3);
+            let gray = 16 * ((idx as u8) / 3);
             // let gray = 128;
             *p = [gray, gray, gray, h];
         }
