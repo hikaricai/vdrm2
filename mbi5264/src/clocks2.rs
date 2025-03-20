@@ -6,12 +6,13 @@ use embassy_rp::peripherals::{DMA_CH0, DMA_CH1, PIO0};
 use embassy_rp::pio::{self, Pio, ShiftConfig, StateMachine};
 use embassy_rp::pwm::{self, Pwm, PwmBatch};
 use embassy_rp::{gpio, interrupt, pac, Peripheral, PeripheralRef, Peripherals};
-use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, ThreadModeRawMutex};
 use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::signal::Signal;
 use embassy_sync::waitqueue::AtomicWaker;
+use embassy_time::{block_for, Duration};
 
-static LINE_CLOCK: Mutex<CriticalSectionRawMutex, RefCell<Option<LineClock>>> =
+static LINE_CLOCK: Mutex<ThreadModeRawMutex, RefCell<Option<LineClock>>> =
     Mutex::new(RefCell::new(None));
 
 // TODO delete this?
@@ -79,13 +80,28 @@ impl core::future::Future for DataTransfer {
 struct PwmInterruptHandler {}
 
 impl Handler<PWM_IRQ_WRAP> for PwmInterruptHandler {
+    #[link_section = ".data"]
+    #[inline(never)]
     unsafe fn on_interrupt() {
-        critical_section::with(|cs| {
-            let mut guard = LINE_CLOCK.borrow(cs).borrow_mut();
-            let line = guard.as_mut().unwrap();
-            line.handle_interupt();
-        });
+        let p = unsafe { Peripherals::steal() };
+        let mut dbg_pin = gpio::Output::new(p.PIN_19, gpio::Level::High);
+        let line_clock = unsafe {
+            (&LINE_CLOCK as *const Mutex<ThreadModeRawMutex, RefCell<Option<LineClock>>>
+                as *mut Mutex<ThreadModeRawMutex, RefCell<Option<LineClock>>>)
+        };
+
+        let line_clock: &mut Mutex<ThreadModeRawMutex, RefCell<Option<LineClock>>> =
+            core::mem::transmute(line_clock);
+        let line = line_clock.get_mut();
+        let line = line.get_mut().as_mut().unwrap();
+        line.handle_interupt();
+        // critical_section::with(|cs| {
+        //     let mut guard = LINE_CLOCK.borrow(cs).borrow_mut();
+        //     let line = guard.as_mut().unwrap();
+        //     line.handle_interupt();
+        // });
         PWM_OFF_SIGNAL.signal(());
+        dbg_pin.set_low();
     }
 }
 
@@ -108,6 +124,7 @@ pub struct LineClock {
     pwm_tail_cfg: LinePwmConfig,
     started: bool,
     state: PwmState,
+    all_batch: PwmBatch,
 }
 
 impl LineClock {
@@ -130,6 +147,20 @@ impl LineClock {
             init_dma1();
         };
         let pwm_div = 5.into();
+
+        let w = 2u16;
+        let mut gclk_cfg = pwm::Config::default();
+        gclk_cfg.divider = pwm_div;
+        gclk_cfg.top = w - 1;
+        gclk_cfg.compare_a = w / 2;
+
+        let mut c_cfg = pwm::Config::default();
+        c_cfg.divider = pwm_div;
+        let c_ount = 32 * 31;
+        c_cfg.top = w * c_ount - 1;
+        c_cfg.compare_a = w;
+        let pwm_tail_cfg = LinePwmConfig { gclk_cfg, c_cfg };
+
         let w = 70u16;
         let mut gclk_cfg = pwm::Config::default();
         gclk_cfg.divider = pwm_div;
@@ -148,18 +179,6 @@ impl LineClock {
 
         let pwm_cfg = LinePwmConfig { gclk_cfg, c_cfg };
 
-        let mut gclk_cfg = pwm::Config::default();
-        gclk_cfg.divider = pwm_div;
-        gclk_cfg.top = w - 1;
-        gclk_cfg.compare_a = w / 2;
-
-        let mut c_cfg = pwm::Config::default();
-        c_cfg.divider = pwm_div;
-        let c_ount = 32 * 31;
-        c_cfg.top = w * c_ount - 1;
-        c_cfg.compare_a = w;
-        let pwm_tail_cfg = LinePwmConfig { gclk_cfg, c_cfg };
-
         let mut ba_cfg = pwm::Config::default();
         ba_cfg.divider = pwm_div;
         ba_cfg.top = w - 1;
@@ -167,6 +186,11 @@ impl LineClock {
         ba_cfg.compare_b = 1;
         let pwm_ba = Pwm::new_output_ab(pwm8, b_pin, a_pin, ba_cfg);
 
+        let mut all_batch: PwmBatch = unsafe { core::mem::transmute(0u32) };
+
+        all_batch.enable(&pwm_gclk);
+        all_batch.enable(&pwm_c);
+        all_batch.enable(&pwm_ba);
         let this = Self {
             pwm_gclk,
             pwm_c,
@@ -175,6 +199,7 @@ impl LineClock {
             pwm_tail_cfg,
             started: false,
             state: PwmState::Idle,
+            all_batch,
         };
         LINE_CLOCK.lock(|v| v.borrow_mut().replace(this));
         LineClockHdl { started: false }
@@ -183,58 +208,68 @@ impl LineClock {
     pub fn start(&mut self) {
         self.stop();
         PWM_OFF_SIGNAL.reset();
-        self.pwm_gclk.set_config(&self.pwm_cfg.gclk_cfg);
-        self.pwm_c.set_config(&self.pwm_cfg.c_cfg);
+        // self.pwm_gclk.set_config(&self.pwm_cfg.gclk_cfg);
+        // self.pwm_c.set_config(&self.pwm_cfg.c_cfg);
+
+        pac::IO_BANK0.gpio(16).ctrl().write(|w| w.set_funcsel(4));
+        pac::IO_BANK0.gpio(17).ctrl().write(|w| w.set_funcsel(4));
+        pac::IO_BANK0.gpio(18).ctrl().write(|w| w.set_funcsel(4));
 
         PwmBatch::set_enabled(true, |batch| {
-            batch.enable(&self.pwm_gclk);
-            batch.enable(&self.pwm_c);
-            batch.enable(&self.pwm_ba);
+            *batch = unsafe { core::mem::transmute_copy(&self.all_batch) };
         });
-        self.pwm_ba.phase_retard();
+        // self.pwm_ba.phase_retard();
         self.started = true;
         self.state = PwmState::Freshing;
     }
 
+    #[inline]
     pub fn stop(&mut self) {
-        self.started = false;
         PwmBatch::set_enabled(false, |batch| {
-            batch.enable(&self.pwm_gclk);
-            batch.enable(&self.pwm_c);
-            batch.enable(&self.pwm_ba);
+            *batch = unsafe { core::mem::transmute_copy(&self.all_batch) };
         });
+        self.started = false;
         self.pwm_gclk.set_counter(0);
         self.pwm_c.set_counter(0);
         self.pwm_ba.set_counter(0);
     }
 
+    #[inline]
     fn set_pwm_ba_high(&self) {
         let p = unsafe { Peripherals::steal() };
         let pin_b = gpio::Output::new(p.PIN_16, gpio::Level::High);
         let pin_a = gpio::Output::new(p.PIN_17, gpio::Level::Low);
-        PwmBatch::set_enabled(true, |batch| {
-            batch.enable(&self.pwm_ba);
-        });
-        PwmBatch::set_enabled(false, |batch| {
-            batch.enable(&self.pwm_ba);
-        });
-        self.pwm_ba.set_counter(0);
+        let pin_gclk = gpio::Output::new(p.PIN_18, gpio::Level::Low);
+        // PwmBatch::set_enabled(true, |batch| {
+        //     batch.enable(&self.pwm_ba);
+        //     batch.enable(&self.pwm_gclk);
+        // });
+        // PwmBatch::set_enabled(false, |batch| {
+        //     batch.enable(&self.pwm_ba);
+        //     batch.enable(&self.pwm_gclk);
+        // });
+        // self.pwm_gclk.set_counter(0);
+        // self.pwm_ba.set_counter(0);
 
-        core::mem::drop(pin_b);
-        core::mem::drop(pin_a);
-        pac::IO_BANK0.gpio(16).ctrl().write(|w| w.set_funcsel(4));
-        pac::IO_BANK0.gpio(17).ctrl().write(|w| w.set_funcsel(4));
+        // core::mem::drop(pin_b);
+        // core::mem::drop(pin_a);
+        // core::mem::drop(pin_gclk);
+        // pac::IO_BANK0.gpio(16).ctrl().write(|w| w.set_funcsel(4));
+        // pac::IO_BANK0.gpio(17).ctrl().write(|w| w.set_funcsel(4));
+        // pac::IO_BANK0.gpio(18).ctrl().write(|w| w.set_funcsel(4));
     }
 
+    #[inline]
     fn tail_gclk(&mut self) {
         self.pwm_gclk.set_config(&self.pwm_tail_cfg.gclk_cfg);
         self.pwm_c.set_config(&self.pwm_tail_cfg.c_cfg);
-        PwmBatch::set_enabled(false, |batch| {
+        PwmBatch::set_enabled(true, |batch| {
             batch.enable(&self.pwm_gclk);
             batch.enable(&self.pwm_c);
         });
     }
 
+    #[inline]
     fn handle_interupt(&mut self) {
         self.stop();
         self.pwm_c.clear_wrapped();
@@ -243,7 +278,7 @@ impl LineClock {
             PwmState::Freshing => {
                 self.state = PwmState::Ending;
                 self.set_pwm_ba_high();
-                self.tail_gclk();
+                // self.tail_gclk();
             }
             PwmState::Ending => {
                 self.state = PwmState::Idle;
