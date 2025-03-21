@@ -71,11 +71,23 @@ struct RegCfg1 {
 
 impl RegCfg1 {
     const fn umini_default() -> u16 {
-        let exp = 0x9F3F;
-        let exp2 = 0b1001_1111_0011_1111;
+        // let exp = 0x9F3F;
+        // let exp2 = 0b1001_1111_0011_1111;
+        // assert_eq_const(exp, exp2, concat!("line", line!()));
+        // let v = Self::new()
+        //     .with_current_gain(0x3F)
+        //     .with_scan_lines_low(31)
+        //     .0;
+        // assert_eq_const(v, exp, concat!("line", line!()));
+        // v
+
+        // spwm mode 0b11 512 gclks in 16 loops
+        let exp = 0x9FBF;
+        let exp2 = 0b1001_1111_1011_1111;
         assert_eq_const(exp, exp2, concat!("line", line!()));
         let v = Self::new()
             .with_current_gain(0x3F)
+            .with_spwm_mode_low(true)
             .with_scan_lines_low(31)
             .0;
         assert_eq_const(v, exp, concat!("line", line!()));
