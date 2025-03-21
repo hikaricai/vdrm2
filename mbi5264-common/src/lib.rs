@@ -329,6 +329,10 @@ struct RegCfg13 {
 
 impl RegCfg13 {
     const fn umini_default() -> u16 {
+        // gclk = x / div
+        // gclk = x / n
+        // gclk = x * m
+
         // clk = 10m
         // gclk_freq >= 125k * (spwm_mod 0b11) 512 == 64m
         // ? pll_multi == (79 + 1) / (7 + 1) = 10
@@ -338,11 +342,11 @@ impl RegCfg13 {
         // let exp2 = 0b1010_0111_1001_1111;
         // assert_eq_const(exp, exp2, concat!("line", line!()));
 
-        let exp = 0xA797;
-        let exp2 = 0b1010_0111_1001_0111;
-        assert_eq_const(exp, exp2, concat!("line", line!()));
-        let v = Self::new().with_pll_n(5).with_pll_m(79).0;
-        assert_eq_const(v, exp, concat!("line", line!()));
+        // let exp = 0xA797;
+        // let exp2 = 0b1010_0111_1001_0111;
+        // assert_eq_const(exp, exp2, concat!("line", line!()));
+        let v = Self::new().with_pll_n(5).with_pll_m(39).0;
+        // assert_eq_const(v, exp, concat!("line", line!()));
         v
     }
 }

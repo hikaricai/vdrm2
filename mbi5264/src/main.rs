@@ -208,6 +208,7 @@ async fn test_screen(
     let mut buf = [0u16; 16384];
     let mut coloum: [RGBH; IMG_HEIGHT] = [[255, 255, 255, 0]; IMG_HEIGHT];
     let mut last = Instant::now();
+    let mut frame_cnt = 0u32;
     loop {
         if cnt & 0x10 != 0 {
             // let &(cmd, param) = cmd_iter.next().unwrap();
@@ -221,8 +222,8 @@ async fn test_screen(
         {
             // vsync
             // block_for(Duration::from_micros(50));
-            cmd_pio.refresh2(&sync_cmd);
-            block_for(Duration::from_micros(10));
+            // cmd_pio.refresh2(&sync_cmd);
+            // block_for(Duration::from_micros(10));
             line.start();
             // need sleep at least 15 micros , or there will be emi problem
             // Timer::after_micros(5).await;
@@ -242,6 +243,8 @@ async fn test_screen(
             // cmd_pio.refresh2(&sync_cmd);
             // defmt::info!("[end] update_frame2");
             line.wait_stop().await;
+            // frame_cnt += 1;
+            // frame_cnt %= 16;
         }
         if cnt & 0x10 != 0 {
             led_pin.toggle();
@@ -369,7 +372,7 @@ fn update_frame(parser: &mut clocks2::ColorParser, rgbh_coloum: &[RGBH; IMG_HEIG
         );
     }
     parser.add_empty_les(15 - last_h_mod as u32);
-    // parser.add_sync(8);
+    parser.add_sync(8);
     parser.add_empty(8);
     parser.encode()
 }

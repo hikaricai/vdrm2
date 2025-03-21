@@ -170,21 +170,22 @@ impl LineClock {
             ba_cfg: pwm::Config::default(),
         };
 
-        let w = 80u16;
+        let w = 160u16;
         let mut gclk_cfg = pwm::Config::default();
         gclk_cfg.divider = pwm_div * 2;
         gclk_cfg.top = w - 1;
         gclk_cfg.compare_a = w / 2;
-        gclk_cfg.invert_a = true;
+        // gclk_cfg.invert_a = true;
+        gclk_cfg.invert_a = false;
         gclk_cfg.enable = false;
 
         let pwm_gclk = Pwm::new_output_a(pwm1, gclk_pin, gclk_cfg.clone());
         let mut c_cfg = pwm::Config::default();
-        c_cfg.divider = pwm_div * 4;
+        c_cfg.divider = pwm_div;
         // let c_ount = 64;
         // must be odd
-        let c_w = w / 4;
-        let c_ount = 64 * 32;
+        let c_w = w;
+        let c_ount = 64;
         c_cfg.top = c_w * c_ount - c_w / 2 - 1;
         c_cfg.compare_a = c_w;
         c_cfg.enable = false;
@@ -228,7 +229,6 @@ impl LineClock {
     pub fn start(&mut self) {
         self.stop();
         PWM_OFF_SIGNAL.reset();
-        // self.pwm_cfg.gclk_cfg.invert_a = !self.pwm_cfg.gclk_cfg.invert_a;
         self.pwm_gclk.set_config(&self.pwm_cfg.gclk_cfg);
         self.pwm_c.set_config(&self.pwm_cfg.c_cfg);
         self.pwm_ba.set_config(&self.pwm_cfg.ba_cfg);
@@ -347,7 +347,7 @@ impl LineClock {
             PwmState::Freshing => {
                 self.state = PwmState::Ending;
                 self.set_pwm_ba_high();
-                self.revert_gclk();
+                // self.revert_gclk();
                 // self.tail_gclk();
             }
             PwmState::Ending => {
@@ -695,13 +695,15 @@ impl<'a> ColorParser<'a> {
             let empty_size = empty_size - 1;
             let meta: &mut TranserMeta = add_buf_ptr(&mut self.buf);
             meta.empty_loops = 0;
-            let data_loops = (empty_size - 1) * 4 + 2;
+            let data_loops = (empty_size - 1) * 6 + 2;
             meta.data_loops = data_loops - 2;
-            // cmd to cmd time is at least 80ns when 3.3v
-            // here is about 100ns
+            // cmd to cmd time is at least 200ns when 3.3v
+            // here is about 300ns
             let u32_buf: &mut u32 = add_buf_ptr(&mut self.buf);
             *u32_buf = 0x0008_0000;
             for _ in 1..empty_size {
+                let u32_buf: &mut u32 = add_buf_ptr(&mut self.buf);
+                *u32_buf = 0x0000_0000;
                 let u32_buf: &mut u32 = add_buf_ptr(&mut self.buf);
                 *u32_buf = 0x0000_0000;
                 let u32_buf: &mut u32 = add_buf_ptr(&mut self.buf);
