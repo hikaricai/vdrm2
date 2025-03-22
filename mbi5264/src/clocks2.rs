@@ -10,7 +10,6 @@ use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, ThreadModeRawMu
 use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::signal::Signal;
 use embassy_sync::waitqueue::AtomicWaker;
-use embassy_time::{block_for, Duration};
 
 static LINE_CLOCK: Mutex<ThreadModeRawMutex, RefCell<Option<LineClock>>> =
     Mutex::new(RefCell::new(None));
@@ -85,10 +84,8 @@ impl Handler<PWM_IRQ_WRAP> for PwmInterruptHandler {
     unsafe fn on_interrupt() {
         let p = unsafe { Peripherals::steal() };
         let mut dbg_pin = gpio::Output::new(p.PIN_19, gpio::Level::High);
-        let line_clock = unsafe {
-            (&LINE_CLOCK as *const Mutex<ThreadModeRawMutex, RefCell<Option<LineClock>>>
-                as *mut Mutex<ThreadModeRawMutex, RefCell<Option<LineClock>>>)
-        };
+        let line_clock = &LINE_CLOCK as *const Mutex<ThreadModeRawMutex, RefCell<Option<LineClock>>>
+            as *mut Mutex<ThreadModeRawMutex, RefCell<Option<LineClock>>>;
 
         let line_clock: &mut Mutex<ThreadModeRawMutex, RefCell<Option<LineClock>>> =
             core::mem::transmute(line_clock);
@@ -111,6 +108,11 @@ enum PwmState {
     Ending,
 }
 
+struct LinePwmConfigTail {
+    gclk_cfg: pwm::Config,
+    ba_cfg: pwm::Config,
+}
+
 struct LinePwmConfig {
     gclk_cfg: pwm::Config,
     c_cfg: pwm::Config,
@@ -122,11 +124,10 @@ pub struct LineClock {
     pwm_c: Pwm<'static>,
     pwm_ba: Pwm<'static>,
     pwm_cfg: LinePwmConfig,
-    pwm_tail_cfg: LinePwmConfig,
+    pwm_cfg_tail: LinePwmConfigTail,
     started: bool,
     state: PwmState,
     all_batch: PwmBatch,
-    invert_gclk: bool,
 }
 
 impl LineClock {
@@ -148,35 +149,15 @@ impl LineClock {
             DMA_IRQ_0::disable();
             init_dma1();
         };
-        let pwm_div = 5.into();
-
-        let w = 8u16;
-        let mut gclk_cfg = pwm::Config::default();
-        gclk_cfg.divider = pwm_div;
-        gclk_cfg.top = w - 1;
-        gclk_cfg.compare_a = w / 2;
-        gclk_cfg.enable = false;
-
-        let mut c_cfg = pwm::Config::default();
-        c_cfg.divider = pwm_div;
-        let c_ount = 32 * 31;
-        let c_top = w * c_ount - 1;
-        c_cfg.top = c_top;
-        c_cfg.compare_a = c_top;
-        c_cfg.enable = false;
-        let pwm_tail_cfg = LinePwmConfig {
-            gclk_cfg,
-            c_cfg,
-            ba_cfg: pwm::Config::default(),
-        };
+        let pwm_div = 10.into();
 
         let w = 160u16;
+        let first_line_comp_cnt = 1u16;
+        let first_line_comp = w * first_line_comp_cnt;
         let mut gclk_cfg = pwm::Config::default();
         gclk_cfg.divider = pwm_div * 2;
-        gclk_cfg.top = w - 1;
-        gclk_cfg.compare_a = w / 2;
-        // gclk_cfg.invert_a = true;
-        gclk_cfg.invert_a = false;
+        gclk_cfg.top = w + first_line_comp / 2 - 1;
+        gclk_cfg.compare_a = w / 2 + first_line_comp / 2;
         gclk_cfg.enable = false;
 
         let pwm_gclk = Pwm::new_output_a(pwm1, gclk_pin, gclk_cfg.clone());
@@ -184,17 +165,16 @@ impl LineClock {
         c_cfg.divider = pwm_div;
         // let c_ount = 64;
         // must be odd
-        let c_w = w;
         let c_ount = 64;
-        c_cfg.top = c_w * c_ount - c_w / 2 - 1;
-        c_cfg.compare_a = c_w;
+        c_cfg.top = w * c_ount + first_line_comp - w / 2 - 1;
+        c_cfg.compare_a = w;
         c_cfg.enable = false;
         let pwm_c = Pwm::new_output_a(pwm7, c_pin, c_cfg.clone());
         embassy_rp::pac::PWM.inte().modify(|w| w.set_ch7(true));
 
         let mut ba_cfg = pwm::Config::default();
         ba_cfg.divider = pwm_div;
-        ba_cfg.top = w - 1;
+        ba_cfg.top = w + first_line_comp - 1;
         ba_cfg.compare_a = 3;
         ba_cfg.compare_b = 1;
         ba_cfg.enable = false;
@@ -206,6 +186,21 @@ impl LineClock {
             ba_cfg,
         };
 
+        let mut gclk_cfg = pwm::Config::default();
+        gclk_cfg.divider = pwm_div * 2;
+        gclk_cfg.top = w - 1;
+        gclk_cfg.compare_a = w / 2;
+        gclk_cfg.enable = true;
+
+        let mut ba_cfg = pwm::Config::default();
+        ba_cfg.divider = pwm_div;
+        ba_cfg.top = w - 1;
+        ba_cfg.compare_a = 3;
+        ba_cfg.compare_b = 1;
+        ba_cfg.enable = true;
+
+        let pwm_cfg_tail = LinePwmConfigTail { gclk_cfg, ba_cfg };
+
         let mut all_batch: PwmBatch = unsafe { core::mem::transmute(0u32) };
 
         all_batch.enable(&pwm_gclk);
@@ -216,11 +211,10 @@ impl LineClock {
             pwm_c,
             pwm_ba,
             pwm_cfg,
-            pwm_tail_cfg,
+            pwm_cfg_tail,
             started: false,
             state: PwmState::Idle,
             all_batch,
-            invert_gclk: false,
         };
         LINE_CLOCK.lock(|v| v.borrow_mut().replace(this));
         LineClockHdl { started: false }
@@ -243,6 +237,9 @@ impl LineClock {
         self.pwm_ba.phase_retard();
         self.pwm_gclk.phase_retard();
         self.pwm_gclk.phase_retard();
+
+        self.pwm_gclk.set_config(&self.pwm_cfg_tail.gclk_cfg);
+        self.pwm_ba.set_config(&self.pwm_cfg_tail.ba_cfg);
 
         self.started = true;
         self.state = PwmState::Freshing;
@@ -302,40 +299,6 @@ impl LineClock {
         // pac::IO_BANK0.gpio(16).ctrl().write(|w| w.set_funcsel(4));
         // pac::IO_BANK0.gpio(17).ctrl().write(|w| w.set_funcsel(4));
         // pac::IO_BANK0.gpio(18).ctrl().write(|w| w.set_funcsel(4));
-    }
-
-    #[inline]
-    fn tail_gclk(&mut self) {
-        self.pwm_gclk.set_config(&self.pwm_tail_cfg.gclk_cfg);
-        self.pwm_c.set_config(&self.pwm_tail_cfg.c_cfg);
-        PwmBatch::set_enabled(true, |batch| {
-            batch.enable(&self.pwm_gclk);
-            batch.enable(&self.pwm_c);
-        });
-    }
-
-    #[inline]
-    fn tail_gclk_end(&mut self) {
-        let mut gclk_cfg = self.pwm_cfg.gclk_cfg.clone();
-        gclk_cfg.enable = true;
-        gclk_cfg.invert_a = true;
-        self.pwm_gclk.set_config(&gclk_cfg);
-        PwmBatch::set_enabled(false, |batch| {
-            batch.enable(&self.pwm_gclk);
-        });
-        self.pwm_gclk.set_counter(0);
-    }
-
-    #[inline]
-    fn revert_gclk(&mut self) {
-        self.pwm_cfg.gclk_cfg.enable = true;
-        self.pwm_gclk.set_config(&self.pwm_cfg.gclk_cfg);
-        PwmBatch::set_enabled(false, |batch| {
-            batch.enable(&self.pwm_gclk);
-        });
-        self.pwm_cfg.gclk_cfg.invert_a = !self.pwm_cfg.gclk_cfg.invert_a;
-        self.pwm_cfg.gclk_cfg.enable = false;
-        self.pwm_gclk.set_counter(0);
     }
 
     #[inline]
