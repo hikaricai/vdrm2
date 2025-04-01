@@ -45,6 +45,10 @@ portable-atomic = { version = "1.5", features = ["critical-section"] }
 qoi = { version = "0.4.1", default_features = false }
 byteorder = { version = "1.5.0", default-features = false }
 
+[build-dependencies]
+vdrm-alg = { git = "https://github.com/hikaricai/vdrm.git", package = "vdrm-alg", branch = "master" }
+mbi5264-common = { path = "../mbi5264-common" }
+
 [profile.release]
 codegen-units = 1
 debug = 2

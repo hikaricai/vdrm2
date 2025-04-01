@@ -3,6 +3,24 @@ use bitfield_struct::bitfield;
 type MbiWave = u8;
 type Reg = u16;
 
+pub type RGBH = [u8; 4];
+
+#[repr(C)]
+pub struct AngleImage {
+    pub angle: u32,
+    // rgbh
+    pub coloum: [[u8; 4]; IMG_HEIGHT],
+}
+
+impl AngleImage {
+    pub fn new(angle: u32) -> Self {
+        Self {
+            angle,
+            coloum: [[0; 4]; IMG_HEIGHT],
+        }
+    }
+}
+
 const fn assert_eq_const(a: u16, b: u16, msg: &'static str) {
     if a != b {
         panic!("{}", msg);
