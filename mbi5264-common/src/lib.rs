@@ -6,14 +6,15 @@ type Reg = u16;
 pub type RGBH = [u8; 4];
 
 #[repr(C)]
+#[derive(Copy, Clone)]
 pub struct AngleImage {
     pub angle: u32,
     // rgbh
-    pub coloum: [[u8; 4]; IMG_HEIGHT],
+    pub coloum: [RGBH; IMG_HEIGHT],
 }
 
 impl AngleImage {
-    pub fn new(angle: u32) -> Self {
+    pub const fn new(angle: u32) -> Self {
         Self {
             angle,
             coloum: [[0; 4]; IMG_HEIGHT],

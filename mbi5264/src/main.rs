@@ -16,11 +16,11 @@ const IMG_WIDTH: usize = mbi5264_common::IMG_WIDTH;
 const IMG_HEIGHT: usize = mbi5264_common::IMG_HEIGHT;
 const IMG_SIZE: usize = mbi5264_common::IMG_WIDTH * mbi5264_common::IMG_HEIGHT;
 type RGBH = [u8; 4];
-type ImageBuffer = [RGBH; IMG_SIZE];
+type ImageBuffer = [mbi5264_common::AngleImage; mbi5264_common::IMG_HEIGHT];
 const TOTAL_ANGLES: u32 = 180;
 
 static MBI_BUF: ConstStaticCell<[MbiBuf2; 2]> =
-    ConstStaticCell::new([MbiBuf2::new(), MbiBuf2::new()]);
+    ConstStaticCell::new([MbiBuf2::new(0), MbiBuf2::new(0)]);
 static MBI_CHANNEL: StaticCell<zerocopy_channel::Channel<'_, NoopRawMutex, MbiBuf2>> =
     StaticCell::new();
 // static mut BUF2: [ImageBuffer; 2] = [[[0; 4]; IMG_SIZE]; 2];
@@ -28,10 +28,11 @@ static MBI_CHANNEL: StaticCell<zerocopy_channel::Channel<'_, NoopRawMutex, MbiBu
 //     zerocopy_channel::Channel<'_, CriticalSectionRawMutex, ImageBuffer>,
 // > = ConstStaticCell::new(zerocopy_channel::Channel::new(&mut BUF2));
 
-static BUF: ConstStaticCell<[ImageBuffer; 2]> = ConstStaticCell::new([[[0; 4]; IMG_SIZE]; 2]);
-static IMG_CHANNEL: StaticCell<
-    zerocopy_channel::Channel<'_, CriticalSectionRawMutex, ImageBuffer>,
-> = StaticCell::new();
+// static BUF: ConstStaticCell<[ImageBuffer; 1]> =
+//     ConstStaticCell::new([[mbi5264_common::AngleImage::new(0); mbi5264_common::IMG_HEIGHT]; 1]);
+// static IMG_CHANNEL: StaticCell<
+//     zerocopy_channel::Channel<'_, CriticalSectionRawMutex, ImageBuffer>,
+// > = StaticCell::new();
 
 struct SafeSender<T: 'static> {
     sender: zerocopy_channel::Sender<'static, CriticalSectionRawMutex, T>,
@@ -96,9 +97,9 @@ async fn main(spawner: Spawner) {
         w.set_dma_w(true);
     });
 
-    let channel = IMG_CHANNEL.init(zerocopy_channel::Channel::new(BUF.take()));
-    let (sender, img_rx) = channel.split();
-    let img_tx = SafeSender { sender };
+    // let channel = IMG_CHANNEL.init(zerocopy_channel::Channel::new(BUF.take()));
+    // let (sender, img_rx) = channel.split();
+    // let img_tx = SafeSender { sender };
     // core1::spawn_usb_core1(p.CORE1, p.USB, img_tx);
     let mbi_channel = MBI_CHANNEL.init(zerocopy_channel::Channel::new(MBI_BUF.take()));
     let (mbi_tx, mut mbi_rx) = mbi_channel.split();
@@ -133,8 +134,6 @@ async fn main(spawner: Spawner) {
         p.PIN_18,
     );
     let mut cmd_pio = clocks2::CmdClock::new(p.PIO0, pins, data_ch);
-    test_screen(&mut cmd_pio, &mut line, &mut mbi_rx, &mut led_pin).await;
-
     let sync_cmd = Command::new_sync();
     let confirm_cmd = Command::new_confirm();
     let mut cnt: usize = 0;
@@ -144,6 +143,8 @@ async fn main(spawner: Spawner) {
         cmd_pio.refresh2(&confirm_cmd);
         cmd_pio.refresh2(&Command::new(cmd as u8, param));
     }
+
+    test_screen(&mut cmd_pio, &mut line, &mut mbi_rx, &mut led_pin).await;
 
     let start_angle = TOTAL_ANGLES / 4;
     let end_angle = start_angle + TOTAL_ANGLES / 2 - 1;
@@ -257,6 +258,74 @@ async fn test_screen(
             let fps = 5_000 * 1000 / duration_ms;
             defmt::info!("5000 frames in {} ms, {} fps", duration_ms, fps);
         }
+    }
+}
+
+async fn test_screen_vdrm(
+    cmd_pio: &mut clocks2::CmdClock,
+    line: &mut clocks2::LineClockHdl,
+    mbi_rx: &mut zerocopy_channel::Receiver<'static, NoopRawMutex, MbiBuf2>,
+    led_pin: &mut gpio::Output<'_>,
+) {
+    let mut cnt: usize = 0;
+    let mut last = Instant::now();
+    loop {
+        {
+            line.start();
+            async_update_frame2(cmd_pio, mbi_rx).await;
+            line.wait_stop().await;
+        }
+        if cnt & 0x10 != 0 {
+            led_pin.toggle();
+        }
+        cnt += 1;
+        if cnt % 5_000 == 0 {
+            let now = Instant::now();
+            let duration_ms = (now - last).as_millis();
+            last = now;
+            let fps = 5_000 * 1000 / duration_ms;
+            defmt::info!("5000 frames in {} ms, {} fps", duration_ms, fps);
+        }
+    }
+}
+
+#[embassy_executor::task]
+async fn encode_mbi_vdrm(mut mbi_tx: zerocopy_channel::Sender<'static, NoopRawMutex, MbiBuf2>) {
+    const IMG_BIN: &[u8] = include_bytes!("../img.bin");
+    assert!(IMG_BIN.len() >= core::mem::size_of::<mbi5264_common::AngleImage>());
+    let img = unsafe {
+        core::slice::from_raw_parts(
+            IMG_BIN.as_ptr() as *const mbi5264_common::AngleImage,
+            IMG_BIN.len() / core::mem::size_of::<mbi5264_common::AngleImage>(),
+        )
+    };
+    let mut sync_buf = MbiBuf2::new(0);
+    {
+        const EMPTY_BUF: [RGBH; IMG_HEIGHT] = [[0, 0, 0, 0]; IMG_HEIGHT];
+        let mut parser = clocks2::ColorParser::new(&mut sync_buf.buf);
+        let len = update_frame(&mut parser, &EMPTY_BUF);
+        sync_buf.len = len;
+    }
+    let sync_len = sync_buf.len as usize;
+
+    let mut last_angle = 0u32;
+    loop {
+        for (idx, angle_line) in img.iter().enumerate() {
+            let angle = if idx == 0 { u32::MAX } else { last_angle };
+            last_angle = angle_line.angle;
+            let mbi_buf = mbi_tx.send().await;
+            let mut parser = clocks2::ColorParser::new(&mut mbi_buf.buf);
+            let len = update_frame(&mut parser, &angle_line.coloum);
+            mbi_buf.len = len;
+            mbi_buf.angle = angle;
+            mbi_tx.send_done();
+        }
+
+        let mbi_buf = mbi_tx.send().await;
+        mbi_buf.buf[0..sync_len].copy_from_slice(&sync_buf.buf[0..sync_len]);
+        mbi_buf.len = sync_buf.len;
+        mbi_buf.angle = last_angle;
+        mbi_tx.send_done();
     }
 }
 
@@ -439,13 +508,15 @@ impl PixelSlot2 {
 }
 
 struct MbiBuf2 {
+    angle: u32,
     len: u32,
     buf: [u16; 16384],
 }
 
 impl MbiBuf2 {
-    const fn new() -> Self {
+    const fn new(angle: u32) -> Self {
         Self {
+            angle,
             len: 0,
             buf: [0u16; 16384],
         }
@@ -485,12 +556,13 @@ async fn encode_mbi2(mut mbi_tx: zerocopy_channel::Sender<'static, NoopRawMutex,
         }
     }
     loop {
-        for coloum in img_buf.chunks_exact(IMG_HEIGHT) {
+        for (angle, coloum) in img_buf.chunks_exact(IMG_HEIGHT).enumerate() {
             let buf = mbi_tx.send().await;
             let mut parser = clocks2::ColorParser::new(&mut buf.buf);
             let coloum: &[RGBH; IMG_HEIGHT] = unsafe { core::mem::transmute(coloum.as_ptr()) };
             let len = update_frame(&mut parser, &coloum);
             buf.len = len;
+            buf.angle = angle as u32;
             mbi_tx.send_done();
         }
     }

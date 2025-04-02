@@ -51,12 +51,12 @@ fn main() {
             let mut pixels: [Option<[u8; 4]>; mbi5264_common::IMG_HEIGHT] =
                 [None; mbi5264_common::IMG_HEIGHT];
             for p in line {
-                for (idx, color) in p.pixels.iter().enumerate() {
+                for (color, pixel) in p.pixels.iter().zip(&mut pixels) {
                     let Some(color) = color else {
                         continue;
                     };
                     let [r, g, b, _a] = color.to_ne_bytes();
-                    match pixels[idx].as_mut() {
+                    match pixel {
                         Some(rgbh) => {
                             let h = rgbh[3];
                             if p.addr < h as u32 {
@@ -64,7 +64,7 @@ fn main() {
                             }
                         }
                         None => {
-                            pixels[idx] = Some([r, g, b, p.addr as u8]);
+                            *pixel = Some([r, g, b, p.addr as u8]);
                         }
                     }
                 }
@@ -76,7 +76,17 @@ fn main() {
             }
             angle_list.push(img);
         }
+        let buf = unsafe {
+            std::slice::from_raw_parts(
+                angle_list.as_ptr() as *const u8,
+                angle_list.len() * std::mem::size_of::<mbi5264_common::AngleImage>(),
+            )
+        };
+        std::fs::write(image_path, buf).unwrap();
     }
+    // skip build
+    // std::process::exit(0);
+
     // Put `memory.x` in our output directory and ensure it's
     // on the linker search path.
     let out = &PathBuf::from(env::var_os("OUT_DIR").unwrap());

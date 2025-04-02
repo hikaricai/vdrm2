@@ -106,7 +106,8 @@ async fn decode_qoi(
         //     }
         // }
         for p in send_buf.iter_mut() {
-            *p = [255, 255, 255, cnt];
+            // FIXME
+            // *p = [255, 255, 255, cnt];
             // p[3] = core::cmp::min(p[3], 143);
         }
         safe_sender.sender.send_done();
