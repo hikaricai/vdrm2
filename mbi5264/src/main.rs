@@ -553,7 +553,7 @@ impl PixelSlot2 {
 struct MbiBuf2 {
     angle: u32,
     len: u32,
-    buf: [u16; 16384],
+    buf: [u16; 19384],
 }
 
 impl MbiBuf2 {
@@ -561,7 +561,7 @@ impl MbiBuf2 {
         Self {
             angle,
             len: 0,
-            buf: [0u16; 16384],
+            buf: [0u16; 19384],
         }
     }
 }
@@ -590,14 +590,14 @@ async fn encode_mbi2(mut mbi_tx: zerocopy_channel::Sender<'static, NoopRawMutex,
     let gray = 0b11111_111_0_00000_00;
     let gray = 255u8;
     let mut img_buf = [[gray, gray, gray, 1]; IMG_SIZE];
-    // for (idx, coloum) in img_buf.chunks_exact_mut(IMG_HEIGHT).enumerate() {
-    //     for (col, p) in coloum.iter_mut().enumerate() {
-    //         let h = (col / 16 + idx) as u8;
-    //         let gray = 16 * ((idx as u8) / 3);
-    //         // let gray = 128;
-    //         *p = [gray, gray, gray, h];
-    //     }
-    // }
+    for (idx, coloum) in img_buf.chunks_exact_mut(IMG_HEIGHT).enumerate() {
+        for (col, p) in coloum.iter_mut().enumerate() {
+            let h = (col / 16 + idx) as u8;
+            let gray = 16 * ((idx as u8) / 3);
+            // let gray = 128;
+            *p = [gray, gray, gray, h];
+        }
+    }
     loop {
         for (angle, coloum) in img_buf.chunks_exact(IMG_HEIGHT).enumerate() {
             let buf = mbi_tx.send().await;

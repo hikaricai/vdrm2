@@ -389,7 +389,7 @@ impl CmdClock {
         // 5      4      2
         // 6      5      3
         let clk_program_data = pio_proc::pio_asm!(
-            ".define public DELAY 6",
+            ".define public DELAY 3",
             ".side_set 1",
             ".wrap_target",
             "nop             side 0b0 [DELAY - 1]", // increase the delay if something get wrong
@@ -406,8 +406,8 @@ impl CmdClock {
         clk_sm.set_config(&cfg);
 
         let data_program_data = pio_proc::pio_asm!(
-            ".define public DELAY 5"
-            ".define public IRQ_DELAY 3"
+            ".define public DELAY 2"
+            ".define public IRQ_DELAY 2"
             ".wrap_target",
             "mov pins null [DELAY]"
             "out y, 32",    // save loop_cnt to y
@@ -637,7 +637,7 @@ impl<'a> ColorParser<'a> {
         empty_loops
     }
     pub fn add_empty_les(&mut self, empty_size: u32) {
-        const EMPTY_LEN_U32_CYCLES: usize = 1;
+        const EMPTY_LEN_U32_CYCLES: usize = 8;
         if empty_size == 0 {
             return;
         }
