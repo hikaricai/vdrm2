@@ -389,7 +389,7 @@ impl CmdClock {
         // 5      4      2
         // 6      5      3
         let clk_program_data = pio_proc::pio_asm!(
-            ".define public DELAY 3",
+            ".define public DELAY 6",
             ".side_set 1",
             ".wrap_target",
             "nop             side 0b0 [DELAY - 1]", // increase the delay if something get wrong
@@ -406,8 +406,8 @@ impl CmdClock {
         clk_sm.set_config(&cfg);
 
         let data_program_data = pio_proc::pio_asm!(
-            ".define public DELAY 2"
-            ".define public IRQ_DELAY 2"
+            ".define public DELAY 5"
+            ".define public IRQ_DELAY 3"
             ".wrap_target",
             "mov pins null [DELAY]"
             "out y, 32",    // save loop_cnt to y
@@ -637,6 +637,7 @@ impl<'a> ColorParser<'a> {
         empty_loops
     }
     pub fn add_empty_les(&mut self, empty_size: u32) {
+        const EMPTY_LEN_U32_CYCLES: usize = 1;
         if empty_size == 0 {
             return;
         }
@@ -657,18 +658,16 @@ impl<'a> ColorParser<'a> {
             *self.loops += 1;
             let empty_size = empty_size - 1;
             let meta: &mut TranserMeta = add_buf_ptr(&mut self.buf);
-            meta.empty_loops = 0;
-            let data_loops = (empty_size - 1) * 6 + 2;
+            meta.empty_loops = EMPTY_LEN_U32_CYCLES as u32 * 2 + 3;
+            let data_loops = (empty_size - 1) * (EMPTY_LEN_U32_CYCLES as u32 * 2 + 2) + 2;
             meta.data_loops = data_loops - 2;
-            // cmd to cmd time is at least 200ns when 3.3v
-            // here is about 300ns
+            // need a lot of empty
+            // why more data result higher fps?
             let u32_buf: &mut u32 = add_buf_ptr(&mut self.buf);
             *u32_buf = 0x0008_0000;
             for _ in 1..empty_size {
-                let u32_buf: &mut u32 = add_buf_ptr(&mut self.buf);
-                *u32_buf = 0x0000_0000;
-                let u32_buf: &mut u32 = add_buf_ptr(&mut self.buf);
-                *u32_buf = 0x0000_0000;
+                let u32_arr: &mut [u32; EMPTY_LEN_U32_CYCLES] = add_buf_ptr(&mut self.buf);
+                *u32_arr = [0; EMPTY_LEN_U32_CYCLES];
                 let u32_buf: &mut u32 = add_buf_ptr(&mut self.buf);
                 *u32_buf = 0x0008_0000;
             }

@@ -104,7 +104,8 @@ async fn main(spawner: Spawner) {
     let mbi_channel = MBI_CHANNEL.init(zerocopy_channel::Channel::new(MBI_BUF.take()));
     let (mbi_tx, mut mbi_rx) = mbi_channel.split();
     // spawner.spawn(encode_mbi(mbi_tx, img_rx)).unwrap();
-    spawner.spawn(encode_mbi2(mbi_tx)).unwrap();
+    spawner.spawn(encode_mbi_vdrm(mbi_tx)).unwrap();
+    // spawner.spawn(encode_mbi2(mbi_tx)).unwrap();
 
     let mut led_pin = gpio::Output::new(p.PIN_25, gpio::Level::Low);
     let pins = clocks2::CmdClockPins {
@@ -144,7 +145,7 @@ async fn main(spawner: Spawner) {
         cmd_pio.refresh2(&Command::new(cmd as u8, param));
     }
 
-    test_screen(&mut cmd_pio, &mut line, &mut mbi_rx, &mut led_pin).await;
+    test_screen_vdrm(&mut cmd_pio, &mut line, &mut mbi_rx, &mut led_pin).await;
 
     let start_angle = TOTAL_ANGLES / 4;
     let end_angle = start_angle + TOTAL_ANGLES / 2 - 1;
@@ -306,7 +307,7 @@ async fn encode_mbi_vdrm(mut mbi_tx: zerocopy_channel::Sender<'static, NoopRawMu
         let len = update_frame(&mut parser, &EMPTY_BUF);
         sync_buf.len = len;
     }
-    let sync_len = sync_buf.len as usize;
+    let sync_len = sync_buf.len as usize * 2;
 
     let mut last_angle = 0u32;
     loop {
@@ -322,9 +323,51 @@ async fn encode_mbi_vdrm(mut mbi_tx: zerocopy_channel::Sender<'static, NoopRawMu
         }
 
         let mbi_buf = mbi_tx.send().await;
-        mbi_buf.buf[0..sync_len].copy_from_slice(&sync_buf.buf[0..sync_len]);
+        mbi_buf.buf[..sync_len].copy_from_slice(&sync_buf.buf[..sync_len]);
         mbi_buf.len = sync_buf.len;
         mbi_buf.angle = last_angle;
+        mbi_tx.send_done();
+    }
+}
+
+#[embassy_executor::task]
+async fn encode_mbi_vdrm2(mut mbi_tx: zerocopy_channel::Sender<'static, NoopRawMutex, MbiBuf2>) {
+    const IMG_BIN: &[u8] = include_bytes!("../img.bin");
+    assert!(IMG_BIN.len() >= core::mem::size_of::<mbi5264_common::AngleImage>());
+    let img = unsafe {
+        core::slice::from_raw_parts(
+            IMG_BIN.as_ptr() as *const mbi5264_common::AngleImage,
+            IMG_BIN.len() / core::mem::size_of::<mbi5264_common::AngleImage>(),
+        )
+    };
+    let mut sync_buf = MbiBuf2::new(0);
+
+    let mut coloum = img[32].coloum.clone();
+    defmt::info!("fmt coloum");
+    for rgbh in coloum.iter_mut() {
+        // defmt::info!("{}", rgbh[3]);
+        // rgbh[0] = 255;
+        // rgbh[1] = 255;
+        // rgbh[2] = 255;
+        // rgbh[3] = 0;
+    }
+    defmt::info!("fmt coloum end");
+    let mut parser = clocks2::ColorParser::new(&mut sync_buf.buf);
+    let len = update_frame(&mut parser, &coloum);
+    sync_buf.len = len;
+
+    let sync_len = sync_buf.len as usize * 2;
+
+    let mut last_angle = 0u32;
+    loop {
+        let mbi_buf = mbi_tx.send().await;
+        mbi_buf.buf[..sync_len].copy_from_slice(&sync_buf.buf[..sync_len]);
+        mbi_buf.len = sync_buf.len;
+        //
+        // let mut parser = clocks2::ColorParser::new(&mut mbi_buf.buf);
+        // let len = update_frame(&mut parser, &coloum);
+        // mbi_buf.len = len;
+        mbi_buf.angle = 0;
         mbi_tx.send_done();
     }
 }
@@ -545,16 +588,16 @@ async fn encode_mbi(
 #[embassy_executor::task]
 async fn encode_mbi2(mut mbi_tx: zerocopy_channel::Sender<'static, NoopRawMutex, MbiBuf2>) {
     let gray = 0b11111_111_0_00000_00;
-    let gray = 0u8;
-    let mut img_buf = [[gray, gray, gray, 0]; IMG_SIZE];
-    for (idx, coloum) in img_buf.chunks_exact_mut(IMG_HEIGHT).enumerate() {
-        for (col, p) in coloum.iter_mut().enumerate() {
-            let h = (col / 16 + idx) as u8;
-            let gray = 16 * ((idx as u8) / 3);
-            // let gray = 128;
-            *p = [gray, gray, gray, h];
-        }
-    }
+    let gray = 255u8;
+    let mut img_buf = [[gray, gray, gray, 1]; IMG_SIZE];
+    // for (idx, coloum) in img_buf.chunks_exact_mut(IMG_HEIGHT).enumerate() {
+    //     for (col, p) in coloum.iter_mut().enumerate() {
+    //         let h = (col / 16 + idx) as u8;
+    //         let gray = 16 * ((idx as u8) / 3);
+    //         // let gray = 128;
+    //         *p = [gray, gray, gray, h];
+    //     }
+    // }
     loop {
         for (angle, coloum) in img_buf.chunks_exact(IMG_HEIGHT).enumerate() {
             let buf = mbi_tx.send().await;
