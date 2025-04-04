@@ -105,7 +105,7 @@ async fn main(spawner: Spawner) {
     let (mbi_tx, mut mbi_rx) = mbi_channel.split();
     // spawner.spawn(encode_mbi(mbi_tx, img_rx)).unwrap();
     // spawner.spawn(encode_mbi_vdrm(mbi_tx)).unwrap();
-    spawner.spawn(encode_mbi_vdrm2(mbi_tx)).unwrap();
+    spawner.spawn(encode_mbi_vdrm(mbi_tx)).unwrap();
     // spawner.spawn(encode_mbi3(mbi_tx)).unwrap();
 
     let mut led_pin = gpio::Output::new(p.PIN_25, gpio::Level::Low);
@@ -129,8 +129,10 @@ async fn main(spawner: Spawner) {
         p.PWM_SLICE7,
         p.PWM_SLICE0,
         p.PWM_SLICE1,
+        p.PWM_SLICE2,
         p.PIN_14,
         p.PIN_16,
+        p.PIN_20,
         p.PIN_17,
         p.PIN_0,
         p.PIN_18,
