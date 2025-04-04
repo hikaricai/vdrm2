@@ -2,7 +2,7 @@ use core::cell::RefCell;
 use embassy_rp::dma::Channel;
 use embassy_rp::interrupt::typelevel::{Handler, Interrupt, DMA_IRQ_0, DMA_IRQ_1, PWM_IRQ_WRAP};
 use embassy_rp::peripherals::{self};
-use embassy_rp::peripherals::{DMA_CH0, DMA_CH1, PIO0};
+use embassy_rp::peripherals::{DMA_CH0, DMA_CH1, PIO0, PIO1};
 use embassy_rp::pio::{self, Pio, ShiftConfig, StateMachine};
 use embassy_rp::pwm::{self, Pwm, PwmBatch, SetDutyCycle};
 use embassy_rp::{gpio, interrupt, pac, Peripheral, PeripheralRef, Peripherals};
@@ -17,6 +17,10 @@ static LINE_CLOCK: Mutex<ThreadModeRawMutex, RefCell<Option<LineClock>>> =
 // TODO delete this?
 embassy_rp::bind_interrupts!(struct PioIrqs {
     PIO0_IRQ_0 => pio::InterruptHandler<PIO0>;
+});
+
+embassy_rp::bind_interrupts!(struct PioIrqs1 {
+    PIO1_IRQ_0 => pio::InterruptHandler<PIO1>;
 });
 
 embassy_rp::bind_interrupts!(struct Dma1Irq {
@@ -128,8 +132,9 @@ pub struct LineClock {
     started: bool,
     state: PwmState,
     all_batch: PwmBatch,
+    pio_ba: PwmPio,
 }
-
+const W: u16 = 160;
 impl LineClock {
     pub fn new(
         pwm7: peripherals::PWM_SLICE7,
@@ -149,10 +154,11 @@ impl LineClock {
             DMA_IRQ_0::disable();
             init_dma1();
         };
+        // for umini div is 5 w is 100 to get 125khz glck
         let pwm_div = 10.into();
 
-        let w = 160u16;
-        let first_line_comp_cnt = 1u16;
+        let w = W;
+        let first_line_comp_cnt = 0u16;
         let first_line_comp = w * first_line_comp_cnt;
         let mut gclk_cfg = pwm::Config::default();
         gclk_cfg.divider = pwm_div * 2;
@@ -167,7 +173,7 @@ impl LineClock {
         // must be odd
         let c_ount = 64;
         c_cfg.top = w * c_ount + first_line_comp - w / 2 - 1;
-        c_cfg.compare_a = w;
+        c_cfg.compare_a = w / 2;
         c_cfg.enable = false;
         let pwm_c = Pwm::new_output_a(pwm7, c_pin, c_cfg.clone());
         embassy_rp::pac::PWM.inte().modify(|w| w.set_ch7(true));
@@ -195,8 +201,8 @@ impl LineClock {
         let mut ba_cfg = pwm::Config::default();
         ba_cfg.divider = pwm_div;
         ba_cfg.top = w - 1;
-        ba_cfg.compare_a = 3;
-        ba_cfg.compare_b = 1;
+        ba_cfg.compare_a = w / 10;
+        ba_cfg.compare_b = w / 10 - 1;
         ba_cfg.enable = true;
 
         let pwm_cfg_tail = LinePwmConfigTail { gclk_cfg, ba_cfg };
@@ -215,6 +221,7 @@ impl LineClock {
             started: false,
             state: PwmState::Idle,
             all_batch,
+            pio_ba: PwmPio::new(),
         };
         LINE_CLOCK.lock(|v| v.borrow_mut().replace(this));
         LineClockHdl { started: false }
@@ -223,24 +230,22 @@ impl LineClock {
     pub fn start(&mut self) {
         self.stop();
         PWM_OFF_SIGNAL.reset();
-        self.pwm_gclk.set_config(&self.pwm_cfg.gclk_cfg);
-        self.pwm_c.set_config(&self.pwm_cfg.c_cfg);
-        self.pwm_ba.set_config(&self.pwm_cfg.ba_cfg);
+        // self.pwm_gclk.set_config(&self.pwm_cfg.gclk_cfg);
+        // self.pwm_c.set_config(&self.pwm_cfg.c_cfg);
+        // self.pwm_ba.set_config(&self.pwm_cfg.ba_cfg);
 
-        // pac::IO_BANK0.gpio(16).ctrl().write(|w| w.set_funcsel(4));
-        // pac::IO_BANK0.gpio(17).ctrl().write(|w| w.set_funcsel(4));
-        // pac::IO_BANK0.gpio(18).ctrl().write(|w| w.set_funcsel(4));
-
+        self.pio_ba.start();
         PwmBatch::set_enabled(true, |batch| {
             *batch = unsafe { core::mem::transmute_copy(&self.all_batch) };
         });
-        self.pwm_ba.phase_retard();
-        self.pwm_gclk.phase_retard();
-        self.pwm_gclk.phase_retard();
 
-        self.pwm_gclk.set_config(&self.pwm_cfg_tail.gclk_cfg);
-        self.pwm_ba.set_config(&self.pwm_cfg_tail.ba_cfg);
+        // self.pwm_ba.phase_retard();
+        // self.pwm_ba.phase_retard();
+        // self.pwm_gclk.phase_retard();
+        // self.pwm_gclk.phase_retard();
 
+        // self.pwm_gclk.set_config(&self.pwm_cfg_tail.gclk_cfg);
+        // self.pwm_ba.set_config(&self.pwm_cfg_tail.ba_cfg);
         self.started = true;
         self.state = PwmState::Freshing;
     }
@@ -250,10 +255,11 @@ impl LineClock {
         PwmBatch::set_enabled(false, |batch| {
             *batch = unsafe { core::mem::transmute_copy(&self.all_batch) };
         });
+        self.pio_ba.stop();
         self.started = false;
         self.pwm_gclk.set_counter(0);
         self.pwm_c.set_counter(0);
-        self.pwm_ba.set_counter(0);
+        // self.pwm_ba.set_counter(0);
     }
 
     #[inline]
@@ -271,34 +277,6 @@ impl LineClock {
             batch.enable(&self.pwm_ba);
         });
         self.pwm_ba.set_counter(0);
-        // let counter = self.pwm_ba.counter();
-        // if counter != 0 {
-        //     // counter is 3
-        //     defmt::info!("counter {}", counter);
-        // }
-
-        // let p = unsafe { Peripherals::steal() };
-        // let pin_b = gpio::Output::new(p.PIN_16, gpio::Level::High);
-        // let pin_a = gpio::Output::new(p.PIN_17, gpio::Level::Low);
-        // let pin_gclk = gpio::Output::new(p.PIN_18, gpio::Level::Low);
-
-        // PwmBatch::set_enabled(true, |batch| {
-        //     batch.enable(&self.pwm_ba);
-        //     batch.enable(&self.pwm_gclk);
-        // });
-        // PwmBatch::set_enabled(false, |batch| {
-        //     batch.enable(&self.pwm_ba);
-        //     batch.enable(&self.pwm_gclk);
-        // });
-        // self.pwm_gclk.set_counter(0);
-        // self.pwm_ba.set_counter(0);
-
-        // core::mem::drop(pin_b);
-        // core::mem::drop(pin_a);
-        // core::mem::drop(pin_gclk);
-        // pac::IO_BANK0.gpio(16).ctrl().write(|w| w.set_funcsel(4));
-        // pac::IO_BANK0.gpio(17).ctrl().write(|w| w.set_funcsel(4));
-        // pac::IO_BANK0.gpio(18).ctrl().write(|w| w.set_funcsel(4));
     }
 
     #[inline]
@@ -309,7 +287,7 @@ impl LineClock {
             PwmState::Idle => {}
             PwmState::Freshing => {
                 self.state = PwmState::Ending;
-                self.set_pwm_ba_high();
+                // self.set_pwm_ba_high();
                 // self.revert_gclk();
                 // self.tail_gclk();
             }
@@ -317,6 +295,96 @@ impl LineClock {
                 // self.tail_gclk_end();
                 self.state = PwmState::Idle;
             }
+        }
+    }
+}
+
+struct PwmPio {
+    sm: StateMachine<'static, PIO1, 0>,
+    start_cmd: u16,
+}
+
+impl PwmPio {
+    fn new() -> Self {
+        let p = unsafe { Peripherals::steal() };
+        let pio1 = Pio::new(p.PIO1, PioIrqs1);
+        let Pio {
+            mut common,
+            sm0: mut pwm_sm,
+            ..
+        } = pio1;
+
+        let program_data = pio_proc::pio_asm!(
+            ".side_set 2",
+            // "nop side 0b00"
+            "pull side 0b00",
+            "mov x osr side 0b00",
+            // "out x 32 side 0b00"
+            "begin:"
+            "jmp begin side 0b00",
+            ".wrap_target",
+            "mov osr x side 0b00",
+            "out y 6 side 0b01",
+            "loop1:",
+            "jmp y-- loop1 side 0b01",
+
+            "out y 6 side 0b11",
+            "loop2:",
+            "jmp y-- loop2 side 0b11",
+
+            "out y 6 side 0b10",
+            "loop3:",
+            "jmp y-- loop3 side 0b10",
+
+            "out y 14 side 0b00",
+            "loop4:",
+            "jmp y-- loop4 side 0b00",
+            ".wrap",
+        );
+        let pwm_prog = common.load_program(&program_data.program);
+        let pin_b = common.make_pio_pin(p.PIN_16);
+        let pin_a = common.make_pio_pin(p.PIN_17);
+        pwm_sm.set_pin_dirs(pio::Direction::Out, &[&pin_b, &pin_a]);
+
+        let mut cfg = pio::Config::default();
+        cfg.clock_divider = 20u8.into();
+        cfg.fifo_join = pio::FifoJoin::TxOnly;
+        cfg.shift_out = ShiftConfig {
+            auto_fill: true,
+            threshold: 32,
+            direction: pio::ShiftDirection::Right,
+        };
+        cfg.use_program(&pwm_prog, &[&pin_b, &pin_a]);
+        pwm_sm.set_config(&cfg);
+        pwm_sm.set_enable(true);
+        let loop1_cnt = 2u32 - 2;
+        let loop2_cnt = 2u32 - 2;
+        let loop3_cnt = 1u32 - 1;
+        let loop4_cnt = 75u32 - 4;
+        let v = loop1_cnt | (loop2_cnt << 6) | (loop3_cnt << 12) | (loop4_cnt << 18);
+        pwm_sm.tx().push(v);
+        let start_cmd = 3; // jmp .wrap_target
+        Self {
+            sm: pwm_sm,
+            start_cmd,
+        }
+    }
+
+    #[inline]
+    fn start(&mut self) {
+        self.sm.set_enable(false);
+        unsafe {
+            self.sm.exec_instr(self.start_cmd);
+        }
+        self.sm.set_enable(true);
+    }
+
+    #[inline]
+    fn stop(&mut self) {
+        // self.sm.restart();
+        self.sm.set_enable(false);
+        unsafe {
+            self.sm.exec_instr(self.start_cmd);
         }
     }
 }
@@ -340,6 +408,10 @@ impl LineClockHdl {
         }
         PWM_OFF_SIGNAL.wait().await;
         self.started = false;
+    }
+
+    pub fn block_wait_stop(&mut self) {
+        while !PWM_OFF_SIGNAL.signaled() {}
     }
 }
 
@@ -402,6 +474,8 @@ impl CmdClock {
         clk_sm.set_pin_dirs(pio::Direction::Out, &[&clk_pin]);
 
         let mut cfg = pio::Config::default();
+        cfg.clock_divider = 1u8.into();
+        let clk_div = cfg.clock_divider;
         cfg.use_program(&clk_prog, &[&clk_pin]);
         clk_sm.set_config(&cfg);
 
@@ -454,6 +528,7 @@ impl CmdClock {
 
         // defmt::info!("data_sm addr {}", data_prog.origin);
         let mut cfg = pio::Config::default();
+        cfg.clock_divider = clk_div;
         cfg.use_program(&data_prog, &[]);
         cfg.set_out_pins(&[
             &r0_pin, &g0_pin, &b0_pin, &le0_pin, &r1_pin, &g1_pin, &b1_pin, &le1_pin, &r2_pin,
@@ -500,8 +575,9 @@ impl CmdClock {
         }
     }
 
-    pub fn refresh2(&mut self, transaction: &super::Command) {
-        let mut buf_iter = self.data_buf.iter_mut().skip(6);
+    #[inline]
+    pub fn encode_cmd(transaction: &super::Command, data_buf: &mut [u16; CMD_BUF_SIZE]) {
+        let mut buf_iter = data_buf.iter_mut().skip(6);
         for [r, g, b] in transaction.regs {
             for i in (0..16).rev() {
                 let buf = buf_iter.next().unwrap();
@@ -513,20 +589,19 @@ impl CmdClock {
             }
         }
         // set le
-        for b in self
-            .data_buf
-            .iter_mut()
-            .rev()
-            .take(transaction.cmd as usize)
-        {
+        for b in data_buf.iter_mut().rev().take(transaction.cmd as usize) {
             *b |= 0x8;
         }
-        let buf: &mut [u32; CMD_BUF_SIZE / 2] = unsafe { core::mem::transmute(&mut self.data_buf) };
+        let buf: &mut [u32; CMD_BUF_SIZE / 2] = unsafe { core::mem::transmute(data_buf) };
         buf[0] = 0; // loop cnt
         buf[1] = 3 - 3; // empty cnt
         buf[2] = 16 * 9 - 2;
+    }
 
+    pub fn refresh2(&mut self, transaction: &super::Command) {
+        Self::encode_cmd(transaction, &mut self.data_buf);
         let p = self.data_ch.regs();
+        let buf: &[u32; CMD_BUF_SIZE / 2] = unsafe { core::mem::transmute(&self.data_buf) };
         p.trans_count().write_value(buf.len() as u32);
         p.al3_read_addr_trig().write_value(buf.as_ptr() as u32);
         while p.ctrl_trig().read().busy() {}
