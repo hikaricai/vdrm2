@@ -269,7 +269,7 @@ fn test_screen_normal(
     let mut last = Instant::now();
     let gray = 0xff00u16;
     let mut color_latch = Command::new(1, 0);
-    color_latch.regs[0] = [gray, 0, 0];
+    color_latch.regs[0] = [0, 0, 0];
     let mut color_buf: [u16; clocks2::CMD_BUF_SIZE] = [0; clocks2::CMD_BUF_SIZE];
     clocks2::CmdClock::encode_cmd(&color_latch, &mut color_buf);
 
@@ -295,7 +295,7 @@ fn test_screen_normal(
                 for j in 0..16 {
                     let ptr = if i == 0 && j == 0 {
                         color_buf.as_ptr() as u32
-                    } else if i == 1 && j == 0 {
+                    } else if i == 3 && j == 0 {
                         low_color_buf.as_ptr() as u32
                     } else {
                         empty_buf.as_ptr() as u32

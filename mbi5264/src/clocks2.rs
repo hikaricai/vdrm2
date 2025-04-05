@@ -238,7 +238,7 @@ impl LineClock {
         PWM_OFF_SIGNAL.reset();
         // self.pwm_gclk.set_config(&self.pwm_cfg.gclk_cfg);
         // self.pwm_c.set_config(&self.pwm_cfg.c_cfg);
-        // self.pwm_ba.set_config(&self.pwm_cfg.ba_cfg);
+        self.pwm_b.set_config(&self.pwm_cfg.ba_cfg);
 
         // self.pio_ba.start();
         PwmBatch::set_enabled(true, |batch| {
@@ -278,7 +278,6 @@ impl LineClock {
         let top = u16::MAX;
         ba_cfg.top = top;
         ba_cfg.compare_a = top;
-        ba_cfg.compare_b = 0;
         ba_cfg.enable = true;
         self.pwm_b.set_config(&ba_cfg);
         PwmBatch::set_enabled(false, |batch| {
@@ -295,7 +294,7 @@ impl LineClock {
             PwmState::Idle => {}
             PwmState::Freshing => {
                 self.state = PwmState::Ending;
-                // self.set_pwm_b_high();
+                self.set_pwm_b_high();
                 // self.revert_gclk();
                 // self.tail_gclk();
             }
