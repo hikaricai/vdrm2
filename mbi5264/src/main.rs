@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 mod clocks2;
+mod consts;
 mod core1;
 use embassy_executor::Spawner;
 use embassy_rp::gpio::{self, Input};
@@ -12,12 +13,13 @@ use embassy_time::{block_for, Duration, Instant, Timer};
 use static_cell::{ConstStaticCell, StaticCell};
 use {defmt_rtt as _, panic_probe as _};
 // use panic_probe as _;
+const FRAME_SYNC_ANGLE: u32 = u32::MAX;
 const IMG_WIDTH: usize = mbi5264_common::IMG_WIDTH;
 const IMG_HEIGHT: usize = mbi5264_common::IMG_HEIGHT;
 const IMG_SIZE: usize = mbi5264_common::IMG_WIDTH * mbi5264_common::IMG_HEIGHT;
 type RGBH = [u8; 4];
 type ImageBuffer = [mbi5264_common::AngleImage; mbi5264_common::IMG_HEIGHT];
-const TOTAL_ANGLES: u32 = 180;
+const TOTAL_ANGLES: u32 = consts::TOTAL_ANGLES as u32;
 
 static MBI_BUF: ConstStaticCell<[MbiBuf2; 2]> =
     ConstStaticCell::new([MbiBuf2::new(0), MbiBuf2::new(0)]);
@@ -138,7 +140,6 @@ async fn main(spawner: Spawner) {
         p.PIN_18,
     );
     let mut cmd_pio = clocks2::CmdClock::new(p.PIO0, pins, data_ch);
-    let sync_cmd = Command::new_sync();
     let confirm_cmd = Command::new_confirm();
     let mut cnt: usize = 0;
     let cmd_iter = UMINI_CMDS.iter();
@@ -151,13 +152,10 @@ async fn main(spawner: Spawner) {
     // test_screen_normal(&mut cmd_pio, &mut line, &mut led_pin);
     test_screen_vdrm(&mut cmd_pio, &mut line, &mut mbi_rx, &mut led_pin).await;
 
-    let start_angle = TOTAL_ANGLES / 4;
-    let end_angle = start_angle + TOTAL_ANGLES / 2 - 1;
     let mut sync_signal = Input::new(p.PIN_22, gpio::Pull::None);
     sync_signal.wait_for_falling_edge().await;
     let mut last_sync_tick = Instant::now();
 
-    let mut angle = start_angle;
     // let mut cmd_iter = core::iter::repeat(UMINI_CMDS.iter()).flatten();
     loop {
         // let &(cmd, param) = cmd_iter.next().unwrap();
@@ -168,26 +166,22 @@ async fn main(spawner: Spawner) {
         let now = Instant::now();
         let ticks_per_angle = (now - last_sync_tick).as_ticks() as u32 / TOTAL_ANGLES;
         last_sync_tick = now;
-        Timer::at(now + Duration::from_ticks((angle * ticks_per_angle) as u64)).await;
 
         loop {
-            if angle >= end_angle {
-                break;
-            }
-            cmd_pio.refresh2(&sync_cmd);
-            // vsync
+            let mbi_buf = mbi_rx.receive().await;
+            let angle = mbi_buf.angle;
+            if angle != FRAME_SYNC_ANGLE {
+                Timer::at(now + Duration::from_ticks((angle * ticks_per_angle) as u64)).await;
+            };
             line.start();
-            // need sleep at least 15 micros , or there will be emi problem
-            Timer::after_micros(15).await;
-            let buf = mbi_rx.receive().await;
-            cmd_pio.refresh_ptr(buf.buf.as_ptr() as u32, buf.len);
+            cmd_pio.refresh_ptr(mbi_buf.buf.as_ptr() as u32, mbi_buf.buf.len() as u32);
             cmd_pio.wait().await;
             mbi_rx.receive_done();
             line.wait_stop().await;
-            angle += 1;
-            Timer::at(now + Duration::from_ticks((angle * ticks_per_angle) as u64)).await;
+            if angle == FRAME_SYNC_ANGLE {
+                break;
+            }
         }
-        angle = start_angle;
         if cnt & 0x10 != 0 {
             led_pin.toggle();
         }
@@ -383,7 +377,11 @@ async fn encode_mbi_vdrm(mut mbi_tx: zerocopy_channel::Sender<'static, NoopRawMu
             .enumerate()
             .filter_map(|(idx, angle_line)| (index_mod == idx % 2).then(|| (idx / 2, angle_line)));
         for (idx, angle_line) in iter {
-            let angle = if idx == 0 { u32::MAX } else { last_angle };
+            let angle = if idx == 0 {
+                FRAME_SYNC_ANGLE
+            } else {
+                last_angle
+            };
             last_angle = angle_line.angle;
             let mbi_buf = mbi_tx.send().await;
             let mut parser = clocks2::ColorParser::new(&mut mbi_buf.buf);

@@ -40,6 +40,17 @@ fn gen_pyramid_surface() -> vdrm_alg::PixelSurface {
 
 fn main() {
     let crate_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+    let const_path = std::path::Path::new(crate_dir.as_str()).join("src/consts.rs");
+
+    std::fs::write(
+        &const_path,
+        format!(
+            "pub const TOTAL_ANGLES: usize = {};",
+            vdrm_alg::TOTAL_ANGLES
+        ),
+    )
+    .unwrap();
+
     let image_path = std::path::Path::new(crate_dir.as_str()).join("img.bin");
     if !image_path.exists() {
         let codec = vdrm_alg::Codec::new(0..400);
