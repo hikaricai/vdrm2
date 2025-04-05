@@ -158,11 +158,11 @@ async fn main(spawner: Spawner) {
     let mut last_sync_tick = Instant::now();
 
     let mut angle = start_angle;
-    let mut cmd_iter = core::iter::repeat(UMINI_CMDS.iter()).flatten();
+    // let mut cmd_iter = core::iter::repeat(UMINI_CMDS.iter()).flatten();
     loop {
-        let &(cmd, param) = cmd_iter.next().unwrap();
-        cmd_pio.refresh2(&confirm_cmd);
-        cmd_pio.refresh2(&Command::new(cmd as u8, param));
+        // let &(cmd, param) = cmd_iter.next().unwrap();
+        // cmd_pio.refresh2(&confirm_cmd);
+        // cmd_pio.refresh2(&Command::new(cmd as u8, param));
 
         sync_signal.wait_for_falling_edge().await;
         let now = Instant::now();
@@ -279,7 +279,7 @@ fn test_screen_normal(
     let mut color_buf: [u16; clocks2::CMD_BUF_SIZE] = [0; clocks2::CMD_BUF_SIZE];
     clocks2::CmdClock::encode_cmd(&color_latch, &mut color_buf);
 
-    color_latch.regs[0] = [0x0000, 0, 0];
+    color_latch.regs[0] = [0x0000, gray, 0];
     let mut low_color_buf: [u16; clocks2::CMD_BUF_SIZE] = [0; clocks2::CMD_BUF_SIZE];
     clocks2::CmdClock::encode_cmd(&color_latch, &mut low_color_buf);
 
@@ -299,9 +299,9 @@ fn test_screen_normal(
             }
             for i in 0..64 {
                 for j in 0..16 {
-                    let ptr = if i <= 0 && j == 0 {
+                    let ptr = if i == 0 && j == 0 {
                         color_buf.as_ptr() as u32
-                    } else if j == 0 {
+                    } else if i == 1 && j == 0 {
                         low_color_buf.as_ptr() as u32
                     } else {
                         empty_buf.as_ptr() as u32
@@ -629,7 +629,7 @@ impl PixelSlot2 {
 struct MbiBuf2 {
     angle: u32,
     len: u32,
-    buf: [u16; 19384],
+    buf: [u16; 16384],
 }
 
 impl MbiBuf2 {
@@ -637,7 +637,7 @@ impl MbiBuf2 {
         Self {
             angle,
             len: 0,
-            buf: [0u16; 19384],
+            buf: [0u16; 16384],
         }
     }
 }

@@ -738,21 +738,12 @@ impl<'a> ColorParser<'a> {
             if empty_size <= 1 {
                 return;
             }
-            *self.loops += 1;
-            let empty_size = empty_size - 1;
-            let meta: &mut TranserMeta = add_buf_ptr(&mut self.buf);
-            meta.empty_loops = EMPTY_LEN_U32_CYCLES as u32 * 2 + 3;
-            let data_loops = (empty_size - 1) * (EMPTY_LEN_U32_CYCLES as u32 * 2 + 2) + 2;
-            meta.data_loops = data_loops - 2;
-            // need a lot of empty
-            // why more data result higher fps?
-            let u32_buf: &mut u32 = add_buf_ptr(&mut self.buf);
-            *u32_buf = 0x0008_0000;
-            for _ in 1..empty_size {
-                let u32_arr: &mut [u32; EMPTY_LEN_U32_CYCLES] = add_buf_ptr(&mut self.buf);
-                *u32_arr = [0; EMPTY_LEN_U32_CYCLES];
-                let u32_buf: &mut u32 = add_buf_ptr(&mut self.buf);
-                *u32_buf = 0x0008_0000;
+            for _i in 1..empty_size {
+                *self.loops += 1;
+                let meta: &mut ColorTranserTail = add_buf_ptr(&mut self.buf);
+                meta.empty_loops = EMPTY_LEN_U32_CYCLES as u32 * 2 - 3;
+                meta.data_loops = 2 - 2;
+                meta.buf = [0, 8];
             }
         }
         self.last_empties = 16 * 9;
