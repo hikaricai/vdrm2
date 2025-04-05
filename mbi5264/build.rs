@@ -62,6 +62,9 @@ fn main() {
             let mut pixels: [Option<[u8; 4]>; mbi5264_common::IMG_HEIGHT] =
                 [None; mbi5264_common::IMG_HEIGHT];
             for p in line {
+                if p.addr >= 144 {
+                    continue;
+                }
                 for (color, pixel) in p.pixels.iter().zip(&mut pixels) {
                     let Some(color) = color else {
                         continue;
