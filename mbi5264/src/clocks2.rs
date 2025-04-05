@@ -133,7 +133,7 @@ pub struct LineClock {
     started: bool,
     state: PwmState,
     all_batch: PwmBatch,
-    // pio_ba: PwmPio,
+    pio_ba: PwmPio,
 }
 const W: u16 = 160;
 impl LineClock {
@@ -151,7 +151,7 @@ impl LineClock {
     ) -> LineClockHdl {
         let _wrong_gclk_pin =
             embassy_rp::gpio::Input::new(wrong_gclk_pin, embassy_rp::gpio::Pull::None);
-        let _wrong_a_pin = embassy_rp::gpio::Input::new(wrong_a_pin, embassy_rp::gpio::Pull::None);
+        // let _wrong_a_pin = embassy_rp::gpio::Input::new(wrong_a_pin, embassy_rp::gpio::Pull::None);
         PWM_IRQ_WRAP::unpend();
         unsafe {
             PWM_IRQ_WRAP::enable();
@@ -227,7 +227,7 @@ impl LineClock {
             started: false,
             state: PwmState::Idle,
             all_batch,
-            // pio_ba: PwmPio::new(),
+            pio_ba: PwmPio::new(),
         };
         LINE_CLOCK.lock(|v| v.borrow_mut().replace(this));
         LineClockHdl { started: false }
@@ -240,7 +240,7 @@ impl LineClock {
         // self.pwm_c.set_config(&self.pwm_cfg.c_cfg);
         // self.pwm_ba.set_config(&self.pwm_cfg.ba_cfg);
 
-        // self.pio_ba.start();
+        self.pio_ba.start();
         PwmBatch::set_enabled(true, |batch| {
             *batch = unsafe { core::mem::transmute_copy(&self.all_batch) };
         });
@@ -262,7 +262,7 @@ impl LineClock {
         PwmBatch::set_enabled(false, |batch| {
             *batch = unsafe { core::mem::transmute_copy(&self.all_batch) };
         });
-        // self.pio_ba.stop();
+        self.pio_ba.stop();
         self.started = false;
         self.pwm_gclk.set_counter(0);
         self.pwm_c.set_counter(0);

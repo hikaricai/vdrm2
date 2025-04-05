@@ -339,7 +339,6 @@ async fn test_screen_vdrm(
             line.start();
             async_update_frame2(cmd_pio, mbi_rx).await;
             line.wait_stop().await;
-            embassy_time::block_for(Duration::from_millis(1));
         }
         if cnt & 0x10 != 0 {
             led_pin.toggle();
@@ -375,8 +374,15 @@ async fn encode_mbi_vdrm(mut mbi_tx: zerocopy_channel::Sender<'static, NoopRawMu
     let sync_len = sync_buf.len as usize * 2;
 
     let mut last_angle = 0u32;
+    let mut index_mod = 0usize;
     loop {
-        for (idx, angle_line) in img.iter().enumerate() {
+        index_mod += 1;
+        index_mod %= 2;
+        let iter = img
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, angle_line)| (index_mod == idx % 2).then(|| (idx / 2, angle_line)));
+        for (idx, angle_line) in iter {
             let angle = if idx == 0 { u32::MAX } else { last_angle };
             last_angle = angle_line.angle;
             let mbi_buf = mbi_tx.send().await;
@@ -399,10 +405,13 @@ async fn encode_mbi_vdrm(mut mbi_tx: zerocopy_channel::Sender<'static, NoopRawMu
 async fn encode_mbi_vdrm2(mut mbi_tx: zerocopy_channel::Sender<'static, NoopRawMutex, MbiBuf2>) {
     const IMG_BIN: &[u8] = include_bytes!("../img.bin");
     assert!(IMG_BIN.len() >= core::mem::size_of::<mbi5264_common::AngleImage>());
+    let mut img_bin = [0u8; IMG_BIN.len()];
+    img_bin.copy_from_slice(IMG_BIN);
+
     let img = unsafe {
         core::slice::from_raw_parts(
-            IMG_BIN.as_ptr() as *const mbi5264_common::AngleImage,
-            IMG_BIN.len() / core::mem::size_of::<mbi5264_common::AngleImage>(),
+            img_bin.as_ptr() as *const mbi5264_common::AngleImage,
+            img_bin.len() / core::mem::size_of::<mbi5264_common::AngleImage>(),
         )
     };
     let mut sync_buf = MbiBuf2::new(0);

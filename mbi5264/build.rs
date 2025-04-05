@@ -74,6 +74,27 @@ fn main() {
                     *c = p;
                 }
             }
+            // optimize fps
+            for i in 0..64usize {
+                let region0 = i;
+                let region1 = i + 64;
+                let region2 = i + 128;
+                let regions = [region0, region1, region2];
+                let mut non_empty_h = 0u8;
+                for region in regions {
+                    let p = img.coloum[region];
+                    let h = p[3];
+                    if h > 0 {
+                        non_empty_h = h;
+                    }
+                }
+                for region in regions {
+                    let p = &mut img.coloum[region];
+                    if p[..3] == [0, 0, 0] {
+                        p[3] = non_empty_h;
+                    }
+                }
+            }
             angle_list.push(img);
         }
         let buf = unsafe {
@@ -101,6 +122,7 @@ fn main() {
     // here, we ensure the build script is only re-run when
     // `memory.x` is changed.
     println!("cargo:rerun-if-changed=memory.x");
+    println!("cargo:rerun-if-changed=img.bin");
 
     println!("cargo:rustc-link-arg-bins=--nmagic");
     println!("cargo:rustc-link-arg-bins=-Tlink.x");
