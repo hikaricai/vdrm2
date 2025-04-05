@@ -75,6 +75,21 @@ impl Command {
 
 const UMINI_CMDS: &[(mbi5264_common::CMD, u16)] = &mbi5264_common::unimi_cmds();
 
+struct SyncSignal {
+    pin: Input<'static>,
+    is_mock: bool,
+}
+
+impl SyncSignal {
+    async fn wait_sync(&mut self) {
+        if self.is_mock {
+            Timer::after(Duration::from_millis(600)).await;
+            return;
+        }
+        self.pin.wait_for_falling_edge().await;
+    }
+}
+
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
     // defmt::info!("Hello there!");
@@ -150,11 +165,17 @@ async fn main(spawner: Spawner) {
     }
 
     // test_screen_normal(&mut cmd_pio, &mut line, &mut led_pin);
-    test_screen_vdrm(&mut cmd_pio, &mut line, &mut mbi_rx, &mut led_pin).await;
+    // test_screen_vdrm(&mut cmd_pio, &mut line, &mut mbi_rx, &mut led_pin).await;
 
-    let mut sync_signal = Input::new(p.PIN_22, gpio::Pull::None);
-    sync_signal.wait_for_falling_edge().await;
+    let mut sync_signal = SyncSignal {
+        pin: Input::new(p.PIN_22, gpio::Pull::None),
+        is_mock: true,
+    };
+    sync_signal.wait_sync().await;
+    defmt::info!("first sync_signal");
     let mut last_sync_tick = Instant::now();
+
+    let mut late_frames = 0u32;
 
     // let mut cmd_iter = core::iter::repeat(UMINI_CMDS.iter()).flatten();
     loop {
@@ -162,25 +183,36 @@ async fn main(spawner: Spawner) {
         // cmd_pio.refresh2(&confirm_cmd);
         // cmd_pio.refresh2(&Command::new(cmd as u8, param));
 
-        sync_signal.wait_for_falling_edge().await;
+        late_frames = 0;
+        sync_signal.wait_sync().await;
         let now = Instant::now();
         let ticks_per_angle = (now - last_sync_tick).as_ticks() as u32 / TOTAL_ANGLES;
+        defmt::info!("sync_signal ticks_per_angle {}", ticks_per_angle);
         last_sync_tick = now;
-
         loop {
             let mbi_buf = mbi_rx.receive().await;
             let angle = mbi_buf.angle;
+            let expires = now + Duration::from_ticks((angle * ticks_per_angle) as u64);
+            {
+                let now = Instant::now();
+                if now >= expires {
+                    late_frames += 1;
+                }
+            }
             if angle != FRAME_SYNC_ANGLE {
-                Timer::at(now + Duration::from_ticks((angle * ticks_per_angle) as u64)).await;
+                Timer::at(expires).await;
             };
             line.start();
-            cmd_pio.refresh_ptr(mbi_buf.buf.as_ptr() as u32, mbi_buf.buf.len() as u32);
+            cmd_pio.refresh_ptr(mbi_buf.buf.as_ptr() as u32, mbi_buf.len as u32);
             cmd_pio.wait().await;
             mbi_rx.receive_done();
             line.wait_stop().await;
             if angle == FRAME_SYNC_ANGLE {
                 break;
             }
+        }
+        if late_frames > 0 {
+            defmt::info!("late_frames {}", late_frames);
         }
         if cnt & 0x10 != 0 {
             led_pin.toggle();
@@ -358,6 +390,7 @@ async fn encode_mbi_vdrm(mut mbi_tx: zerocopy_channel::Sender<'static, NoopRawMu
             IMG_BIN.len() / core::mem::size_of::<mbi5264_common::AngleImage>(),
         )
     };
+    defmt::info!("total angles {}", img.len());
     let mut sync_buf = MbiBuf2::new(0);
     {
         const EMPTY_BUF: [RGBH; IMG_HEIGHT] = [[0, 0, 0, 0]; IMG_HEIGHT];
@@ -395,51 +428,6 @@ async fn encode_mbi_vdrm(mut mbi_tx: zerocopy_channel::Sender<'static, NoopRawMu
         mbi_buf.buf[..sync_len].copy_from_slice(&sync_buf.buf[..sync_len]);
         mbi_buf.len = sync_buf.len;
         mbi_buf.angle = last_angle;
-        mbi_tx.send_done();
-    }
-}
-
-#[embassy_executor::task]
-async fn encode_mbi_vdrm2(mut mbi_tx: zerocopy_channel::Sender<'static, NoopRawMutex, MbiBuf2>) {
-    const IMG_BIN: &[u8] = include_bytes!("../img.bin");
-    assert!(IMG_BIN.len() >= core::mem::size_of::<mbi5264_common::AngleImage>());
-    let mut img_bin = [0u8; IMG_BIN.len()];
-    img_bin.copy_from_slice(IMG_BIN);
-
-    let img = unsafe {
-        core::slice::from_raw_parts(
-            img_bin.as_ptr() as *const mbi5264_common::AngleImage,
-            img_bin.len() / core::mem::size_of::<mbi5264_common::AngleImage>(),
-        )
-    };
-    let mut sync_buf = MbiBuf2::new(0);
-
-    let mut coloum = img[32].coloum.clone();
-    defmt::info!("fmt coloum");
-    for rgbh in coloum.iter_mut() {
-        // defmt::info!("{}", rgbh[3]);
-        // rgbh[0] = 255;
-        // rgbh[1] = 255;
-        // rgbh[2] = 255;
-        // rgbh[3] = 0;
-    }
-    defmt::info!("fmt coloum end");
-    let mut parser = clocks2::ColorParser::new(&mut sync_buf.buf);
-    let len = update_frame(&mut parser, &coloum);
-    sync_buf.len = len;
-
-    let sync_len = sync_buf.len as usize * 2;
-
-    let mut last_angle = 0u32;
-    loop {
-        let mbi_buf = mbi_tx.send().await;
-        mbi_buf.buf[..sync_len].copy_from_slice(&sync_buf.buf[..sync_len]);
-        mbi_buf.len = sync_buf.len;
-        //
-        // let mut parser = clocks2::ColorParser::new(&mut mbi_buf.buf);
-        // let len = update_frame(&mut parser, &coloum);
-        // mbi_buf.len = len;
-        mbi_buf.angle = 0;
         mbi_tx.send_done();
     }
 }
