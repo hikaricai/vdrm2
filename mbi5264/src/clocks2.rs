@@ -126,8 +126,7 @@ struct LinePwmConfig {
 pub struct LineClock {
     pwm_gclk: Pwm<'static>,
     pwm_c: Pwm<'static>,
-    pwm_b: Pwm<'static>,
-    pwm_a: Pwm<'static>,
+    pwm_ba: Pwm<'static>,
     pwm_cfg: LinePwmConfig,
     pwm_cfg_tail: LinePwmConfigTail,
     started: bool,
@@ -141,17 +140,14 @@ impl LineClock {
         pwm7: peripherals::PWM_SLICE7,
         pwm8: peripherals::PWM_SLICE0,
         pwm1: peripherals::PWM_SLICE1,
-        pwm10: peripherals::PWM_SLICE2,
         c_pin: peripherals::PIN_14,
         b_pin: peripherals::PIN_16,
-        a_pin: peripherals::PIN_20,
-        wrong_a_pin: peripherals::PIN_17,
+        a_pin: peripherals::PIN_17,
         wrong_gclk_pin: peripherals::PIN_0,
         gclk_pin: peripherals::PIN_18,
     ) -> LineClockHdl {
         let _wrong_gclk_pin =
             embassy_rp::gpio::Input::new(wrong_gclk_pin, embassy_rp::gpio::Pull::None);
-        let _wrong_a_pin = embassy_rp::gpio::Input::new(wrong_a_pin, embassy_rp::gpio::Pull::None);
         PWM_IRQ_WRAP::unpend();
         unsafe {
             PWM_IRQ_WRAP::enable();
@@ -186,9 +182,10 @@ impl LineClock {
         ba_cfg.divider = pwm_div;
         ba_cfg.top = w + first_line_comp - 1;
         ba_cfg.compare_a = 3;
+        ba_cfg.compare_b = 2;
+        ba_cfg.invert_b = true;
         ba_cfg.enable = false;
-        let pwm_b = Pwm::new_output_a(pwm8, b_pin, ba_cfg.clone());
-        let pwm_a = Pwm::new_output_a(pwm10, a_pin, ba_cfg.clone());
+        let pwm_ba = Pwm::new_output_ab(pwm8, b_pin, a_pin, ba_cfg.clone());
 
         let pwm_cfg = LinePwmConfig {
             gclk_cfg,
@@ -215,13 +212,11 @@ impl LineClock {
 
         all_batch.enable(&pwm_gclk);
         all_batch.enable(&pwm_c);
-        all_batch.enable(&pwm_b);
-        all_batch.enable(&pwm_a);
+        all_batch.enable(&pwm_ba);
         let this = Self {
             pwm_gclk,
             pwm_c,
-            pwm_b,
-            pwm_a,
+            pwm_ba,
             pwm_cfg,
             pwm_cfg_tail,
             started: false,
@@ -245,8 +240,6 @@ impl LineClock {
             *batch = unsafe { core::mem::transmute_copy(&self.all_batch) };
         });
 
-        self.pwm_a.phase_retard();
-        self.pwm_a.phase_retard();
         // self.pwm_ba.phase_retard();
         // self.pwm_gclk.phase_retard();
         // self.pwm_gclk.phase_retard();
@@ -266,8 +259,7 @@ impl LineClock {
         self.started = false;
         self.pwm_gclk.set_counter(0);
         self.pwm_c.set_counter(0);
-        self.pwm_b.set_counter(0);
-        self.pwm_a.set_counter(0);
+        self.pwm_ba.set_counter(0);
     }
 
     #[inline]
@@ -280,11 +272,11 @@ impl LineClock {
         ba_cfg.compare_a = top;
         ba_cfg.compare_b = 0;
         ba_cfg.enable = true;
-        self.pwm_b.set_config(&ba_cfg);
+        self.pwm_ba.set_config(&ba_cfg);
         PwmBatch::set_enabled(false, |batch| {
-            batch.enable(&self.pwm_b);
+            batch.enable(&self.pwm_ba);
         });
-        self.pwm_b.set_counter(0);
+        self.pwm_ba.set_counter(0);
     }
 
     #[inline]
@@ -295,7 +287,7 @@ impl LineClock {
             PwmState::Idle => {}
             PwmState::Freshing => {
                 self.state = PwmState::Ending;
-                // self.set_pwm_b_high();
+                // self.set_pwm_ba_high();
                 // self.revert_gclk();
                 // self.tail_gclk();
             }
