@@ -85,7 +85,7 @@ fn main() {
                     }
                 }
             }
-            for (c, p) in img.coloum.iter_mut().zip(pixels) {
+            for (c, p) in img.coloum.iter_mut().rev().zip(pixels) {
                 if let Some(p) = p {
                     *c = p;
                 }

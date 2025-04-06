@@ -437,7 +437,7 @@ async fn encode_mbi_vdrm(mut mbi_tx: zerocopy_channel::Sender<'static, NoopRawMu
     let sync_len = sync_buf.len as usize * 2;
 
     let mut last_angle = 0u32;
-    const INDEX_MOD: usize = 16;
+    const INDEX_MOD: usize = 8;
     let mut index_mod = 0usize;
     loop {
         index_mod += 1;
