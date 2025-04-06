@@ -62,9 +62,11 @@ fn main() {
             let mut pixels: [Option<[u8; 4]>; mbi5264_common::IMG_HEIGHT] =
                 [None; mbi5264_common::IMG_HEIGHT];
             for p in line {
-                if p.addr >= 144 {
+                let mut addr = p.addr;
+                if addr >= 144 {
                     continue;
                 }
+                addr = 143 - addr;
                 for (color, pixel) in p.pixels.iter().zip(&mut pixels) {
                     let Some(color) = color else {
                         continue;
@@ -73,12 +75,12 @@ fn main() {
                     match pixel {
                         Some(rgbh) => {
                             let h = rgbh[3];
-                            if p.addr < h as u32 {
-                                *rgbh = [r, g, b, p.addr as u8];
+                            if addr < h as u32 {
+                                *rgbh = [r, g, b, addr as u8];
                             }
                         }
                         None => {
-                            *pixel = Some([r, g, b, p.addr as u8]);
+                            *pixel = Some([r, g, b, addr as u8]);
                         }
                     }
                 }
@@ -141,5 +143,5 @@ fn main() {
     println!("cargo:rustc-link-arg-bins=--nmagic");
     println!("cargo:rustc-link-arg-bins=-Tlink.x");
     println!("cargo:rustc-link-arg-bins=-Tlink-rp.x");
-    println!("cargo:rustc-link-arg-bins=-Tdefmt.x");
+    // println!("cargo:rustc-link-arg-bins=-Tdefmt.x");
 }

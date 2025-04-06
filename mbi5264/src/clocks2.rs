@@ -533,7 +533,6 @@ impl CmdClock {
             ],
         );
 
-        // defmt::info!("data_sm addr {}", data_prog.origin);
         let mut cfg = pio::Config::default();
         cfg.clock_divider = clk_div;
         cfg.use_program(&data_prog, &[]);

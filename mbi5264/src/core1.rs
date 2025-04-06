@@ -46,7 +46,7 @@ static QOI_CHANNEL: StaticCell<zerocopy_channel::Channel<'_, CriticalSectionRawM
 // {
 //     unsafe fn on_interrupt() {
 //         let core_num = embassy_rp::pac::SIO.cpuid().read();
-//         defmt::info!("usb interrupt core {}", core_num);
+//         rtt_target::rprintln!("usb interrupt core {}", core_num);
 //         InterruptHandler::<USB>::on_interrupt();
 //     }
 // }
@@ -85,9 +85,9 @@ async fn decode_qoi(
 ) {
     let mut cnt = 0_u8;
     loop {
-        // defmt::info!("decode qoi");
+        // rtt_target::rprintln!("decode qoi");
         let send_buf = safe_sender.sender.send().await;
-        // defmt::info!("acquire qoi send buffer");
+        // rtt_target::rprintln!("acquire qoi send buffer");
         // let raw_buf: &mut [u8; crate::IMG_SIZE * 4] =
         //     unsafe { core::mem::transmute(send_buf.as_ptr()) };
         // loop {
@@ -97,10 +97,10 @@ async fn decode_qoi(
         //         continue;
         //     };
         //     let payload_len = usb_data.hdr.payload_len;
-        //     defmt::info!("usb data {}", payload_len);
+        //     rtt_target::rprintln!("usb data {}", payload_len);
         //     let ret = qoi::decode_to_buf(raw_buf.as_mut(), usb_data.payload);
         //     usb_data_rx.receive_done();
-        //     defmt::info!("decode qoi ret {}", ret.is_ok());
+        //     rtt_target::rprintln!("decode qoi ret {}", ret.is_ok());
         //     if ret.is_ok() {
         //         break;
         //     }
@@ -119,7 +119,7 @@ async fn decode_qoi(
 #[embassy_executor::task]
 async fn core1_usb_task(usb: USB, mut qoi_tx: crate::SafeSender<UsbDataBuf>) {
     let core_num = embassy_rp::pac::SIO.cpuid().read();
-    defmt::info!("Hello from core {}", core_num);
+    // rtt_target::rprintln!("Hello from core {}", core_num);
     let driver = Driver::new(usb, Irqs);
 
     // Create embassy-usb Config
@@ -165,13 +165,13 @@ async fn core1_usb_task(usb: USB, mut qoi_tx: crate::SafeSender<UsbDataBuf>) {
     let echo_fut = async {
         loop {
             read_ep.wait_enabled().await;
-            defmt::info!("Connected");
+            // rtt_target::rprintln!("Connected");
             loop {
                 if !handle_usb(&mut read_ep, &mut qoi_tx).await {
                     break;
                 };
             }
-            defmt::info!("Disconnected");
+            // rtt_target::rprintln!("Disconnected");
         }
     };
 
@@ -189,13 +189,13 @@ async fn handle_usb(
     loop {
         match read_ep.read(&mut buf[total_len..]).await {
             Ok(n) => {
-                // defmt::info!("Got bulk {}", n);
+                // rtt_target::rprintln!("Got bulk {}", n);
                 // Echo back to the host:
                 // write_ep.write(&data[..n]).await.ok();
                 total_len += n;
             }
             Err(e) => {
-                defmt::info!("Got bulk err {}", e);
+                // rtt_target::rprintln!("Got bulk err {}", e);
                 match e {
                     embassy_usb::driver::EndpointError::BufferOverflow => {
                         return true;
@@ -210,16 +210,16 @@ async fn handle_usb(
         //     let hdr: &mbi5264_common::UsbDataHead = unsafe { core::mem::transmute(buf.as_ptr()) };
         //     // let cmd = u32::from_le_bytes(buf[0..4].try_into().unwrap());
         //     // let len = u32::from_le_bytes(buf[4..8].try_into().unwrap());
-        //     // defmt::info!("decode info {} {}", cmd, len);
+        //     // rtt_target::rprintln!("decode info {} {}", cmd, len);
         //     let cmd = hdr.cmd as u32;
         //     let len = hdr.payload_len;
-        //     defmt::info!("decode info {} {}", cmd, len);
+        //     rtt_target::rprintln!("decode info {} {}", cmd, len);
         // }
 
         let Some(usb_data) = mbi5264_common::UsbData::ref_from_buf(&buf[0..total_len]) else {
             continue;
         };
-        defmt::info!("recv usb_data succ");
+        // rtt_target::rprintln!("recv usb_data succ");
         match usb_data.hdr.cmd {
             mbi5264_common::UsbCmd::QOI => {}
         }

@@ -10,8 +10,8 @@ use embassy_sync::{
     zerocopy_channel,
 };
 use embassy_time::{block_for, Duration, Instant, Timer};
+use panic_rtt_target as _;
 use static_cell::{ConstStaticCell, StaticCell};
-use {defmt_rtt as _, panic_probe as _};
 // use panic_probe as _;
 const FRAME_SYNC_ANGLE: u32 = u32::MAX;
 const IMG_WIDTH: usize = mbi5264_common::IMG_WIDTH;
@@ -83,7 +83,7 @@ struct SyncSignal {
 impl SyncSignal {
     async fn wait_sync(&mut self) {
         if self.is_mock {
-            Timer::after(Duration::from_millis(600)).await;
+            Timer::after(Duration::from_millis(150)).await;
             return;
         }
         self.pin.wait_for_falling_edge().await;
@@ -92,9 +92,11 @@ impl SyncSignal {
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
-    // defmt::info!("Hello there!");
+    let mut rtt = rtt_target::rtt_init_default!();
+    rtt_target::set_print_channel(rtt.up.0);
+    rtt_target::rprintln!("Hello there!");
     let core_num = embassy_rp::pac::SIO.cpuid().read();
-    defmt::info!("main core {}", core_num);
+    rtt_target::rprintln!("main core {}", core_num);
     let mut config = embassy_rp::config::Config::default();
     let sys_pll = config
         .clocks
@@ -169,29 +171,60 @@ async fn main(spawner: Spawner) {
 
     let mut sync_signal = SyncSignal {
         pin: Input::new(p.PIN_22, gpio::Pull::None),
-        is_mock: true,
+        is_mock: false,
     };
     sync_signal.wait_sync().await;
-    defmt::info!("first sync_signal");
+    rtt_target::rprintln!("first sync_signal");
     let mut last_sync_tick = Instant::now();
 
     let mut late_frames = 0u32;
-
+    let mut rtt_read_buf = [0u8; 16];
+    let mut angle_offset = 0i32;
+    const DBG_INTREVAL: usize = 10;
     // let mut cmd_iter = core::iter::repeat(UMINI_CMDS.iter()).flatten();
     loop {
         // let &(cmd, param) = cmd_iter.next().unwrap();
         // cmd_pio.refresh2(&confirm_cmd);
         // cmd_pio.refresh2(&Command::new(cmd as u8, param));
 
-        late_frames = 0;
+        if cnt % DBG_INTREVAL == 0 {
+            let read_len = rtt.down.0.read(&mut rtt_read_buf);
+            for &c in rtt_read_buf.iter().take(read_len) {
+                let deta = match c {
+                    b'1' => -3,
+                    b'2' => 3,
+                    _ => 0,
+                };
+                angle_offset += deta;
+            }
+            rtt_target::rprintln!("angle_offset {}", angle_offset);
+        }
+
         sync_signal.wait_sync().await;
         let now = Instant::now();
-        let ticks_per_angle = (now - last_sync_tick).as_ticks() as u32 / TOTAL_ANGLES;
-        defmt::info!("sync_signal ticks_per_angle {}", ticks_per_angle);
+        let elapsed = now - last_sync_tick;
+        let fps = 1000 / elapsed.as_millis() as u32;
+        let ticks_per_angle = elapsed.as_ticks() as u32 / TOTAL_ANGLES;
+        if cnt % DBG_INTREVAL == 0 {
+            rtt_target::rprintln!(
+                "sync_signal ticks_per_angle {} fps {}",
+                ticks_per_angle,
+                fps
+            );
+        }
+
         last_sync_tick = now;
         loop {
             let mbi_buf = mbi_rx.receive().await;
-            let angle = mbi_buf.angle;
+            let mut angle = mbi_buf.angle;
+            if angle != FRAME_SYNC_ANGLE {
+                let mut angle_i = angle as i32;
+                if angle_i + angle_offset > 0 {
+                    angle_i += angle_offset;
+                }
+                angle = angle_i as u32;
+            }
+
             let expires = now + Duration::from_ticks((angle * ticks_per_angle) as u64);
             {
                 let now = Instant::now();
@@ -211,8 +244,11 @@ async fn main(spawner: Spawner) {
                 break;
             }
         }
-        if late_frames > 0 {
-            defmt::info!("late_frames {}", late_frames);
+        if cnt % DBG_INTREVAL == 0 {
+            if late_frames > 0 {
+                rtt_target::rprintln!("late_frames {}", late_frames);
+            }
+            late_frames = 0;
         }
         if cnt & 0x10 != 0 {
             led_pin.toggle();
@@ -267,13 +303,13 @@ async fn test_screen(
             // cmd_pio.refresh2(&Command::new(cmd as u8, param));
             // block_for(Duration::from_micros(120));
 
-            // defmt::info!("[begin] update_frame2");
+            // rtt_target::rprintln!("[begin] update_frame2");
             // let mut parser = clocks2::ColorParser::new(&mut buf);
             // block_update_frame(&mut parser, cmd_pio, &coloum);
             // async_update_frame(&mut parser, cmd_pio, &coloum).await;
             async_update_frame2(cmd_pio, mbi_rx).await;
             // cmd_pio.refresh2(&sync_cmd);
-            // defmt::info!("[end] update_frame2");
+            // rtt_target::rprintln!("[end] update_frame2");
             line.wait_stop().await;
             // frame_cnt += 1;
             // frame_cnt %= 16;
@@ -287,7 +323,7 @@ async fn test_screen(
             let duration_ms = (now - last).as_millis();
             last = now;
             let fps = 5_000 * 1000 / duration_ms;
-            defmt::info!("5000 frames in {} ms, {} fps", duration_ms, fps);
+            rtt_target::rprintln!("5000 frames in {} ms, {} fps", duration_ms, fps);
         }
     }
 }
@@ -346,7 +382,7 @@ fn test_screen_normal(
             let duration_ms = (now - last).as_millis();
             last = now;
             let fps = 5_00 * 1000 / duration_ms;
-            defmt::info!("500 frames in {} ms, {} fps", duration_ms, fps);
+            rtt_target::rprintln!("500 frames in {} ms, {} fps", duration_ms, fps);
         }
     }
 }
@@ -375,7 +411,7 @@ async fn test_screen_vdrm(
             let duration_ms = (now - last).as_millis();
             last = now;
             let fps = 5_000 * 1000 / duration_ms;
-            defmt::info!("5000 frames in {} ms, {} fps", duration_ms, fps);
+            rtt_target::rprintln!("5000 frames in {} ms, {} fps", duration_ms, fps);
         }
     }
 }
@@ -390,7 +426,7 @@ async fn encode_mbi_vdrm(mut mbi_tx: zerocopy_channel::Sender<'static, NoopRawMu
             IMG_BIN.len() / core::mem::size_of::<mbi5264_common::AngleImage>(),
         )
     };
-    defmt::info!("total angles {}", img.len());
+    rtt_target::rprintln!("total angles {}", img.len());
     let mut sync_buf = MbiBuf2::new(0);
     {
         const EMPTY_BUF: [RGBH; IMG_HEIGHT] = [[0, 0, 0, 0]; IMG_HEIGHT];
@@ -401,14 +437,14 @@ async fn encode_mbi_vdrm(mut mbi_tx: zerocopy_channel::Sender<'static, NoopRawMu
     let sync_len = sync_buf.len as usize * 2;
 
     let mut last_angle = 0u32;
+    const INDEX_MOD: usize = 16;
     let mut index_mod = 0usize;
     loop {
         index_mod += 1;
-        index_mod %= 2;
-        let iter = img
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, angle_line)| (index_mod == idx % 2).then(|| (idx / 2, angle_line)));
+        index_mod %= INDEX_MOD;
+        let iter = img.iter().enumerate().filter_map(|(idx, angle_line)| {
+            (index_mod == idx % INDEX_MOD).then(|| (idx / INDEX_MOD, angle_line))
+        });
         for (idx, angle_line) in iter {
             let angle = if idx == 0 {
                 FRAME_SYNC_ANGLE
@@ -494,7 +530,7 @@ fn update_frame(parser: &mut clocks2::ColorParser, rgbh_coloum: &[RGBH; IMG_HEIG
     parser.add_empty(50);
     // parser.add_empty(5000);
     for line in 0..64usize {
-        // defmt::info!("line {}", line);
+        // rtt_target::rprintln!("line {}", line);
         // TODO optimize speed
         let p0 = RGBMeta::new(region0[line], 0);
         let p1 = RGBMeta::new(region1[line], 1);
@@ -662,41 +698,6 @@ async fn encode_mbi2(mut mbi_tx: zerocopy_channel::Sender<'static, NoopRawMutex,
     }
     loop {
         for (angle, coloum) in img_buf.chunks_exact(IMG_HEIGHT).enumerate() {
-            let buf = mbi_tx.send().await;
-            let mut parser = clocks2::ColorParser::new(&mut buf.buf);
-            let coloum: &[RGBH; IMG_HEIGHT] = unsafe { core::mem::transmute(coloum.as_ptr()) };
-            let len = update_frame(&mut parser, &coloum);
-            buf.len = len;
-            buf.angle = angle as u32;
-            mbi_tx.send_done();
-        }
-    }
-}
-
-#[embassy_executor::task]
-async fn encode_mbi3(mut mbi_tx: zerocopy_channel::Sender<'static, NoopRawMutex, MbiBuf2>) {
-    let gray = 0b11111_111_0_00000_00;
-    let gray = 0u8;
-    let mut img_buf = [[gray, gray, gray, 143]; IMG_SIZE];
-    for (idx, coloum) in img_buf.chunks_exact_mut(IMG_HEIGHT).enumerate().take(1) {
-        for (col, p) in coloum.iter_mut().enumerate() {
-            let hh = 0;
-            let h = col as u8;
-            // let h = (col % 64) as u8;
-            if h < hh {
-                continue;
-            }
-            if h > hh {
-                break;
-            }
-            // let h = 63 - h;
-            let gray = 255;
-            // let gray = 128;
-            *p = [gray, 0, 0, 143];
-        }
-    }
-    loop {
-        for (angle, coloum) in img_buf.chunks_exact(IMG_HEIGHT).enumerate().take(1) {
             let buf = mbi_tx.send().await;
             let mut parser = clocks2::ColorParser::new(&mut buf.buf);
             let coloum: &[RGBH; IMG_HEIGHT] = unsafe { core::mem::transmute(coloum.as_ptr()) };
