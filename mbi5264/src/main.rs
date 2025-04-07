@@ -363,8 +363,6 @@ fn test_screen_normal(
                 for j in 0..16 {
                     let ptr = if i == 0 && j == 0 {
                         color_buf.as_ptr() as u32
-                    } else if i == 3 && j == 0 {
-                        low_color_buf.as_ptr() as u32
                     } else {
                         empty_buf.as_ptr() as u32
                     };
@@ -561,6 +559,8 @@ fn update_frame(parser: &mut clocks2::ColorParser, rgbh_coloum: &[RGBH; IMG_HEIG
                 }
                 continue;
             }
+            // assume data is optimized
+            unreachable!();
 
             parser.add_color_end(
                 &last_solt.buf,
