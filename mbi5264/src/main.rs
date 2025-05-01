@@ -114,7 +114,7 @@ async fn motor_input_sync(
     sync_signal.wait_sync().await;
     let mut last_sync_tick = Instant::now();
     let mut rtt_read_buf = [0u8; 16];
-    let mut angle_offset = 0i32;
+    let mut angle_offset = 33i32;
     loop {
         if cnt % DBG_INTREVAL == 0 {
             let read_len = rtt_down.read(&mut rtt_read_buf);
@@ -182,7 +182,7 @@ async fn main(spawner: Spawner) {
     let motor_sync_sinal = &*motor_sync_sinal;
     let sync_signal = SyncSignal {
         pin: Input::new(p.PIN_22, gpio::Pull::None),
-        is_mock: true,
+        is_mock: false,
     };
     spawner
         .spawn(motor_input_sync(sync_signal, rtt_down, motor_sync_sinal))
@@ -261,7 +261,7 @@ async fn main(spawner: Spawner) {
                 mbi_rx.receive_done();
                 continue;
             }
-            let img_angle = mbi_buf.angle;
+            let img_angle = (mbi_buf.angle as i32 + angle_offset) as u32;
 
             let now = Instant::now();
             let cur_angle = (now.as_ticks() - last_tick.as_ticks()) as u32 / ticks_per_angle;
