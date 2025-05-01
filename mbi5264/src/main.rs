@@ -20,11 +20,19 @@ const IMG_SIZE: usize = mbi5264_common::IMG_WIDTH * mbi5264_common::IMG_HEIGHT;
 type RGBH = [u8; 4];
 type ImageBuffer = [mbi5264_common::AngleImage; mbi5264_common::IMG_HEIGHT];
 const TOTAL_ANGLES: u32 = consts::TOTAL_ANGLES as u32;
+const TOTAL_MIRRORS: u32 = 8;
+const ANGLES_PER_MIRROR: u32 = TOTAL_ANGLES / TOTAL_MIRRORS;
+const DBG_INTREVAL: usize = 10;
 
 static MBI_BUF: ConstStaticCell<[MbiBuf2; 2]> =
     ConstStaticCell::new([MbiBuf2::new(0), MbiBuf2::new(0)]);
 static MBI_CHANNEL: StaticCell<zerocopy_channel::Channel<'_, NoopRawMutex, MbiBuf2>> =
     StaticCell::new();
+static MOTOR_SYNC_SIGNAL: StaticCell<embassy_sync::signal::Signal<NoopRawMutex, SyncState>> =
+    StaticCell::new();
+// static MOTOR_SYNC_SIGNAL: embassy_sync::signal::Signal<NoopRawMutex, ()> =
+//     embassy_sync::signal::Signal::new();
+
 // static mut BUF2: [ImageBuffer; 2] = [[[0; 4]; IMG_SIZE]; 2];
 // static IMG_CHANNEL2: ConstStaticCell<
 //     zerocopy_channel::Channel<'_, CriticalSectionRawMutex, ImageBuffer>,
@@ -83,16 +91,70 @@ struct SyncSignal {
 impl SyncSignal {
     async fn wait_sync(&mut self) {
         if self.is_mock {
-            Timer::after(Duration::from_millis(150)).await;
+            Timer::after(Duration::from_millis(1000 / 5)).await;
             return;
         }
         self.pin.wait_for_falling_edge().await;
     }
 }
 
+struct SyncState {
+    last_tick: Instant,
+    ticks_per_angle: u32,
+    angle_offset: i32,
+}
+
+#[embassy_executor::task]
+async fn motor_input_sync(
+    mut sync_signal: SyncSignal,
+    mut rtt_down: rtt_target::DownChannel,
+    motor_sync_sinal: &'static embassy_sync::signal::Signal<NoopRawMutex, SyncState>,
+) {
+    let mut cnt = 0usize;
+    sync_signal.wait_sync().await;
+    let mut last_sync_tick = Instant::now();
+    let mut rtt_read_buf = [0u8; 16];
+    let mut angle_offset = 0i32;
+    loop {
+        if cnt % DBG_INTREVAL == 0 {
+            let read_len = rtt_down.read(&mut rtt_read_buf);
+            for &c in rtt_read_buf.iter().take(read_len) {
+                let deta = match c {
+                    b'1' => -3,
+                    b'2' => 3,
+                    _ => 0,
+                };
+                angle_offset += deta;
+            }
+            rtt_target::rprintln!("angle_offset {}", angle_offset);
+        }
+
+        sync_signal.wait_sync().await;
+        let now = Instant::now();
+        let elapsed = now - last_sync_tick;
+        let ticks_per_angle = elapsed.as_ticks() as u32 / TOTAL_ANGLES;
+        motor_sync_sinal.signal(SyncState {
+            last_tick: now,
+            ticks_per_angle,
+            angle_offset,
+        });
+        if cnt % DBG_INTREVAL == 0 {
+            let fps = 1000 / elapsed.as_millis() as u32;
+            rtt_target::rprintln!(
+                "sync_signal ticks_per_angle {} fps {}",
+                ticks_per_angle,
+                fps
+            );
+        }
+        last_sync_tick = now;
+        cnt += 1;
+    }
+}
+
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
-    let mut rtt = rtt_target::rtt_init_default!();
+    let rtt = rtt_target::rtt_init_default!();
+    let mut rtt_down: rtt_target::DownChannel = rtt.down.0;
     rtt_target::set_print_channel(rtt.up.0);
     rtt_target::rprintln!("Hello there!");
     let core_num = embassy_rp::pac::SIO.cpuid().read();
@@ -116,6 +178,15 @@ async fn main(spawner: Spawner) {
         w.set_dma_w(true);
     });
 
+    let motor_sync_sinal = MOTOR_SYNC_SIGNAL.init(embassy_sync::signal::Signal::new());
+    let motor_sync_sinal = &*motor_sync_sinal;
+    let sync_signal = SyncSignal {
+        pin: Input::new(p.PIN_22, gpio::Pull::None),
+        is_mock: true,
+    };
+    spawner
+        .spawn(motor_input_sync(sync_signal, rtt_down, motor_sync_sinal))
+        .unwrap();
     // let channel = IMG_CHANNEL.init(zerocopy_channel::Channel::new(BUF.take()));
     // let (sender, img_rx) = channel.split();
     // let img_tx = SafeSender { sender };
@@ -168,87 +239,67 @@ async fn main(spawner: Spawner) {
 
     // test_screen_normal(&mut cmd_pio, &mut line, &mut led_pin);
     // test_screen_vdrm(&mut cmd_pio, &mut line, &mut mbi_rx, &mut led_pin).await;
-
-    let mut sync_signal = SyncSignal {
-        pin: Input::new(p.PIN_22, gpio::Pull::None),
-        is_mock: false,
-    };
-    sync_signal.wait_sync().await;
-    rtt_target::rprintln!("first sync_signal");
-    let mut last_sync_tick = Instant::now();
-
-    let mut late_frames = 0u32;
-    let mut rtt_read_buf = [0u8; 16];
-    let mut angle_offset = 0i32;
-    const DBG_INTREVAL: usize = 10;
+    // rtt_target::rprintln!("first sync_signal");
     // let mut cmd_iter = core::iter::repeat(UMINI_CMDS.iter()).flatten();
+    let mut late_frames = 0u32;
+    let mut fast_frames = 0u32;
     loop {
         // let &(cmd, param) = cmd_iter.next().unwrap();
         // cmd_pio.refresh2(&confirm_cmd);
         // cmd_pio.refresh2(&Command::new(cmd as u8, param));
 
-        if cnt % DBG_INTREVAL == 0 {
-            let read_len = rtt.down.0.read(&mut rtt_read_buf);
-            for &c in rtt_read_buf.iter().take(read_len) {
-                let deta = match c {
-                    b'1' => -3,
-                    b'2' => 3,
-                    _ => 0,
-                };
-                angle_offset += deta;
-            }
-            rtt_target::rprintln!("angle_offset {}", angle_offset);
-        }
-
-        sync_signal.wait_sync().await;
-        let now = Instant::now();
-        let elapsed = now - last_sync_tick;
-        let fps = 1000 / elapsed.as_millis() as u32;
-        let ticks_per_angle = elapsed.as_ticks() as u32 / TOTAL_ANGLES;
-        if cnt % DBG_INTREVAL == 0 {
-            rtt_target::rprintln!(
-                "sync_signal ticks_per_angle {} fps {}",
-                ticks_per_angle,
-                fps
-            );
-        }
-
-        last_sync_tick = now;
+        let SyncState {
+            last_tick,
+            ticks_per_angle,
+            angle_offset,
+        } = motor_sync_sinal.wait().await;
         loop {
             let mbi_buf = mbi_rx.receive().await;
-            let mut angle = mbi_buf.angle;
-            if angle != FRAME_SYNC_ANGLE {
-                let mut angle_i = angle as i32;
-                if angle_i + angle_offset > 0 {
-                    angle_i += angle_offset;
-                }
-                angle = angle_i as u32;
+            if mbi_buf.angle == FRAME_SYNC_ANGLE {
+                mbi_rx.receive_done();
+                continue;
             }
+            let mut img_angle_i = mbi_buf.angle as i32 + angle_offset;
+            img_angle_i -= (TOTAL_ANGLES / 4) as i32;
 
-            let expires = now + Duration::from_ticks((angle * ticks_per_angle) as u64);
-            {
-                let now = Instant::now();
-                if now >= expires {
-                    late_frames += 1;
-                }
+            let now = Instant::now();
+            let cur_angle = (now.as_ticks() - last_tick.as_ticks()) as u32 / ticks_per_angle;
+            if cur_angle >= TOTAL_ANGLES {
+                mbi_rx.receive_done();
+                break;
             }
-            if angle != FRAME_SYNC_ANGLE {
+            let cur_mirror = (cur_angle + ANGLES_PER_MIRROR / 2) / ANGLES_PER_MIRROR;
+            let cur_window = cur_mirror * ANGLES_PER_MIRROR;
+            let img_angle_i = img_angle_i + cur_window as i32;
+            let cur_angle_i = cur_angle as i32;
+            if img_angle_i < 0 || img_angle_i + 0 < cur_angle_i {
+                late_frames += 1;
+                mbi_rx.receive_done();
+                continue;
+            }
+            let img_angle = img_angle_i as u32;
+
+            if img_angle > cur_angle {
+                fast_frames += 1;
+                let expires =
+                    last_tick + Duration::from_ticks((img_angle * ticks_per_angle) as u64);
                 Timer::at(expires).await;
-            };
+            }
             line.start();
             cmd_pio.refresh_ptr(mbi_buf.buf.as_ptr() as u32, mbi_buf.len as u32);
             cmd_pio.wait().await;
             mbi_rx.receive_done();
             line.wait_stop().await;
-            if angle == FRAME_SYNC_ANGLE {
-                break;
-            }
         }
         if cnt % DBG_INTREVAL == 0 {
             if late_frames > 0 {
                 rtt_target::rprintln!("late_frames {}", late_frames);
             }
+            if fast_frames > 0 {
+                rtt_target::rprintln!("fast_frames {}", fast_frames);
+            }
             late_frames = 0;
+            fast_frames = 0;
         }
         if cnt & 0x10 != 0 {
             led_pin.toggle();
