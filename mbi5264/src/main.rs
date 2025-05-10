@@ -180,13 +180,13 @@ async fn main(spawner: Spawner) {
 
     let motor_sync_sinal = MOTOR_SYNC_SIGNAL.init(embassy_sync::signal::Signal::new());
     let motor_sync_sinal = &*motor_sync_sinal;
-    let sync_signal = SyncSignal {
-        pin: Input::new(p.PIN_22, gpio::Pull::None),
-        is_mock: false,
-    };
-    spawner
-        .spawn(motor_input_sync(sync_signal, rtt_down, motor_sync_sinal))
-        .unwrap();
+    // let sync_signal = SyncSignal {
+    //     pin: Input::new(p.PIN_22, gpio::Pull::None),
+    //     is_mock: true,
+    // };
+    // spawner
+    //     .spawn(motor_input_sync(sync_signal, rtt_down, motor_sync_sinal))
+    //     .unwrap();
     // let channel = IMG_CHANNEL.init(zerocopy_channel::Channel::new(BUF.take()));
     // let (sender, img_rx) = channel.split();
     // let img_tx = SafeSender { sender };
@@ -200,31 +200,27 @@ async fn main(spawner: Spawner) {
 
     let mut led_pin = gpio::Output::new(p.PIN_25, gpio::Level::Low);
     let pins = clocks2::CmdClockPins {
-        clk_pin: p.PIN_1,
-        r0_pin: p.PIN_2,
-        g0_pin: p.PIN_3,
-        b0_pin: p.PIN_4,
-        le0_pin: p.PIN_5,
-        r1_pin: p.PIN_6,
-        g1_pin: p.PIN_7,
-        b1_pin: p.PIN_8,
-        le1_pin: p.PIN_9,
-        r2_pin: p.PIN_10,
-        g2_pin: p.PIN_11,
-        b2_pin: p.PIN_12,
-        le2_pin: p.PIN_13,
+        r0_pin: p.PIN_0,
+        g0_pin: p.PIN_1,
+        b0_pin: p.PIN_2,
+        r1_pin: p.PIN_3,
+        g1_pin: p.PIN_4,
+        b1_pin: p.PIN_5,
+        r2_pin: p.PIN_6,
+        g2_pin: p.PIN_7,
+        b2_pin: p.PIN_8,
+        le_pin: p.PIN_9,
+        clk_pin: p.PIN_10,
     };
     let data_ch = p.DMA_CH0;
     let mut line = clocks2::LineClock::new(
+        p.PWM_SLICE6,
         p.PWM_SLICE7,
         p.PWM_SLICE0,
         p.PWM_SLICE1,
-        p.PWM_SLICE2,
+        p.PIN_12,
         p.PIN_14,
         p.PIN_16,
-        p.PIN_20,
-        p.PIN_17,
-        p.PIN_0,
         p.PIN_18,
     );
     let mut cmd_pio = clocks2::CmdClock::new(p.PIO0, pins, data_ch);
@@ -238,7 +234,7 @@ async fn main(spawner: Spawner) {
     }
 
     // test_screen_normal(&mut cmd_pio, &mut line, &mut led_pin);
-    // test_screen_vdrm(&mut cmd_pio, &mut line, &mut mbi_rx, &mut led_pin).await;
+    test_screen_vdrm(&mut cmd_pio, &mut line, &mut mbi_rx, &mut led_pin).await;
     // rtt_target::rprintln!("first sync_signal");
     // let mut cmd_iter = core::iter::repeat(UMINI_CMDS.iter()).flatten();
     loop {
@@ -674,7 +670,7 @@ impl PixelSlot2 {
             let g = (g >> i) & 1;
             let b = (b >> i) & 1;
             let rgb = (r | (g << 1) | (b << 2)) as u16;
-            *buf |= rgb << (4 * region);
+            *buf |= rgb << (3 * region);
         }
         Self {
             buf,
@@ -693,7 +689,7 @@ impl PixelSlot2 {
             let g = (g >> i) & 1;
             let b = (b >> i) & 1;
             let rgb = (r | (g << 1) | (b << 2)) as u16;
-            *buf |= rgb << (4 * region);
+            *buf |= rgb << (3 * region);
         }
     }
 }

@@ -11,6 +11,8 @@ use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::signal::Signal;
 use embassy_sync::waitqueue::AtomicWaker;
 
+const LE_HIGH: u16 = 1 << 9;
+
 static LINE_CLOCK: Mutex<ThreadModeRawMutex, RefCell<Option<LineClock>>> =
     Mutex::new(RefCell::new(None));
 
@@ -138,20 +140,15 @@ pub struct LineClock {
 const W: u16 = 160;
 impl LineClock {
     pub fn new(
+        pwm6: peripherals::PWM_SLICE6,
         pwm7: peripherals::PWM_SLICE7,
         pwm8: peripherals::PWM_SLICE0,
-        pwm1: peripherals::PWM_SLICE1,
-        pwm10: peripherals::PWM_SLICE2,
-        c_pin: peripherals::PIN_14,
+        pwm9: peripherals::PWM_SLICE1,
+        gclk_pin: peripherals::PIN_12,
+        a_pin: peripherals::PIN_14,
         b_pin: peripherals::PIN_16,
-        a_pin: peripherals::PIN_20,
-        wrong_a_pin: peripherals::PIN_17,
-        wrong_gclk_pin: peripherals::PIN_0,
-        gclk_pin: peripherals::PIN_18,
+        c_pin: peripherals::PIN_18,
     ) -> LineClockHdl {
-        let _wrong_gclk_pin =
-            embassy_rp::gpio::Input::new(wrong_gclk_pin, embassy_rp::gpio::Pull::None);
-        let _wrong_a_pin = embassy_rp::gpio::Input::new(wrong_a_pin, embassy_rp::gpio::Pull::None);
         PWM_IRQ_WRAP::unpend();
         unsafe {
             PWM_IRQ_WRAP::enable();
@@ -170,7 +167,7 @@ impl LineClock {
         gclk_cfg.compare_a = w / 2 + first_line_comp / 2;
         gclk_cfg.enable = false;
 
-        let pwm_gclk = Pwm::new_output_a(pwm1, gclk_pin, gclk_cfg.clone());
+        let pwm_gclk = Pwm::new_output_a(pwm6, gclk_pin, gclk_cfg.clone());
         let mut c_cfg = pwm::Config::default();
         c_cfg.divider = pwm_div;
         // let c_ount = 64;
@@ -179,8 +176,8 @@ impl LineClock {
         c_cfg.top = w * c_ount + first_line_comp - w / 2 - 1;
         c_cfg.compare_a = w / 2;
         c_cfg.enable = false;
-        let pwm_c = Pwm::new_output_a(pwm7, c_pin, c_cfg.clone());
-        embassy_rp::pac::PWM.inte().modify(|w| w.set_ch7(true));
+        let pwm_c = Pwm::new_output_a(pwm9, c_pin, c_cfg.clone());
+        embassy_rp::pac::PWM.inte().modify(|w| w.set_ch1(true));
 
         let mut ba_cfg = pwm::Config::default();
         ba_cfg.divider = pwm_div;
@@ -188,7 +185,7 @@ impl LineClock {
         ba_cfg.compare_a = 3;
         ba_cfg.enable = false;
         let pwm_b = Pwm::new_output_a(pwm8, b_pin, ba_cfg.clone());
-        let pwm_a = Pwm::new_output_a(pwm10, a_pin, ba_cfg.clone());
+        let pwm_a = Pwm::new_output_a(pwm7, a_pin, ba_cfg.clone());
 
         let pwm_cfg = LinePwmConfig {
             gclk_cfg,
@@ -426,22 +423,17 @@ impl LineClockHdl {
 pub const CMD_BUF_SIZE: usize = 2 + 2 + 2 + 16 * 9;
 
 pub struct CmdClockPins {
-    pub clk_pin: peripherals::PIN_1,
-
-    pub r0_pin: peripherals::PIN_2,
-    pub g0_pin: peripherals::PIN_3,
-    pub b0_pin: peripherals::PIN_4,
-    pub le0_pin: peripherals::PIN_5,
-
-    pub r1_pin: peripherals::PIN_6,
-    pub g1_pin: peripherals::PIN_7,
-    pub b1_pin: peripherals::PIN_8,
-    pub le1_pin: peripherals::PIN_9,
-
-    pub r2_pin: peripherals::PIN_10,
-    pub g2_pin: peripherals::PIN_11,
-    pub b2_pin: peripherals::PIN_12,
-    pub le2_pin: peripherals::PIN_13,
+    pub r0_pin: peripherals::PIN_0,
+    pub g0_pin: peripherals::PIN_1,
+    pub b0_pin: peripherals::PIN_2,
+    pub r1_pin: peripherals::PIN_3,
+    pub g1_pin: peripherals::PIN_4,
+    pub b1_pin: peripherals::PIN_5,
+    pub r2_pin: peripherals::PIN_6,
+    pub g2_pin: peripherals::PIN_7,
+    pub b2_pin: peripherals::PIN_8,
+    pub le_pin: peripherals::PIN_9,
+    pub clk_pin: peripherals::PIN_10,
 }
 
 pub struct CmdClock {
@@ -514,22 +506,20 @@ impl CmdClock {
         let r0_pin = common.make_pio_pin(pins.r0_pin);
         let g0_pin = common.make_pio_pin(pins.g0_pin);
         let b0_pin = common.make_pio_pin(pins.b0_pin);
-        let le0_pin = common.make_pio_pin(pins.le0_pin);
 
         let r1_pin = common.make_pio_pin(pins.r1_pin);
         let g1_pin = common.make_pio_pin(pins.g1_pin);
         let b1_pin = common.make_pio_pin(pins.b1_pin);
-        let le1_pin = common.make_pio_pin(pins.le1_pin);
 
         let r2_pin = common.make_pio_pin(pins.r2_pin);
         let g2_pin = common.make_pio_pin(pins.g2_pin);
         let b2_pin = common.make_pio_pin(pins.b2_pin);
-        let le2_pin = common.make_pio_pin(pins.le2_pin);
+        let le_pin = common.make_pio_pin(pins.le_pin);
         data_sm.set_pin_dirs(
             pio::Direction::Out,
             &[
-                &r0_pin, &g0_pin, &b0_pin, &le0_pin, &r1_pin, &g1_pin, &b1_pin, &r2_pin, &g2_pin,
-                &b2_pin,
+                &r0_pin, &g0_pin, &b0_pin, &r1_pin, &g1_pin, &b1_pin, &r2_pin, &g2_pin, &b2_pin,
+                &le_pin,
             ],
         );
 
@@ -537,8 +527,8 @@ impl CmdClock {
         cfg.clock_divider = clk_div;
         cfg.use_program(&data_prog, &[]);
         cfg.set_out_pins(&[
-            &r0_pin, &g0_pin, &b0_pin, &le0_pin, &r1_pin, &g1_pin, &b1_pin, &le1_pin, &r2_pin,
-            &g2_pin, &b2_pin, &le2_pin,
+            &r0_pin, &g0_pin, &b0_pin, &r1_pin, &g1_pin, &b1_pin, &r2_pin, &g2_pin, &b2_pin,
+            &le_pin,
         ]);
         cfg.fifo_join = pio::FifoJoin::TxOnly;
         cfg.shift_out = ShiftConfig {
@@ -591,12 +581,12 @@ impl CmdClock {
                 let g = (g >> i) & 1;
                 let b = (b >> i) & 1;
                 let rgb = r | (g << 1) | (b << 2);
-                *buf = rgb | (rgb << 4) | (rgb << 8);
+                *buf = rgb | (rgb << 3) | (rgb << 6);
             }
         }
         // set le
         for b in data_buf.iter_mut().rev().take(transaction.cmd as usize) {
-            *b |= 0x8;
+            *b |= LE_HIGH;
         }
         let buf: &mut [u32; CMD_BUF_SIZE / 2] = unsafe { core::mem::transmute(data_buf) };
         buf[0] = 0; // loop cnt
@@ -730,7 +720,7 @@ impl<'a> ColorParser<'a> {
             let empty_loops: u32 = 16 * 9;
             meta.empty_loops = Self::reduce_empty_loops(self.last_empties, empty_loops);
             meta.data_loops = 2 - 2;
-            meta.buf = [0, 8];
+            meta.buf = [0, LE_HIGH];
 
             // many le
             if empty_size <= 1 {
@@ -741,7 +731,7 @@ impl<'a> ColorParser<'a> {
                 let meta: &mut ColorTranserTail = add_buf_ptr(&mut self.buf);
                 meta.empty_loops = EMPTY_LEN_U32_CYCLES as u32 * 2 - 3;
                 meta.data_loops = 2 - 2;
-                meta.buf = [0, 8];
+                meta.buf = [0, LE_HIGH];
             }
         }
         self.last_empties = 16 * 9;
@@ -763,7 +753,7 @@ impl<'a> ColorParser<'a> {
                 transfer.data_loops += 8;
                 let le_buf: &mut [u16; 8] = add_buf_ptr(&mut self.buf);
                 *le_buf = [0; 8];
-                le_buf[7] = 0x8;
+                le_buf[7] = LE_HIGH;
             }
         }
         self.last_empties = 0;
@@ -778,7 +768,7 @@ impl<'a> ColorParser<'a> {
             tail.data_loops = 2 - 2;
             // LE
             tail.buf[0] = 0;
-            tail.buf[1] = 8;
+            tail.buf[1] = LE_HIGH;
         }
         self.last_empties = empty_loops;
     }
@@ -798,8 +788,8 @@ impl<'a> ColorParser<'a> {
             tail.empty_loops = empty_loops;
             tail.data_loops = 2 - 2;
             // LE
-            tail.buf[0] = 8;
-            tail.buf[1] = 8;
+            tail.buf[0] = LE_HIGH;
+            tail.buf[1] = LE_HIGH;
         }
     }
 
