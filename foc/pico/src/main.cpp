@@ -1,4 +1,5 @@
 #include <SimpleFOC.h>
+#include <Arduino.h>
 
 MagneticSensorI2C sensor = MagneticSensorI2C(AS5600_I2C);
 // magnetic sensor instance - MagneticSensorI2C
@@ -6,20 +7,21 @@ MagneticSensorI2C sensor = MagneticSensorI2C(AS5600_I2C);
 // MagneticSensorAnalog sensor = MagneticSensorAnalog(A1, 14, 1020);
 
 // BLDC motor & driver instance
-BLDCMotor motor = BLDCMotor(11);
-BLDCDriver3PWM driver = BLDCDriver3PWM(9, 5, 6, 8);
+BLDCMotor motor = BLDCMotor(7);
+BLDCDriver3PWM driver = BLDCDriver3PWM(6, 8, 10, 12);
 // Stepper motor & driver instance
 //StepperMotor motor = StepperMotor(50);
 //StepperDriver4PWM driver = StepperDriver4PWM(9, 5, 10, 6,  8);
 
 // velocity set point variable
-float target_velocity = 0;
+float target_velocity = 6.18 * 3;
 // instantiate the commander
 Commander command = Commander(Serial);
 void doTarget(char* cmd) { command.scalar(&target_velocity, cmd); }
 
 void setup() {
 
+  pinMode(LED_BUILTIN, OUTPUT);
   // use monitoring with serial 
   Serial.begin(115200);
   // enable more verbose output for debugging
@@ -45,14 +47,19 @@ void setup() {
   // default parameters in defaults.h
 
   // velocity PI controller parameters
-  motor.PID_velocity.P = 0.2f;
-  motor.PID_velocity.I = 20;
+  motor.PID_velocity.P = 0.1f;
+  motor.PID_velocity.I = 1;
   motor.PID_velocity.D = 0;
+  // motor.PID_velocity.D = 0;
+
+  motor.velocity_limit = 50;
+  // motor.PID_velocity.output_ramp = 1200; // 调整这个值可以影响电机的加速和减速性能。较高的值会使电机加速和减速更快，但可能导致振动或电流峰值。
+  // motor.LPF_velocity.Tf = 0.01f;         // 这可以滤除电机的噪声和高频振动，从而使速度控制更加稳定。
   // default voltage_power_supply
   motor.voltage_limit = 6;
   // jerk control using voltage voltage ramp
   // default value is 300 volts per sec  ~ 0.3V per millisecond
-  motor.PID_velocity.output_ramp = 1000;
+  motor.PID_velocity.output_ramp = 1200;
 
   // velocity low pass filtering
   // default 5ms - try different values to see what is the best.
@@ -75,7 +82,13 @@ void setup() {
   _delay(1000);
 }
 
+PinStatus pin_status = PinStatus::LOW;
 void loop() {
+  uint32_t us = time_us_32();
+  if ((us / 1000) % 1000 == 0) {
+    pin_status = ((pin_status == PinStatus::LOW) ? PinStatus::HIGH: PinStatus::LOW);
+    digitalWrite(LED_BUILTIN, pin_status);
+  }
   // main FOC algorithm function
   // the faster you run this function the better
   // Arduino UNO loop  ~1kHz
