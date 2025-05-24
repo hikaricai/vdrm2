@@ -94,7 +94,7 @@ impl SyncSignal {
             Timer::after(Duration::from_millis(500)).await;
             return;
         }
-        self.pin.wait_for_falling_edge().await;
+        self.pin.wait_for_any_edge().await;
     }
 }
 

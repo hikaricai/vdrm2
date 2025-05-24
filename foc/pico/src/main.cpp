@@ -1,5 +1,6 @@
-#include <SimpleFOC.h>
 #include <Arduino.h>
+#include <SimpleFOC.h>
+#define PIN_SYNC     (28u)
 
 MagneticSensorI2C sensor = MagneticSensorI2C(AS5600_I2C);
 // magnetic sensor instance - MagneticSensorI2C
@@ -14,7 +15,7 @@ BLDCDriver3PWM driver = BLDCDriver3PWM(6, 8, 10, 12);
 //StepperDriver4PWM driver = StepperDriver4PWM(9, 5, 10, 6,  8);
 
 // velocity set point variable
-float target_velocity = 6.18 * 3;
+float target_velocity = -6.18 * 3;
 // instantiate the commander
 Commander command = Commander(Serial);
 void doTarget(char* cmd) { command.scalar(&target_velocity, cmd); }
@@ -42,6 +43,8 @@ void setup() {
 
   // set motion control loop to be used
   motor.controller = MotionControlType::velocity;
+  motor.sensor_direction = Direction::CW;
+  motor.zero_electric_angle = 3.98;
 
   // contoller configuration
   // default parameters in defaults.h
@@ -82,18 +85,32 @@ void setup() {
   _delay(1000);
 }
 
+void triggle_pin(pin_size_t pin, PinStatus *pin_status) {
+  *pin_status = ((*pin_status == PinStatus::LOW) ? PinStatus::HIGH: PinStatus::LOW);
+  digitalWrite(pin, *pin_status);
+}
+
 PinStatus pin_status = PinStatus::LOW;
+PinStatus sync_status = PinStatus::LOW;
+uint32_t last_ts = 0;
+uint32_t last_region = 0;
+
 void loop() {
-  uint32_t us = time_us_32();
-  if ((us / 1000) % 1000 == 0) {
-    pin_status = ((pin_status == PinStatus::LOW) ? PinStatus::HIGH: PinStatus::LOW);
-    digitalWrite(LED_BUILTIN, pin_status);
+  uint32_t ts = time_us_32() / 1000000;
+  if (last_ts != ts) {
+    triggle_pin(LED_BUILTIN, &pin_status);
   }
+  last_ts = ts;
   // main FOC algorithm function
   // the faster you run this function the better
   // Arduino UNO loop  ~1kHz
   // Bluepill loop ~10kHz
   motor.loopFOC();
+  uint32_t region = (uint32_t)(sensor.getMechanicalAngle() * 8.0f / _2PI);
+  if (last_region != region) {
+    triggle_pin(PIN_SYNC, &sync_status);
+  }
+  last_region = region;
 
   // Motion control function
   // velocity, position or voltage (defined in motor.controller)
