@@ -15,7 +15,7 @@ BLDCDriver3PWM driver = BLDCDriver3PWM(6, 8, 10, 12);
 //StepperDriver4PWM driver = StepperDriver4PWM(9, 5, 10, 6,  8);
 
 // velocity set point variable
-float target_velocity = -6.18 * 3;
+float target_velocity = -6.18 * 1.0;
 // instantiate the commander
 Commander command = Commander(Serial);
 void doTarget(char* cmd) { command.scalar(&target_velocity, cmd); }
@@ -23,6 +23,7 @@ void doTarget(char* cmd) { command.scalar(&target_velocity, cmd); }
 void setup() {
 
   pinMode(LED_BUILTIN, OUTPUT);
+  pinMode(PIN_SYNC, OUTPUT);
   // use monitoring with serial 
   Serial.begin(115200);
   // enable more verbose output for debugging
