@@ -1,6 +1,6 @@
 #![no_std]
 #![no_main]
-mod clocks2;
+mod clocks;
 mod consts;
 mod core1;
 mod encoder;
@@ -95,12 +95,21 @@ const UMINI_CMDS: &[(mbi5264_common::CMD, u16)] = &mbi5264_common::unimi_cmds();
 struct SyncSignal {
     pin: Input<'static>,
     is_mock: bool,
+    last: Instant,
 }
 
 impl SyncSignal {
+    fn new(pin: Input<'static>, is_mock: bool) -> Self {
+        Self {
+            pin,
+            is_mock,
+            last: Instant::now(),
+        }
+    }
     async fn wait_sync(&mut self) {
         if self.is_mock {
-            Timer::after(Duration::from_millis(1000 / 2)).await;
+            Timer::at(self.last + Duration::from_millis(1000 / 32)).await;
+            self.last = Instant::now();
             return;
         }
         self.pin.wait_for_any_edge().await;
@@ -141,7 +150,7 @@ async fn motor_input_sync(
         sync_signal.wait_sync().await;
         let now = Instant::now();
         let elapsed = now - last_sync_tick;
-        let ticks_per_angle = elapsed.as_ticks() as u32 / TOTAL_ANGLES;
+        let ticks_per_angle = elapsed.as_ticks() as u32 * TOTAL_MIRRORS / TOTAL_ANGLES;
         motor_sync_sinal.signal(SyncState {
             last_tick: now,
             ticks_per_angle,
@@ -203,10 +212,7 @@ async fn main(spawner: Spawner) {
 
     let motor_sync_sinal = MOTOR_SYNC_SIGNAL.init(embassy_sync::signal::Signal::new());
     let motor_sync_sinal = &*motor_sync_sinal;
-    let sync_signal = SyncSignal {
-        pin: Input::new(p.PIN_28, gpio::Pull::None),
-        is_mock: true,
-    };
+    let sync_signal = SyncSignal::new(Input::new(p.PIN_28, gpio::Pull::None), true);
     spawner
         .spawn(motor_input_sync(sync_signal, rtt_down, motor_sync_sinal))
         .unwrap();
@@ -227,7 +233,7 @@ async fn main(spawner: Spawner) {
     // spawner.spawn(encode_mbi3(mbi_tx)).unwrap();
 
     let mut led_pin = gpio::Output::new(p.PIN_25, gpio::Level::Low);
-    let pins = clocks2::CmdClockPins {
+    let pins = clocks::CmdClockPins {
         r0_pin: p.PIN_0,
         g0_pin: p.PIN_1,
         b0_pin: p.PIN_2,
@@ -241,7 +247,7 @@ async fn main(spawner: Spawner) {
         clk_pin: p.PIN_10,
     };
     let data_ch = p.DMA_CH0;
-    let mut line = clocks2::LineClock::new(
+    let mut line = clocks::LineClock::new(
         p.PWM_SLICE6,
         p.PWM_SLICE7,
         p.PWM_SLICE0,
@@ -251,7 +257,7 @@ async fn main(spawner: Spawner) {
         p.PIN_16,
         p.PIN_18,
     );
-    let mut cmd_pio = clocks2::CmdClock::new(p.PIO0, pins, data_ch);
+    let mut cmd_pio = clocks::CmdClock::new(p.PIO0, pins, data_ch);
     let confirm_cmd = Command::new_confirm();
     let mut cnt: usize = 0;
     let cmd_iter = UMINI_CMDS.iter();
@@ -261,8 +267,8 @@ async fn main(spawner: Spawner) {
         cmd_pio.refresh2(&Command::new(cmd as u8, param));
     }
 
-    // test_screen_normal(&mut cmd_pio, &mut line, &mut led_pin);
-    // test_screen_vdrm(&mut cmd_pio, &mut line, &mut mbi_rx, &mut led_pin).await;
+    // test_screen(&mut cmd_pio, &mut line, &mut led_pin).await;
+    // return;
     // rtt_target::rprintln!("first sync_signal");
     // let mut cmd_iter = core::iter::repeat(UMINI_CMDS.iter()).flatten();
     let mut dbg_pin = gpio::Output::new(p.PIN_22, gpio::Level::Low);
@@ -276,7 +282,6 @@ async fn main(spawner: Spawner) {
         let mut total_frames = 0u32;
         let mut late_frames = 0u32;
         let mut fast_frames = 0u32;
-        let mut fresh_frames = 0u32;
         let mut fast_angles = 0u32;
         let SyncState {
             last_tick,
@@ -309,7 +314,7 @@ async fn main(spawner: Spawner) {
             let angle_offset = 0;
             let img_angle = (dma_buf.img_angle as i32 + angle_offset) as u32;
             if dbg {
-                rtt_target::rprintln!("encode img {} show {}", img_angle, show_angle);
+                // rtt_target::rprintln!("encode img {} show {}", img_angle, show_angle);
             }
             dbg_pin.set_low();
 
@@ -318,24 +323,22 @@ async fn main(spawner: Spawner) {
             let show_angle = cur_angle + 190;
 
             if img_angle < show_angle {
-                if dbg {
-                    rtt_target::rprintln!("late img {} show {}", img_angle, show_angle);
-                }
+                // if dbg {
+                //     rtt_target::rprintln!("late img {} show {}", img_angle, show_angle);
+                // }
                 late_frames += 1;
             }
             let inc_angles = img_angle - show_angle;
-            if dbg {
-                rtt_target::rprintln!("fresh img {} show {}", img_angle, show_angle);
-            }
-            fresh_frames += 1;
-
+            // if dbg {
+            //     rtt_target::rprintln!("fresh img {} show {}", img_angle, show_angle);
+            // }
             if img_angle > show_angle {
                 fast_frames += 1;
                 fast_angles += inc_angles;
-                let target_angle = cur_angle + inc_angles;
-                let expires =
-                    last_tick + Duration::from_ticks((target_angle * ticks_per_angle) as u64);
-                Timer::at(expires).await;
+                // let target_angle = cur_angle + inc_angles;
+                // let expires =
+                //     last_tick + Duration::from_ticks((target_angle * ticks_per_angle) as u64);
+                // Timer::at(expires).await;
             }
             cmd_pio.wait().await;
             line.wait_stop().await;
@@ -343,13 +346,45 @@ async fn main(spawner: Spawner) {
         if dbg {
             rtt_target::rprintln!("late_frames {}", late_frames);
             rtt_target::rprintln!("fast_frames {}", fast_frames);
-            rtt_target::rprintln!("fresh_frames {}", fresh_frames);
             rtt_target::rprintln!("fast_angles {}", fast_angles);
             rtt_target::rprintln!("total_frames {}\n", total_frames);
         }
-        if cnt & 0x10 != 0 {
+        if cnt & 0x1 == 0 {
             led_pin.toggle();
         }
         cnt += 1;
+    }
+}
+
+async fn test_screen(
+    cmd_pio: &mut clocks::CmdClock,
+    line: &mut clocks::LineClockHdl,
+    led_pin: &mut gpio::Output<'static>,
+) {
+    let mut encoder = encoder::Encoder::new();
+    let mut next_angle = 0u32;
+    let mut dma_buf = encoder.encode_next(next_angle);
+    let mut cnt = 0usize;
+    let mut last = Instant::now();
+    loop {
+        line.start();
+        cmd_pio.refresh_ptr(dma_buf.ptr, dma_buf.len);
+        next_angle = if next_angle == dma_buf.img_angle {
+            0
+        } else {
+            dma_buf.img_angle
+        };
+        dma_buf = encoder.encode_next(next_angle);
+        cmd_pio.wait().await;
+        line.wait_stop().await;
+        cnt += 1;
+        if cnt & 0xFFF == 0 {
+            let now = Instant::now();
+            let ms = (now - last).as_millis() as u32;
+            last = now;
+            let fps = 0xFFF * 1024 / ms;
+            rtt_target::rprintln!("fps {}", fps);
+            led_pin.toggle();
+        }
     }
 }

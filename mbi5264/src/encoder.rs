@@ -88,7 +88,7 @@ impl Encoder {
         } else {
             &mut self.buf0
         };
-        let mut parser = crate::clocks2::ColorParser::new(buf);
+        let mut parser = crate::clocks::ColorParser::new(buf);
         let len = update_frame(&mut parser, &angle_line.coloum);
         DmaBuf {
             img_angle: angle_line.angle,
@@ -152,7 +152,7 @@ pub async fn encode_mbi_vdrm(
         let exp_angle = encode_sinal.wait().await;
         let angle_line = find_angle_line(exp_angle);
         dbg_pin20.set_low();
-        let mut parser = crate::clocks2::ColorParser::new(&mut mbi_buf.buf);
+        let mut parser = crate::clocks::ColorParser::new(&mut mbi_buf.buf);
         let len = update_frame(&mut parser, &angle_line.coloum);
         dbg_pin21.set_low();
         mbi_buf.len = len;
@@ -184,8 +184,8 @@ impl RGBMeta {
 }
 
 fn block_update_frame(
-    parser: &mut crate::clocks2::ColorParser,
-    cmd_pio: &mut crate::clocks2::CmdClock,
+    parser: &mut crate::clocks::ColorParser,
+    cmd_pio: &mut crate::clocks::CmdClock,
     rgbh_coloum: &[crate::RGBH; crate::IMG_HEIGHT],
 ) {
     let _len = update_frame(parser, rgbh_coloum);
@@ -193,8 +193,8 @@ fn block_update_frame(
 }
 
 async fn async_update_frame(
-    parser: &mut crate::clocks2::ColorParser<'_>,
-    cmd_pio: &mut crate::clocks2::CmdClock,
+    parser: &mut crate::clocks::ColorParser<'_>,
+    cmd_pio: &mut crate::clocks::CmdClock,
     rgbh_coloum: &[crate::RGBH; crate::IMG_HEIGHT],
 ) {
     let len = update_frame(parser, rgbh_coloum);
@@ -203,7 +203,7 @@ async fn async_update_frame(
 }
 
 fn update_frame(
-    parser: &mut crate::clocks2::ColorParser,
+    parser: &mut crate::clocks::ColorParser,
     rgbh_coloum: &[crate::RGBH; crate::IMG_HEIGHT],
 ) -> u32 {
     let region0 = &rgbh_coloum[0..64];
