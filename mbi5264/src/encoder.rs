@@ -39,7 +39,7 @@ impl EncoderCtx {
 
     fn next_img_line(&mut self, angle: u32) -> &mbi5264_common::AngleImage {
         if angle < self.last_angle || self.img_idx >= self.img.len() {
-            self.img_idx = 0;
+            self.img_idx = self.idx_mod;
             self.idx_mod += 1;
             self.idx_mod %= INDEX_MOD;
         }

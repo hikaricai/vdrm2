@@ -5,12 +5,11 @@ mod consts;
 mod core1;
 mod encoder;
 
+use embassy_executor::InterruptExecutor;
 use embassy_executor::Spawner;
 use embassy_rp::gpio::{self, Input};
-use embassy_sync::{
-    blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex},
-    zerocopy_channel,
-};
+use embassy_rp::interrupt;
+use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, zerocopy_channel};
 use embassy_time::{Duration, Instant, Timer};
 use panic_rtt_target as _;
 use static_cell::StaticCell;
@@ -25,10 +24,19 @@ const ANGLES_PER_MIRROR: u32 = TOTAL_ANGLES / TOTAL_MIRRORS;
 const DBG_INTREVAL: usize = 20;
 // const SHOW_ANGLE_MAX: u32 = ANGLES_PER_MIRROR + 190;
 
-static MOTOR_SYNC_SIGNAL: StaticCell<embassy_sync::signal::Signal<NoopRawMutex, SyncState>> =
-    StaticCell::new();
+static MOTOR_SYNC_SIGNAL: StaticCell<
+    embassy_sync::signal::Signal<CriticalSectionRawMutex, SyncState>,
+> = StaticCell::new();
 // static CUR_ANGLE: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 static DBG: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+static SW1_EXECUTOR: InterruptExecutor = InterruptExecutor::new();
+
+#[interrupt]
+unsafe fn SWI_IRQ_1() {
+    SW1_EXECUTOR.on_interrupt()
+}
+
 // static MOTOR_SYNC_SIGNAL: embassy_sync::signal::Signal<NoopRawMutex, ()> =
 //     embassy_sync::signal::Signal::new();
 
@@ -109,7 +117,7 @@ struct SyncState {
 async fn motor_input_sync(
     mut sync_signal: SyncSignal,
     mut rtt_down: rtt_target::DownChannel,
-    motor_sync_sinal: &'static embassy_sync::signal::Signal<NoopRawMutex, SyncState>,
+    motor_sync_sinal: &'static embassy_sync::signal::Signal<CriticalSectionRawMutex, SyncState>,
 ) {
     let mut cnt = 0usize;
     sync_signal.wait_sync().await;
@@ -196,9 +204,12 @@ async fn main(spawner: Spawner) {
     let motor_sync_sinal = MOTOR_SYNC_SIGNAL.init(embassy_sync::signal::Signal::new());
     let motor_sync_sinal = &*motor_sync_sinal;
     let sync_signal = SyncSignal::new(Input::new(p.PIN_28, gpio::Pull::None), true);
-    spawner
+
+    let spawner1 = SW1_EXECUTOR.start(interrupt::SWI_IRQ_1);
+    spawner1
         .spawn(motor_input_sync(sync_signal, rtt_down, motor_sync_sinal))
         .unwrap();
+
     // let channel = IMG_CHANNEL.init(zerocopy_channel::Channel::new(BUF.take()));
     // let (sender, img_rx) = channel.split();
     // let img_tx = SafeSender { sender };
