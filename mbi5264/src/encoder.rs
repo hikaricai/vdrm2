@@ -1,9 +1,3 @@
-use embassy_rp::gpio::{self, Input};
-use embassy_sync::{
-    blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex},
-    zerocopy_channel,
-};
-use embassy_time::{Duration, Instant, Timer};
 const IMG_BIN: &[u8] = include_bytes!("../img.bin");
 
 const INDEX_MOD: usize = 4;
@@ -88,76 +82,13 @@ impl Encoder {
         } else {
             &mut self.buf0
         };
-        let mut parser = crate::clocks::ColorParser::new(buf);
+        let mut parser = ColorParser::new(buf);
         let len = update_frame(&mut parser, &angle_line.coloum);
         DmaBuf {
             img_angle: angle_line.angle,
             ptr: buf.as_ptr() as u32,
             len,
         }
-    }
-}
-
-#[embassy_executor::task]
-pub async fn encode_mbi_vdrm(
-    mut mbi_tx: zerocopy_channel::Sender<'static, NoopRawMutex, MbiBuf2>,
-    encode_sinal: &'static embassy_sync::signal::Signal<NoopRawMutex, u32>,
-) {
-    const IMG_BIN: &[u8] = include_bytes!("../img.bin");
-    assert!(IMG_BIN.len() >= core::mem::size_of::<mbi5264_common::AngleImage>());
-    let img = unsafe {
-        core::slice::from_raw_parts(
-            IMG_BIN.as_ptr() as *const mbi5264_common::AngleImage,
-            IMG_BIN.len() / core::mem::size_of::<mbi5264_common::AngleImage>(),
-        )
-    };
-    rtt_target::rprintln!("total angles {}", img.len());
-    rtt_target::rprintln!("first angle {}", img[0].angle);
-
-    const INDEX_MOD: usize = 4;
-
-    let p = unsafe { embassy_rp::Peripherals::steal() };
-    let mut dbg_pin20 = gpio::Output::new(p.PIN_20, gpio::Level::Low);
-    let mut dbg_pin21 = gpio::Output::new(p.PIN_21, gpio::Level::Low);
-
-    let mut idx_mod = 0usize;
-    let mut img_idx = 0usize;
-    let mut find_angle_line = |angle: u32| {
-        let dbg = crate::DBG.load(core::sync::atomic::Ordering::Relaxed);
-        loop {
-            if img_idx >= img.len() {
-                idx_mod += 1;
-                idx_mod %= INDEX_MOD;
-                img_idx = idx_mod;
-                // rtt_target::rprintln!("idx_mod {} img_idx {}", idx_mod, img_idx);
-            }
-            let angle_line = &img[img_idx];
-            img_idx += INDEX_MOD;
-            if angle_line.angle > crate::SHOW_ANGLE_MAX {
-                continue;
-            }
-            if angle_line.angle >= angle {
-                if dbg {
-                    rtt_target::rprintln!("pars img_idx {} img {}", img_idx, angle_line.angle,);
-                }
-                return angle_line;
-            }
-        }
-    };
-    loop {
-        // rtt_target::rprintln!("encode loop {}", index_mod);
-        dbg_pin20.set_high();
-        dbg_pin21.set_high();
-        let mbi_buf = mbi_tx.send().await;
-        let exp_angle = encode_sinal.wait().await;
-        let angle_line = find_angle_line(exp_angle);
-        dbg_pin20.set_low();
-        let mut parser = crate::clocks::ColorParser::new(&mut mbi_buf.buf);
-        let len = update_frame(&mut parser, &angle_line.coloum);
-        dbg_pin21.set_low();
-        mbi_buf.len = len;
-        mbi_buf.angle = angle_line.angle;
-        mbi_tx.send_done();
     }
 }
 
@@ -183,29 +114,7 @@ impl RGBMeta {
     }
 }
 
-fn block_update_frame(
-    parser: &mut crate::clocks::ColorParser,
-    cmd_pio: &mut crate::clocks::CmdClock,
-    rgbh_coloum: &[crate::RGBH; crate::IMG_HEIGHT],
-) {
-    let _len = update_frame(parser, rgbh_coloum);
-    parser.run(cmd_pio);
-}
-
-async fn async_update_frame(
-    parser: &mut crate::clocks::ColorParser<'_>,
-    cmd_pio: &mut crate::clocks::CmdClock,
-    rgbh_coloum: &[crate::RGBH; crate::IMG_HEIGHT],
-) {
-    let len = update_frame(parser, rgbh_coloum);
-    cmd_pio.refresh_ptr(parser.buf_ori as u32, len);
-    cmd_pio.wait().await;
-}
-
-fn update_frame(
-    parser: &mut crate::clocks::ColorParser,
-    rgbh_coloum: &[crate::RGBH; crate::IMG_HEIGHT],
-) -> u32 {
+fn update_frame(parser: &mut ColorParser, rgbh_coloum: &[crate::RGBH; crate::IMG_HEIGHT]) -> u32 {
     let region0 = &rgbh_coloum[0..64];
     let region1 = &rgbh_coloum[64..128];
     let region2 = &rgbh_coloum[128..];
@@ -250,6 +159,7 @@ fn update_frame(
             // assume data is optimized
             unreachable!();
 
+            #[allow(unreachable_code)]
             parser.add_color_end(
                 &last_solt.buf,
                 last_solt.h_div as u32,
@@ -336,20 +246,163 @@ impl PixelSlot2 {
     }
 }
 
-pub struct MbiBuf2 {
-    pub angle: u32,
-    pub len: u32,
-    pub buf: [u16; 16384],
-    pub is_last: bool,
+#[repr(C)]
+struct ColorTranser {
+    empty_loops: u32,
+    data_loops: u32,
+    buf: [u16; 8],
 }
 
-impl MbiBuf2 {
-    pub const fn new(angle: u32, is_last: bool) -> Self {
+#[repr(C)]
+struct ColorTranserTail {
+    empty_loops: u32,
+    data_loops: u32,
+    buf: [u16; 2],
+}
+
+pub struct ColorParser<'a> {
+    pub loops: &'a mut u32,
+    pub buf: *mut u16,
+    pub buf_ori: *mut u16,
+    pub last_empties: u32,
+}
+
+impl<'a> ColorParser<'a> {
+    pub fn new(buf: &'a mut [u16]) -> Self {
+        let buf_ori = buf.as_mut_ptr();
+        let buf = unsafe { buf.as_mut_ptr().add(2) };
+        let loops: &mut u32 = unsafe { core::mem::transmute(buf_ori) };
+        *loops = 0;
         Self {
-            angle,
-            len: 0,
-            buf: [0u16; 16384],
-            is_last,
+            loops,
+            buf,
+            buf_ori,
+            last_empties: 0,
         }
     }
+
+    pub fn encode(&mut self) -> u32 {
+        *self.loops -= 1;
+        let len = unsafe { self.buf.offset_from(self.buf_ori) } as u32 / 2;
+        len
+    }
+
+    #[inline]
+    fn reduce_empty_loops(last_empties: u32, required_empty_loops: u32) -> u32 {
+        let mut empty_loops = if last_empties > required_empty_loops {
+            0u32
+        } else {
+            required_empty_loops - last_empties
+        };
+        if empty_loops >= 3 {
+            empty_loops -= 3;
+        }
+        empty_loops
+    }
+    pub fn add_empty_les(&mut self, empty_size: u32) {
+        const EMPTY_LEN_U32_CYCLES: usize = 8;
+        if empty_size == 0 {
+            return;
+        }
+        unsafe {
+            *self.loops += 1;
+
+            // empty with le
+            let meta: &mut ColorTranserTail = add_buf_ptr(&mut self.buf);
+            let empty_loops: u32 = 16 * 9;
+            meta.empty_loops = Self::reduce_empty_loops(self.last_empties, empty_loops);
+            meta.data_loops = 2 - 2;
+            meta.buf = [0, crate::clocks::LE_HIGH];
+
+            // many le
+            if empty_size <= 1 {
+                return;
+            }
+            for _i in 1..empty_size {
+                *self.loops += 1;
+                let meta: &mut ColorTranserTail = add_buf_ptr(&mut self.buf);
+                meta.empty_loops = EMPTY_LEN_U32_CYCLES as u32 * 2 - 3;
+                meta.data_loops = 2 - 2;
+                meta.buf = [0, crate::clocks::LE_HIGH];
+            }
+        }
+        self.last_empties = 16 * 9;
+    }
+
+    pub fn add_color2(&mut self, buf: &[u16; 8], chip_index: u32, last_chip_idx: u32) {
+        let le = chip_index == 8;
+        let chip_inc_index = chip_index - last_chip_idx;
+        let empty_loops = chip_inc_index * 16 + 8;
+        unsafe {
+            *self.loops += 1;
+
+            let transfer: &mut ColorTranser = add_buf_ptr(&mut self.buf);
+            // -1
+            transfer.empty_loops = Self::reduce_empty_loops(self.last_empties, empty_loops);
+            transfer.data_loops = 8 - 2;
+            transfer.buf = *buf;
+            if le {
+                transfer.data_loops += 8;
+                let le_buf: &mut [u16; 8] = add_buf_ptr(&mut self.buf);
+                *le_buf = [0; 8];
+                le_buf[7] = crate::clocks::LE_HIGH;
+            }
+        }
+        self.last_empties = 0;
+    }
+
+    fn add_empty_le(&mut self, chip_inc_index: u32) {
+        let empty_loops = chip_inc_index * 16 + 8 - 2;
+        unsafe {
+            *self.loops += 1;
+            let tail: &mut ColorTranserTail = add_buf_ptr(&mut self.buf);
+            tail.empty_loops = empty_loops - 3;
+            tail.data_loops = 2 - 2;
+            // LE
+            tail.buf[0] = 0;
+            tail.buf[1] = crate::clocks::LE_HIGH;
+        }
+        self.last_empties = empty_loops;
+    }
+
+    pub fn add_color_end(&mut self, buf: &[u16; 8], chip_index: u32, last_chip_idx: u32) {
+        let le = chip_index == 8;
+        self.add_color2(buf, chip_index, last_chip_idx);
+        if !le {
+            self.add_empty_le(8 - chip_index as u32);
+        }
+    }
+
+    pub fn add_sync(&mut self, empty_loops: u32) {
+        unsafe {
+            *self.loops += 1;
+            let tail: &mut ColorTranserTail = add_buf_ptr(&mut self.buf);
+            tail.empty_loops = empty_loops;
+            tail.data_loops = 2 - 2;
+            // LE
+            tail.buf[0] = crate::clocks::LE_HIGH;
+            tail.buf[1] = crate::clocks::LE_HIGH;
+        }
+    }
+
+    pub fn add_empty(&mut self, empty_loops: u32) {
+        if empty_loops == 0 {
+            return;
+        }
+        unsafe {
+            *self.loops += 1;
+            let tail: &mut ColorTranserTail = add_buf_ptr(&mut self.buf);
+            tail.empty_loops = empty_loops + 8 * 1 - 3;
+            tail.data_loops = 2 - 2;
+            // LE
+            tail.buf[0] = 0;
+            tail.buf[1] = 0;
+        }
+    }
+}
+
+unsafe fn add_buf_ptr<B, T>(buf: &mut *mut B) -> &mut T {
+    let t: &mut T = core::mem::transmute(*buf);
+    *buf = buf.add(core::mem::size_of::<T>() / core::mem::size_of::<B>());
+    t
 }

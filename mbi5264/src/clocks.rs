@@ -2,16 +2,16 @@ use core::cell::RefCell;
 use embassy_rp::dma::Channel;
 use embassy_rp::interrupt::typelevel::{Handler, Interrupt, DMA_IRQ_0, DMA_IRQ_1, PWM_IRQ_WRAP};
 use embassy_rp::peripherals::{self};
-use embassy_rp::peripherals::{DMA_CH0, DMA_CH1, PIO0, PIO1};
+use embassy_rp::peripherals::{DMA_CH0, PIO0, PIO1};
 use embassy_rp::pio::{self, Pio, ShiftConfig, StateMachine};
-use embassy_rp::pwm::{self, Pwm, PwmBatch, SetDutyCycle};
+use embassy_rp::pwm::{self, Pwm, PwmBatch};
 use embassy_rp::{gpio, interrupt, pac, Peripheral, PeripheralRef, Peripherals};
 use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, ThreadModeRawMutex};
 use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::signal::Signal;
 use embassy_sync::waitqueue::AtomicWaker;
 
-const LE_HIGH: u16 = 1 << 9;
+pub const LE_HIGH: u16 = 1 << 9;
 
 static LINE_CLOCK: Mutex<ThreadModeRawMutex, RefCell<Option<LineClock>>> =
     Mutex::new(RefCell::new(None));
@@ -98,11 +98,6 @@ impl Handler<PWM_IRQ_WRAP> for PwmInterruptHandler {
         let line = line_clock.get_mut();
         let line = line.get_mut().as_mut().unwrap();
         line.handle_interupt();
-        // critical_section::with(|cs| {
-        //     let mut guard = LINE_CLOCK.borrow(cs).borrow_mut();
-        //     let line = guard.as_mut().unwrap();
-        //     line.handle_interupt();
-        // });
         PWM_OFF_SIGNAL.signal(());
         dbg_pin.set_low();
     }
@@ -114,14 +109,7 @@ enum PwmState {
     Ending,
 }
 
-struct LinePwmConfigTail {
-    gclk_cfg: pwm::Config,
-    ba_cfg: pwm::Config,
-}
-
 struct LinePwmConfig {
-    gclk_cfg: pwm::Config,
-    c_cfg: pwm::Config,
     ba_cfg: pwm::Config,
 }
 
@@ -131,7 +119,6 @@ pub struct LineClock {
     pwm_b: Pwm<'static>,
     pwm_a: Pwm<'static>,
     pwm_cfg: LinePwmConfig,
-    pwm_cfg_tail: LinePwmConfigTail,
     started: bool,
     state: PwmState,
     all_batch: PwmBatch,
@@ -167,7 +154,7 @@ impl LineClock {
         gclk_cfg.compare_a = w / 2 + first_line_comp / 2;
         gclk_cfg.enable = false;
 
-        let pwm_gclk = Pwm::new_output_a(pwm6, gclk_pin, gclk_cfg.clone());
+        let pwm_gclk = Pwm::new_output_a(pwm6, gclk_pin, gclk_cfg);
         let mut c_cfg = pwm::Config::default();
         c_cfg.divider = pwm_div;
         // let c_ount = 64;
@@ -176,7 +163,7 @@ impl LineClock {
         c_cfg.top = w * c_ount + first_line_comp - w / 2 - 1;
         c_cfg.compare_a = w / 2;
         c_cfg.enable = false;
-        let pwm_c = Pwm::new_output_a(pwm9, c_pin, c_cfg.clone());
+        let pwm_c = Pwm::new_output_a(pwm9, c_pin, c_cfg);
         embassy_rp::pac::PWM.inte().modify(|w| w.set_ch1(true));
 
         let mut ba_cfg = pwm::Config::default();
@@ -187,27 +174,7 @@ impl LineClock {
         let pwm_b = Pwm::new_output_a(pwm8, b_pin, ba_cfg.clone());
         let pwm_a = Pwm::new_output_a(pwm7, a_pin, ba_cfg.clone());
 
-        let pwm_cfg = LinePwmConfig {
-            gclk_cfg,
-            c_cfg,
-            ba_cfg,
-        };
-
-        let mut gclk_cfg = pwm::Config::default();
-        gclk_cfg.divider = pwm_div * 2;
-        gclk_cfg.top = w - 1;
-        gclk_cfg.compare_a = w / 2;
-        gclk_cfg.enable = true;
-
-        let mut ba_cfg = pwm::Config::default();
-        ba_cfg.divider = pwm_div;
-        ba_cfg.top = w - 1;
-        ba_cfg.compare_a = w / 10;
-        ba_cfg.compare_b = w / 10 - 1;
-        ba_cfg.enable = true;
-
-        let pwm_cfg_tail = LinePwmConfigTail { gclk_cfg, ba_cfg };
-
+        let pwm_cfg = LinePwmConfig { ba_cfg };
         let mut all_batch: PwmBatch = unsafe { core::mem::transmute(0u32) };
 
         all_batch.enable(&pwm_gclk);
@@ -220,11 +187,9 @@ impl LineClock {
             pwm_b,
             pwm_a,
             pwm_cfg,
-            pwm_cfg_tail,
             started: false,
             state: PwmState::Idle,
             all_batch,
-            // pio_ba: PwmPio::new(),
         };
         LINE_CLOCK.lock(|v| v.borrow_mut().replace(this));
         LineClockHdl { started: false }
@@ -233,23 +198,14 @@ impl LineClock {
     pub fn start(&mut self) {
         self.stop();
         PWM_OFF_SIGNAL.reset();
-        // self.pwm_gclk.set_config(&self.pwm_cfg.gclk_cfg);
-        // self.pwm_c.set_config(&self.pwm_cfg.c_cfg);
         self.pwm_b.set_config(&self.pwm_cfg.ba_cfg);
 
-        // self.pio_ba.start();
         PwmBatch::set_enabled(true, |batch| {
             *batch = unsafe { core::mem::transmute_copy(&self.all_batch) };
         });
 
         self.pwm_a.phase_retard();
         self.pwm_a.phase_retard();
-        // self.pwm_ba.phase_retard();
-        // self.pwm_gclk.phase_retard();
-        // self.pwm_gclk.phase_retard();
-
-        // self.pwm_gclk.set_config(&self.pwm_cfg_tail.gclk_cfg);
-        // self.pwm_ba.set_config(&self.pwm_cfg_tail.ba_cfg);
         self.started = true;
         self.state = PwmState::Freshing;
     }
@@ -292,103 +248,10 @@ impl LineClock {
             PwmState::Freshing => {
                 self.state = PwmState::Ending;
                 self.set_pwm_b_high();
-                // self.revert_gclk();
-                // self.tail_gclk();
             }
             PwmState::Ending => {
-                // self.tail_gclk_end();
                 self.state = PwmState::Idle;
             }
-        }
-    }
-}
-
-struct PwmPio {
-    sm: StateMachine<'static, PIO1, 0>,
-    start_cmd: u16,
-}
-
-impl PwmPio {
-    fn new() -> Self {
-        let p = unsafe { Peripherals::steal() };
-        let pio1 = Pio::new(p.PIO1, PioIrqs1);
-        let Pio {
-            mut common,
-            sm0: mut pwm_sm,
-            ..
-        } = pio1;
-
-        let program_data = pio_proc::pio_asm!(
-            ".side_set 2",
-            // "nop side 0b00"
-            "pull side 0b00",
-            "mov x osr side 0b00",
-            // "out x 32 side 0b00"
-            "begin:"
-            "jmp begin side 0b00",
-            ".wrap_target",
-            "mov osr x side 0b00",
-            "out y 6 side 0b01",
-            "loop1:",
-            "jmp y-- loop1 side 0b01",
-
-            "out y 6 side 0b11",
-            "loop2:",
-            "jmp y-- loop2 side 0b11",
-
-            "out y 6 side 0b10",
-            "loop3:",
-            "jmp y-- loop3 side 0b10",
-
-            "out y 14 side 0b00",
-            "loop4:",
-            "jmp y-- loop4 side 0b00",
-            ".wrap",
-        );
-        let pwm_prog = common.load_program(&program_data.program);
-        let pin_b = common.make_pio_pin(p.PIN_16);
-        let pin_a = common.make_pio_pin(p.PIN_17);
-        pwm_sm.set_pin_dirs(pio::Direction::Out, &[&pin_b, &pin_a]);
-
-        let mut cfg = pio::Config::default();
-        cfg.clock_divider = 20u8.into();
-        cfg.fifo_join = pio::FifoJoin::TxOnly;
-        cfg.shift_out = ShiftConfig {
-            auto_fill: true,
-            threshold: 32,
-            direction: pio::ShiftDirection::Right,
-        };
-        cfg.use_program(&pwm_prog, &[&pin_b, &pin_a]);
-        pwm_sm.set_config(&cfg);
-        pwm_sm.set_enable(true);
-        let loop1_cnt = 2u32 - 2;
-        let loop2_cnt = 2u32 - 2;
-        let loop3_cnt = 1u32 - 1;
-        let loop4_cnt = 75u32 - 4;
-        let v = loop1_cnt | (loop2_cnt << 6) | (loop3_cnt << 12) | (loop4_cnt << 18);
-        pwm_sm.tx().push(v);
-        let start_cmd = 3; // jmp .wrap_target
-        Self {
-            sm: pwm_sm,
-            start_cmd,
-        }
-    }
-
-    #[inline]
-    fn start(&mut self) {
-        self.sm.set_enable(false);
-        unsafe {
-            self.sm.exec_instr(self.start_cmd);
-        }
-        self.sm.set_enable(true);
-    }
-
-    #[inline]
-    fn stop(&mut self) {
-        // self.sm.restart();
-        self.sm.set_enable(false);
-        unsafe {
-            self.sm.exec_instr(self.start_cmd);
         }
     }
 }
@@ -414,6 +277,7 @@ impl LineClockHdl {
         self.started = false;
     }
 
+    #[allow(dead_code)]
     pub fn block_wait_stop(&mut self) {
         while !PWM_OFF_SIGNAL.signaled() {}
     }
@@ -609,6 +473,7 @@ impl CmdClock {
         p.al3_read_addr_trig().write_value(ptr);
     }
 
+    #[allow(dead_code)]
     pub fn block_wait(&self) {
         let p = self.data_ch.regs();
         while p.ctrl_trig().read().busy() {}
@@ -618,199 +483,4 @@ impl CmdClock {
         let p = self.data_ch.regs();
         DataTransfer::new(p).await;
     }
-}
-
-#[repr(C)]
-struct ColorTranser {
-    empty_loops: u32,
-    data_loops: u32,
-    buf: [u16; 8],
-}
-
-#[repr(C)]
-struct ColorTranserTail {
-    empty_loops: u32,
-    data_loops: u32,
-    buf: [u16; 2],
-}
-
-#[repr(C)]
-struct TranserMeta {
-    empty_loops: u32,
-    data_loops: u32,
-}
-
-pub struct ColorParser<'a> {
-    pub loops: &'a mut u32,
-    pub buf: *mut u16,
-    pub buf_ori: *mut u16,
-    pub cnt: usize,
-    pub last_empties: u32,
-}
-
-impl<'a> ColorParser<'a> {
-    pub fn new(buf: &'a mut [u16]) -> Self {
-        let buf_ori = buf.as_mut_ptr();
-        let buf = unsafe { buf.as_mut_ptr().add(2) };
-        let loops: &mut u32 = unsafe { core::mem::transmute(buf_ori) };
-        *loops = 0;
-        Self {
-            loops,
-            buf,
-            buf_ori,
-            cnt: 0,
-            last_empties: 0,
-        }
-    }
-
-    #[inline]
-    fn start(&mut self, cmd_pio: &mut CmdClock) {
-        let ptr = self.buf_ori as u32;
-        let len = unsafe { self.buf.offset_from(self.buf_ori) } as u32 / 2;
-        cmd_pio.refresh_ptr(ptr, len);
-    }
-
-    #[inline]
-    fn reinit(&mut self) {
-        *self.loops = 0;
-        self.buf = unsafe { self.buf_ori.add(2) };
-        self.cnt += 1;
-    }
-
-    pub fn run(&mut self, cmd_pio: &mut CmdClock) {
-        self.start(cmd_pio);
-        cmd_pio.block_wait();
-        self.reinit();
-    }
-
-    pub fn encode(&mut self) -> u32 {
-        *self.loops -= 1;
-        let len = unsafe { self.buf.offset_from(self.buf_ori) } as u32 / 2;
-        len
-    }
-
-    pub async fn async_run(&mut self, cmd_pio: &mut CmdClock) {
-        self.start(cmd_pio);
-        cmd_pio.wait().await;
-        self.reinit();
-    }
-
-    #[inline]
-    fn reduce_empty_loops(last_empties: u32, required_empty_loops: u32) -> u32 {
-        let mut empty_loops = if last_empties > required_empty_loops {
-            0u32
-        } else {
-            required_empty_loops - last_empties
-        };
-        if empty_loops >= 3 {
-            empty_loops -= 3;
-        }
-        empty_loops
-    }
-    pub fn add_empty_les(&mut self, empty_size: u32) {
-        const EMPTY_LEN_U32_CYCLES: usize = 8;
-        if empty_size == 0 {
-            return;
-        }
-        unsafe {
-            *self.loops += 1;
-
-            // empty with le
-            let meta: &mut ColorTranserTail = add_buf_ptr(&mut self.buf);
-            let empty_loops: u32 = 16 * 9;
-            meta.empty_loops = Self::reduce_empty_loops(self.last_empties, empty_loops);
-            meta.data_loops = 2 - 2;
-            meta.buf = [0, LE_HIGH];
-
-            // many le
-            if empty_size <= 1 {
-                return;
-            }
-            for _i in 1..empty_size {
-                *self.loops += 1;
-                let meta: &mut ColorTranserTail = add_buf_ptr(&mut self.buf);
-                meta.empty_loops = EMPTY_LEN_U32_CYCLES as u32 * 2 - 3;
-                meta.data_loops = 2 - 2;
-                meta.buf = [0, LE_HIGH];
-            }
-        }
-        self.last_empties = 16 * 9;
-    }
-
-    pub fn add_color2(&mut self, buf: &[u16; 8], chip_index: u32, last_chip_idx: u32) {
-        let le = chip_index == 8;
-        let chip_inc_index = chip_index - last_chip_idx;
-        let empty_loops = chip_inc_index * 16 + 8;
-        unsafe {
-            *self.loops += 1;
-
-            let transfer: &mut ColorTranser = add_buf_ptr(&mut self.buf);
-            // -1
-            transfer.empty_loops = Self::reduce_empty_loops(self.last_empties, empty_loops);
-            transfer.data_loops = 8 - 2;
-            transfer.buf = *buf;
-            if le {
-                transfer.data_loops += 8;
-                let le_buf: &mut [u16; 8] = add_buf_ptr(&mut self.buf);
-                *le_buf = [0; 8];
-                le_buf[7] = LE_HIGH;
-            }
-        }
-        self.last_empties = 0;
-    }
-
-    fn add_empty_le(&mut self, chip_inc_index: u32) {
-        let empty_loops = chip_inc_index * 16 + 8 - 2;
-        unsafe {
-            *self.loops += 1;
-            let tail: &mut ColorTranserTail = add_buf_ptr(&mut self.buf);
-            tail.empty_loops = empty_loops - 3;
-            tail.data_loops = 2 - 2;
-            // LE
-            tail.buf[0] = 0;
-            tail.buf[1] = LE_HIGH;
-        }
-        self.last_empties = empty_loops;
-    }
-
-    pub fn add_color_end(&mut self, buf: &[u16; 8], chip_index: u32, last_chip_idx: u32) {
-        let le = chip_index == 8;
-        self.add_color2(buf, chip_index, last_chip_idx);
-        if !le {
-            self.add_empty_le(8 - chip_index as u32);
-        }
-    }
-
-    pub fn add_sync(&mut self, empty_loops: u32) {
-        unsafe {
-            *self.loops += 1;
-            let tail: &mut ColorTranserTail = add_buf_ptr(&mut self.buf);
-            tail.empty_loops = empty_loops;
-            tail.data_loops = 2 - 2;
-            // LE
-            tail.buf[0] = LE_HIGH;
-            tail.buf[1] = LE_HIGH;
-        }
-    }
-
-    pub fn add_empty(&mut self, empty_loops: u32) {
-        if empty_loops == 0 {
-            return;
-        }
-        unsafe {
-            *self.loops += 1;
-            let tail: &mut ColorTranserTail = add_buf_ptr(&mut self.buf);
-            tail.empty_loops = empty_loops + 8 * 1 - 3;
-            tail.data_loops = 2 - 2;
-            // LE
-            tail.buf[0] = 0;
-            tail.buf[1] = 0;
-        }
-    }
-}
-
-unsafe fn add_buf_ptr<B, T>(buf: &mut *mut B) -> &mut T {
-    let t: &mut T = core::mem::transmute(*buf);
-    *buf = buf.add(core::mem::size_of::<T>() / core::mem::size_of::<B>());
-    t
 }

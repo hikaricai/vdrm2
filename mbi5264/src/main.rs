@@ -13,31 +13,21 @@ use embassy_sync::{
 };
 use embassy_time::{Duration, Instant, Timer};
 use panic_rtt_target as _;
-use static_cell::{ConstStaticCell, StaticCell};
+use static_cell::StaticCell;
 
 // use panic_probe as _;
-const IMG_WIDTH: usize = mbi5264_common::IMG_WIDTH;
 const IMG_HEIGHT: usize = mbi5264_common::IMG_HEIGHT;
-const IMG_SIZE: usize = mbi5264_common::IMG_WIDTH * mbi5264_common::IMG_HEIGHT;
 type RGBH = [u8; 4];
 type ImageBuffer = [mbi5264_common::AngleImage; mbi5264_common::IMG_HEIGHT];
 const TOTAL_ANGLES: u32 = consts::TOTAL_ANGLES as u32;
 const TOTAL_MIRRORS: u32 = 8;
 const ANGLES_PER_MIRROR: u32 = TOTAL_ANGLES / TOTAL_MIRRORS;
 const DBG_INTREVAL: usize = 20;
-const SHOW_ANGLE_MAX: u32 = ANGLES_PER_MIRROR + 190;
+// const SHOW_ANGLE_MAX: u32 = ANGLES_PER_MIRROR + 190;
 
-static MBI_BUF: ConstStaticCell<[encoder::MbiBuf2; 2]> = ConstStaticCell::new([
-    encoder::MbiBuf2::new(0, false),
-    encoder::MbiBuf2::new(0, false),
-]);
-static MBI_CHANNEL: StaticCell<zerocopy_channel::Channel<'_, NoopRawMutex, encoder::MbiBuf2>> =
-    StaticCell::new();
 static MOTOR_SYNC_SIGNAL: StaticCell<embassy_sync::signal::Signal<NoopRawMutex, SyncState>> =
     StaticCell::new();
-static ENCODE_SIGNAL: StaticCell<embassy_sync::signal::Signal<NoopRawMutex, u32>> =
-    StaticCell::new();
-static CUR_ANGLE: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+// static CUR_ANGLE: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 static DBG: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 // static MOTOR_SYNC_SIGNAL: embassy_sync::signal::Signal<NoopRawMutex, ()> =
 //     embassy_sync::signal::Signal::new();
@@ -72,13 +62,6 @@ impl Command {
         Self {
             cmd,
             regs: [[param; 3]; 9],
-        }
-    }
-
-    fn new_sync() -> Self {
-        Self {
-            cmd: 2,
-            regs: [[0; 3]; 9],
         }
     }
 
@@ -311,7 +294,6 @@ async fn main(spawner: Spawner) {
             // let show_angle = cur_angle + (TOTAL_ANGLES / 4) - offset;
             let show_angle = cur_angle + 190;
             dma_buf = encoder.encode_next(show_angle);
-            let angle_offset = 0;
             let img_angle = (dma_buf.img_angle as i32 + angle_offset) as u32;
             if dbg {
                 // rtt_target::rprintln!("encode img {} show {}", img_angle, show_angle);
@@ -356,6 +338,7 @@ async fn main(spawner: Spawner) {
     }
 }
 
+#[allow(unused)]
 async fn test_screen(
     cmd_pio: &mut clocks::CmdClock,
     line: &mut clocks::LineClockHdl,

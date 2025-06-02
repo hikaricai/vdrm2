@@ -1,9 +1,8 @@
+#![allow(unused)]
 use embassy_executor::Executor;
 use embassy_executor::InterruptExecutor;
-use embassy_executor::Spawner;
 use embassy_futures::join::join;
 use embassy_rp::bind_interrupts;
-use embassy_rp::gpio::{Level, Output};
 use embassy_rp::interrupt;
 use embassy_rp::interrupt::InterruptExt;
 use embassy_rp::multicore::{spawn_core1, Stack};
@@ -13,9 +12,7 @@ use embassy_rp::usb;
 use embassy_rp::usb::{Driver, InterruptHandler};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::zerocopy_channel;
-use embassy_time::Timer;
-use embassy_usb::driver::{Endpoint, EndpointIn, EndpointOut};
-use embassy_usb::msos::{self, windows_version};
+use embassy_usb::driver::{Endpoint, EndpointOut};
 use embassy_usb::{Builder, Config};
 use static_cell::ConstStaticCell;
 use static_cell::StaticCell;
@@ -119,7 +116,7 @@ async fn decode_qoi(
 #[embassy_executor::task]
 async fn core1_usb_task(usb: USB, mut qoi_tx: crate::SafeSender<UsbDataBuf>) {
     let core_num = embassy_rp::pac::SIO.cpuid().read();
-    // rtt_target::rprintln!("Hello from core {}", core_num);
+    rtt_target::rprintln!("Hello from core {}", core_num);
     let driver = Driver::new(usb, Irqs);
 
     // Create embassy-usb Config
