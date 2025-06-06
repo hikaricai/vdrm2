@@ -1,8 +1,9 @@
 use core::cell::RefCell;
 use embassy_rp::dma::Channel;
-use embassy_rp::interrupt::typelevel::{Handler, Interrupt, DMA_IRQ_0, DMA_IRQ_1, PWM_IRQ_WRAP};
+use embassy_rp::interrupt::typelevel::{Handler, Interrupt, DMA_IRQ_0, DMA_IRQ_1, PWM_IRQ_WRAP_0};
 use embassy_rp::peripherals::{self};
 use embassy_rp::peripherals::{DMA_CH0, PIO0, PIO1};
+use embassy_rp::pio::program::pio_asm;
 use embassy_rp::pio::{self, Pio, ShiftConfig, StateMachine};
 use embassy_rp::pwm::{self, Pwm, PwmBatch};
 use embassy_rp::{gpio, interrupt, pac, Peripheral, PeripheralRef, Peripherals};
@@ -51,7 +52,7 @@ unsafe fn init_dma1() {
 static PWM_OFF_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
 embassy_rp::bind_interrupts!(struct PwmIrq {
-    PWM_IRQ_WRAP => PwmInterruptHandler;
+    PWM_IRQ_WRAP_0 => PwmInterruptHandler;
 });
 
 struct DataTransfer {
@@ -84,7 +85,7 @@ impl core::future::Future for DataTransfer {
 
 struct PwmInterruptHandler {}
 
-impl Handler<PWM_IRQ_WRAP> for PwmInterruptHandler {
+impl Handler<PWM_IRQ_WRAP_0> for PwmInterruptHandler {
     #[link_section = ".data"]
     #[inline(never)]
     unsafe fn on_interrupt() {
@@ -136,9 +137,9 @@ impl LineClock {
         b_pin: peripherals::PIN_16,
         c_pin: peripherals::PIN_18,
     ) -> LineClockHdl {
-        PWM_IRQ_WRAP::unpend();
+        PWM_IRQ_WRAP_0::unpend();
         unsafe {
-            PWM_IRQ_WRAP::enable();
+            PWM_IRQ_WRAP_0::enable();
             DMA_IRQ_0::disable();
             init_dma1();
         };
@@ -164,7 +165,7 @@ impl LineClock {
         c_cfg.compare_a = w / 2;
         c_cfg.enable = false;
         let pwm_c = Pwm::new_output_a(pwm9, c_pin, c_cfg);
-        embassy_rp::pac::PWM.inte().modify(|w| w.set_ch1(true));
+        embassy_rp::pac::PWM.irq0_inte().modify(|w| w.set_ch1(true));
 
         let mut ba_cfg = pwm::Config::default();
         ba_cfg.divider = pwm_div;
@@ -323,7 +324,7 @@ impl CmdClock {
         // 4      3      2
         // 5      4      2
         // 6      5      3
-        let clk_program_data = pio_proc::pio_asm!(
+        let clk_program_data = pio_asm!(
             ".define public DELAY 3",
             ".side_set 1",
             ".wrap_target",
@@ -342,7 +343,7 @@ impl CmdClock {
         cfg.use_program(&clk_prog, &[&clk_pin]);
         clk_sm.set_config(&cfg);
 
-        let data_program_data = pio_proc::pio_asm!(
+        let data_program_data = pio_asm!(
             ".define public DELAY 2"
             ".define public IRQ_DELAY 2"
             ".wrap_target",
@@ -462,14 +463,16 @@ impl CmdClock {
         Self::encode_cmd(transaction, &mut self.data_buf);
         let p = self.data_ch.regs();
         let buf: &[u32; CMD_BUF_SIZE / 2] = unsafe { core::mem::transmute(&self.data_buf) };
-        p.trans_count().write_value(buf.len() as u32);
+        p.trans_count()
+            .write_value(pac::dma::regs::ChTransCount(buf.len() as u32));
         p.al3_read_addr_trig().write_value(buf.as_ptr() as u32);
         while p.ctrl_trig().read().busy() {}
     }
 
     pub fn refresh_ptr(&mut self, ptr: u32, len: u32) {
         let p = self.data_ch.regs();
-        p.trans_count().write_value(len);
+        p.trans_count()
+            .write_value(pac::dma::regs::ChTransCount(len));
         p.al3_read_addr_trig().write_value(ptr);
     }
 
