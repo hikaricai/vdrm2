@@ -21,7 +21,7 @@ type ImageBuffer = [mbi5264_common::AngleImage; mbi5264_common::IMG_HEIGHT];
 const TOTAL_ANGLES: u32 = consts::TOTAL_ANGLES as u32;
 const TOTAL_MIRRORS: u32 = 8;
 const ANGLES_PER_MIRROR: u32 = TOTAL_ANGLES / TOTAL_MIRRORS;
-const DBG_INTREVAL: usize = 20;
+const DBG_INTREVAL: usize = 100;
 // const SHOW_ANGLE_MAX: u32 = ANGLES_PER_MIRROR + 190;
 
 static MOTOR_SYNC_SIGNAL: StaticCell<
@@ -148,6 +148,7 @@ async fn motor_input_sync(
             angle_offset,
         });
         if cnt % DBG_INTREVAL == 0 {
+            // FIXME elapsed.as_millis() is zero
             let fps = 10000 / elapsed.as_millis() as u32;
             rtt_target::rprintln!(
                 "sync_signal ticks_per_angle {} fps {}.{}",
@@ -203,7 +204,7 @@ async fn main(spawner: Spawner) {
 
     let motor_sync_sinal = MOTOR_SYNC_SIGNAL.init(embassy_sync::signal::Signal::new());
     let motor_sync_sinal = &*motor_sync_sinal;
-    let sync_signal = SyncSignal::new(Input::new(p.PIN_28, gpio::Pull::None), true);
+    let sync_signal = SyncSignal::new(Input::new(p.PIN_28, gpio::Pull::None), false);
 
     let spawner1 = SW1_EXECUTOR.start(interrupt::SWI_IRQ_1);
     spawner1
@@ -263,6 +264,7 @@ async fn main(spawner: Spawner) {
 
     // test_screen(&mut cmd_pio, &mut line, &mut led_pin).await;
     // return;
+
     // rtt_target::rprintln!("first sync_signal");
     // let mut cmd_iter = core::iter::repeat(UMINI_CMDS.iter()).flatten();
     let mut dbg_pin = gpio::Output::new(p.PIN_22, gpio::Level::Low);
@@ -328,10 +330,12 @@ async fn main(spawner: Spawner) {
             if img_angle > show_angle {
                 fast_frames += 1;
                 fast_angles += inc_angles;
-                // let target_angle = cur_angle + inc_angles;
-                // let expires =
-                //     last_tick + Duration::from_ticks((target_angle * ticks_per_angle) as u64);
-                // Timer::at(expires).await;
+                if inc_angles > ANGLES_PER_MIRROR / 2 {
+                    let target_angle = cur_angle + inc_angles;
+                    let expires =
+                        last_tick + Duration::from_ticks((target_angle * ticks_per_angle) as u64);
+                    Timer::at(expires).await;
+                }
             }
             cmd_pio.wait().await;
             line.wait_stop().await;

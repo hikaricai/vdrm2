@@ -67,11 +67,12 @@ fn main() {
                 continue;
             }
             for p in line {
-                let mut addr = p.addr;
+                let addr = p.addr;
                 if addr >= 144 {
                     continue;
                 }
-                addr = 143 - addr;
+                // reverse
+                // addr = 143 - addr;
                 for (color, pixel) in p.pixels.iter().zip(&mut pixels) {
                     let Some(color) = color else {
                         continue;
@@ -90,7 +91,7 @@ fn main() {
                     }
                 }
             }
-            for (c, p) in img.coloum.iter_mut().rev().zip(pixels) {
+            for (c, p) in img.coloum.iter_mut().zip(pixels) {
                 if let Some(p) = p {
                     *c = p;
                 }
