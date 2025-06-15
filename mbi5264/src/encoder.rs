@@ -1,6 +1,6 @@
 const IMG_BIN: &[u8] = include_bytes!("../img.bin");
 
-const INDEX_MOD: usize = 4;
+const INDEX_MOD: usize = 2;
 
 pub struct DmaBuf {
     pub img_angle: u32,
@@ -38,10 +38,13 @@ impl EncoderCtx {
     }
 
     fn next_img_line(&mut self, angle: u32) -> &mbi5264_common::AngleImage {
-        if angle < self.last_angle || self.img_idx >= self.img.len() {
+        if angle < self.last_angle {
             self.img_idx = self.idx_mod;
             self.idx_mod += 1;
             self.idx_mod %= INDEX_MOD;
+        }
+        if self.img_idx >= self.img.len() {
+            self.img_idx = self.idx_mod;
         }
         self.last_angle = angle;
         if angle >= self.max_img_angle {

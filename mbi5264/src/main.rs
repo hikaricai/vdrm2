@@ -148,14 +148,17 @@ async fn motor_input_sync(
             angle_offset,
         });
         if cnt % DBG_INTREVAL == 0 {
-            // FIXME elapsed.as_millis() is zero
-            let fps = 10000 / elapsed.as_millis() as u32;
-            rtt_target::rprintln!(
-                "sync_signal ticks_per_angle {} fps {}.{}",
-                ticks_per_angle,
-                fps / 10,
-                fps % 10
-            );
+            // nosie cause elapsed.as_millis() to be zero
+            let ms = elapsed.as_millis() as u32;
+            if ms > 0 {
+                let fps = 10000 / ms;
+                rtt_target::rprintln!(
+                    "sync_signal ticks_per_angle {} fps {}.{}",
+                    ticks_per_angle,
+                    fps / 10,
+                    fps % 10
+                );
+            }
         }
         last_sync_tick = now;
         cnt += 1;

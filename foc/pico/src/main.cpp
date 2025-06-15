@@ -117,7 +117,7 @@ void loop() {
   float angle = sensor.getMechanicalAngle();
   uint32_t raw_angle = (uint32_t)(angle * CPR_F / _2PI);
   // // (1 << 12) / 8 = 512
-  raw_angle += 256;
+  raw_angle += 448;
   if (raw_angle > CPR) {
     raw_angle -= CPR;
   }
