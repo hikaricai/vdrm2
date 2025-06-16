@@ -1,6 +1,4 @@
-const IMG_BIN: &[u8] = include_bytes!("../img.bin");
-
-const INDEX_MOD: usize = 2;
+const INDEX_MOD: usize = 4;
 
 pub struct DmaBuf {
     pub img_angle: u32,
@@ -18,11 +16,10 @@ struct EncoderCtx {
 
 impl EncoderCtx {
     fn new() -> Self {
-        assert!(IMG_BIN.len() >= core::mem::size_of::<mbi5264_common::AngleImage>());
         let img: &'static [mbi5264_common::AngleImage] = unsafe {
             core::slice::from_raw_parts(
-                IMG_BIN.as_ptr() as *const mbi5264_common::AngleImage,
-                IMG_BIN.len() / core::mem::size_of::<mbi5264_common::AngleImage>(),
+                crate::env::IMAGE_ADDR as *const mbi5264_common::AngleImage,
+                crate::env::IMAGE_LEN,
             )
         };
         rtt_target::rprintln!("total angles {}", img.len());

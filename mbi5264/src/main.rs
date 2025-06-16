@@ -4,6 +4,7 @@ mod clocks;
 mod consts;
 mod core1;
 mod encoder;
+mod env;
 
 use embassy_executor::InterruptExecutor;
 use embassy_executor::Spawner;
@@ -265,8 +266,8 @@ async fn main(spawner: Spawner) {
         cmd_pio.refresh2(&Command::new(cmd as u8, param));
     }
 
-    // test_screen(&mut cmd_pio, &mut line, &mut led_pin).await;
-    // return;
+    test_screen(&mut cmd_pio, &mut line, &mut led_pin).await;
+    return;
 
     // rtt_target::rprintln!("first sync_signal");
     // let mut cmd_iter = core::iter::repeat(UMINI_CMDS.iter()).flatten();
