@@ -15,7 +15,7 @@ BLDCDriver3PWM driver = BLDCDriver3PWM(6, 8, 10, 12);
 //StepperDriver4PWM driver = StepperDriver4PWM(9, 5, 10, 6,  8);
 
 // velocity set point variable
-float target_velocity = -6.18 * 1.5;
+float target_velocity = -6.18 * 2;
 // instantiate the commander
 Commander command = Commander(Serial);
 void doTarget(char* cmd) { command.scalar(&target_velocity, cmd); }
@@ -51,12 +51,12 @@ void setup() {
   // default parameters in defaults.h
 
   // velocity PI controller parameters
-  motor.PID_velocity.P = 0.1f;
-  motor.PID_velocity.I = 1;
+  motor.PID_velocity.P = 0.15f;
+  motor.PID_velocity.I = 0.01;
   motor.PID_velocity.D = 0;
   // motor.PID_velocity.D = 0;
 
-  motor.velocity_limit = 50;
+  motor.velocity_limit = target_velocity * 1.2;
   // motor.PID_velocity.output_ramp = 1200; // 调整这个值可以影响电机的加速和减速性能。较高的值会使电机加速和减速更快，但可能导致振动或电流峰值。
   // motor.LPF_velocity.Tf = 0.01f;         // 这可以滤除电机的噪声和高频振动，从而使速度控制更加稳定。
   // default voltage_power_supply
