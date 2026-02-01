@@ -1,1 +1,1 @@
-pub const TOTAL_ANGLES: usize = 1205;
+pub const TOTAL_ANGLES: usize = 1536;

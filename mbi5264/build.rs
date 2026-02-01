@@ -25,8 +25,8 @@ fn gen_pyramid_surface() -> vdrm_alg::PixelSurface {
             if h >= vdrm_alg::H_PIXELS as i32 {
                 continue;
             }
-            // let z = vdrm_alg::H_PIXELS as u32 - 1 - h as u32;
-            let z = h as u32;
+            let z = vdrm_alg::H_PIXELS as u32 - 1 - h as u32;
+            // let z = h as u32;
             let color = match (x_i32 >= 0, y_i32 >= 0) {
                 (true, true) => u32::from_ne_bytes([gray, gray, gray, 0]),
                 (false, true) => u32::from_ne_bytes([gray, 0, 0, 0]),

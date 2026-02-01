@@ -1,4 +1,4 @@
-const INDEX_MOD: usize = 4;
+const INDEX_MOD: usize = 2;
 
 pub struct DmaBuf {
     pub img_angle: u32,
@@ -50,7 +50,10 @@ impl EncoderCtx {
         loop {
             let angle_line = &self.img[self.img_idx];
             self.img_idx += INDEX_MOD;
-
+            if self.img_idx >= self.img.len() {
+                self.img_idx = self.idx_mod;
+                return self.img.last().unwrap();
+            }
             if angle_line.angle >= angle {
                 return angle_line;
             }

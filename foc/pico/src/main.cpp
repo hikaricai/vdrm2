@@ -15,7 +15,7 @@ BLDCDriver3PWM driver = BLDCDriver3PWM(6, 8, 10, 12);
 //StepperDriver4PWM driver = StepperDriver4PWM(9, 5, 10, 6,  8);
 
 // velocity set point variable
-float target_velocity = -6.18 * 2;
+float target_velocity = 6.18 * 1.5;
 // instantiate the commander
 Commander command = Commander(Serial);
 void doTarget(char* cmd) { command.scalar(&target_velocity, cmd); }
@@ -24,7 +24,7 @@ void setup() {
 
   pinMode(LED_BUILTIN, OUTPUT);
   pinMode(PIN_SYNC, OUTPUT);
-  // use monitoring with serial 
+  // use monitoring with serial
   Serial.begin(115200);
   // enable more verbose output for debugging
   // comment out if not needed
@@ -45,7 +45,9 @@ void setup() {
   // set motion control loop to be used
   motor.controller = MotionControlType::velocity;
   motor.sensor_direction = Direction::CW;
-  motor.zero_electric_angle = 3.98;
+  // FIXME 启动后大概率旋转方向和速度不符合预期 需要重试
+  // WARN 自动或者手动配置 硬件变动后必须修正
+  // motor.zero_electric_angle = 3.98;
 
   // contoller configuration
   // default parameters in defaults.h
@@ -101,6 +103,7 @@ uint32_t region_cnt = 0;
 const uint32_t CPR = 1 << 12;
 const float CPR_F = (float)CPR;
 const uint32_t REGION_CPR = CPR / 8;
+#define TOTAL_ANGLES 1536
 
 void loop() {
   uint32_t ts_us = time_us_32();
@@ -117,7 +120,7 @@ void loop() {
   float angle = sensor.getMechanicalAngle();
   uint32_t raw_angle = (uint32_t)(angle * CPR_F / _2PI);
   // // (1 << 12) / 8 = 512
-  raw_angle += 448;
+  raw_angle += (TOTAL_ANGLES / 4 + TOTAL_ANGLES / 16);
   if (raw_angle > CPR) {
     raw_angle -= CPR;
   }

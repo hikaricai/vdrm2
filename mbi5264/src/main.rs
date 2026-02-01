@@ -100,7 +100,7 @@ impl SyncSignal {
     }
     async fn wait_sync(&mut self) {
         if self.is_mock {
-            Timer::at(self.last + Duration::from_millis(1000 / 32)).await;
+            Timer::at(self.last + Duration::from_millis(1000 / 12)).await;
             self.last = Instant::now();
             return;
         }
@@ -124,7 +124,7 @@ async fn motor_input_sync(
     sync_signal.wait_sync().await;
     let mut last_sync_tick = Instant::now();
     let mut rtt_read_buf = [0u8; 16];
-    let mut angle_offset = 33i32;
+    let mut angle_offset = 0i32;
     loop {
         if cnt % DBG_INTREVAL == 0 {
             let read_len = rtt_down.read(&mut rtt_read_buf);
@@ -208,7 +208,7 @@ async fn main(spawner: Spawner) {
 
     let motor_sync_sinal = MOTOR_SYNC_SIGNAL.init(embassy_sync::signal::Signal::new());
     let motor_sync_sinal = &*motor_sync_sinal;
-    let sync_signal = SyncSignal::new(Input::new(p.PIN_28, gpio::Pull::None), false);
+    let sync_signal = SyncSignal::new(Input::new(p.PIN_28, gpio::Pull::None), true);
 
     let spawner1 = SW1_EXECUTOR.start(interrupt::SWI_IRQ_1);
     spawner1
@@ -266,8 +266,8 @@ async fn main(spawner: Spawner) {
         cmd_pio.refresh2(&Command::new(cmd as u8, param));
     }
 
-    test_screen(&mut cmd_pio, &mut line, &mut led_pin).await;
-    return;
+    // test_screen(&mut cmd_pio, &mut line, &mut led_pin).await;
+    // return;
 
     // rtt_target::rprintln!("first sync_signal");
     // let mut cmd_iter = core::iter::repeat(UMINI_CMDS.iter()).flatten();
@@ -307,11 +307,15 @@ async fn main(spawner: Spawner) {
                 break;
             }
 
+            // total angles 154
+            // first angle 328
+            // 1536/4 == 384
             // let offset = ANGLES_PER_MIRROR / 2;
-            // let show_angle = cur_angle + (TOTAL_ANGLES / 4) - offset;
-            let show_angle = cur_angle + 190;
+            // show_angle应该是这个值
+            // let show_angle = cur_angle + (TOTAL_ANGLES / 4) - ANGLES_PER_MIRROR / 2;
+            let show_angle = (cur_angle as i32 + 288 + angle_offset) as u32;
             dma_buf = encoder.encode_next(show_angle);
-            let img_angle = (dma_buf.img_angle as i32 + angle_offset) as u32;
+            let img_angle = dma_buf.img_angle;
             if dbg {
                 // rtt_target::rprintln!("encode img {} show {}", img_angle, show_angle);
             }
@@ -319,7 +323,6 @@ async fn main(spawner: Spawner) {
 
             let now = Instant::now();
             let cur_angle = (now.as_ticks() - last_tick.as_ticks()) as u32 / ticks_per_angle;
-            let show_angle = cur_angle + 190;
 
             if img_angle < show_angle {
                 // if dbg {
@@ -332,9 +335,9 @@ async fn main(spawner: Spawner) {
             //     rtt_target::rprintln!("fresh img {} show {}", img_angle, show_angle);
             // }
             if img_angle > show_angle {
-                fast_frames += 1;
                 fast_angles += inc_angles;
                 if inc_angles > ANGLES_PER_MIRROR / 2 {
+                    fast_frames += 1;
                     let target_angle = cur_angle + inc_angles;
                     let expires =
                         last_tick + Duration::from_ticks((target_angle * ticks_per_angle) as u64);

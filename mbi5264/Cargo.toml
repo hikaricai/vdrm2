@@ -44,7 +44,7 @@ rtt-target = "0.6.1"
 panic-rtt-target = "0.2.0"
 
 [build-dependencies]
-vdrm-alg = { path = "/Users/caiyuanhao/rust/vdrm/vdrm-alg/" }
+vdrm-alg = { path = "/Users/hikari/rust/vdrm/vdrm-alg/" }
 # vdrm-alg = { git = "https://github.com/hikaricai/vdrm.git", package = "vdrm-alg", branch = "master" }
 mbi5264-common = { path = "../mbi5264-common" }
 

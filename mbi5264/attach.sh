@@ -1,1 +1,1 @@
-probe-rs attach --chip RP2040 target/thumbv6m-none-eabi/release/vdrm-pico
+probe-rs attach --chip RP235x target/thumbv8m.main-none-eabihf/release/vdrm-pico
