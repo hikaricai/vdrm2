@@ -274,7 +274,7 @@ async fn main(spawner: Spawner) {
     let mut dbg_pin = gpio::Output::new(p.PIN_22, gpio::Level::Low);
     // encode_sinal.signal(0);
     let mut encoder = encoder::Encoder::new();
-    let mut dma_buf = encoder.encode_next(0);
+    let mut dma_buf = encoder.encode_next(0).unwrap();
     loop {
         // let &(cmd, param) = cmd_iter.next().unwrap();
         // cmd_pio.refresh2(&confirm_cmd);
@@ -301,7 +301,7 @@ async fn main(spawner: Spawner) {
             let cur_angle = (now.as_ticks() - last_tick.as_ticks()) as u32 / ticks_per_angle;
 
             if cur_angle >= ANGLES_PER_MIRROR {
-                dma_buf = encoder.encode_next(0);
+                dma_buf = encoder.encode_next(0).unwrap();
                 cmd_pio.wait().await;
                 line.wait_stop().await;
                 break;
@@ -314,7 +314,16 @@ async fn main(spawner: Spawner) {
             // show_angle应该是这个值
             // let show_angle = cur_angle + (TOTAL_ANGLES / 4) - ANGLES_PER_MIRROR / 2;
             let show_angle = (cur_angle as i32 + 288 + angle_offset) as u32;
-            dma_buf = encoder.encode_next(show_angle);
+            match encoder.encode_next(show_angle) {
+                Some(buf) => {
+                    dma_buf = buf;
+                }
+                None => {
+                    cmd_pio.wait().await;
+                    line.wait_stop().await;
+                    break;
+                }
+            }
             let img_angle = dma_buf.img_angle;
             if dbg {
                 // rtt_target::rprintln!("encode img {} show {}", img_angle, show_angle);
@@ -368,7 +377,7 @@ async fn test_screen(
 ) {
     let mut encoder = encoder::Encoder::new();
     let mut next_angle = 0u32;
-    let mut dma_buf = encoder.encode_next(next_angle);
+    let mut dma_buf = encoder.encode_next(next_angle).unwrap();
     let mut cnt = 0usize;
     let mut last = Instant::now();
     loop {
@@ -379,7 +388,12 @@ async fn test_screen(
         } else {
             dma_buf.img_angle
         };
-        dma_buf = encoder.encode_next(next_angle);
+        match encoder.encode_next(next_angle) {
+            Some(buf) => dma_buf = buf,
+            None => {
+                dma_buf = encoder.encode_next(0).unwrap();
+            }
+        }
         cmd_pio.wait().await;
         line.wait_stop().await;
         cnt += 1;

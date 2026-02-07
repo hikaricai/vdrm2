@@ -34,7 +34,7 @@ impl EncoderCtx {
         }
     }
 
-    fn next_img_line(&mut self, angle: u32) -> &mbi5264_common::AngleImage {
+    fn next_img_line(&mut self, angle: u32) -> Option<&mbi5264_common::AngleImage> {
         if angle < self.last_angle {
             self.img_idx = self.idx_mod;
             self.idx_mod += 1;
@@ -44,18 +44,18 @@ impl EncoderCtx {
             self.img_idx = self.idx_mod;
         }
         self.last_angle = angle;
-        if angle >= self.max_img_angle {
-            return self.img.last().unwrap();
+        if angle > self.max_img_angle {
+            return None;
         }
         loop {
             let angle_line = &self.img[self.img_idx];
             self.img_idx += INDEX_MOD;
             if self.img_idx >= self.img.len() {
                 self.img_idx = self.idx_mod;
-                return self.img.last().unwrap();
+                return None;
             }
             if angle_line.angle >= angle {
-                return angle_line;
+                return Some(angle_line);
             }
         }
     }
@@ -77,8 +77,8 @@ impl Encoder {
             buf1: [0; 16384],
         }
     }
-    pub fn encode_next(&mut self, angle: u32) -> DmaBuf {
-        let angle_line = self.ctx.next_img_line(angle);
+    pub fn encode_next(&mut self, angle: u32) -> Option<DmaBuf> {
+        let angle_line = self.ctx.next_img_line(angle)?;
         self.buf_idx += 1;
         let buf = if self.buf_idx & 1 > 0 {
             &mut self.buf1
@@ -87,11 +87,11 @@ impl Encoder {
         };
         let mut parser = ColorParser::new(buf);
         let len = update_frame(&mut parser, &angle_line.coloum);
-        DmaBuf {
+        Some(DmaBuf {
             img_angle: angle_line.angle,
             ptr: buf.as_ptr() as u32,
             len,
-        }
+        })
     }
 }
 
