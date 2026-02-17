@@ -131,14 +131,25 @@ fn main() {
             }
         }
         for (idx, angle_list) in angle_lists.into_iter().enumerate() {
+            let mut init_angle = (vdrm_alg::TOTAL_ANGLES / 4) - vdrm_alg::W_PIXELS / 2;
+            match idx {
+                1 => {
+                    init_angle -= vdrm_alg::W_PIXELS / 4;
+                }
+                2 => {
+                    init_angle += vdrm_alg::W_PIXELS / 4;
+                }
+                _ => {}
+            }
             let len = angle_list.len();
             let image_path = image_dir.join(format!("img{idx}_{len}.bin"));
-            let buf = unsafe {
-                std::slice::from_raw_parts(
-                    angle_list.as_ptr() as *const u8,
-                    angle_list.len() * std::mem::size_of::<mbi5264_common::AngleImage>(),
-                )
-            };
+            let img_size = len * std::mem::size_of::<mbi5264_common::AngleImage>();
+            let mut buf: Vec<u8> = vec![];
+            buf.extend_from_slice(&(init_angle as u32).to_le_bytes());
+            buf.extend_from_slice(&(len as u32).to_le_bytes());
+            let img_buf =
+                unsafe { std::slice::from_raw_parts(angle_list.as_ptr() as *const u8, img_size) };
+            buf.extend_from_slice(img_buf);
             std::fs::write(image_path, buf).unwrap();
         }
     }

@@ -275,6 +275,8 @@ async fn main(spawner: Spawner) {
     // encode_sinal.signal(0);
     let mut encoder = encoder::Encoder::new();
     let mut dma_buf = encoder.encode_next(0).unwrap();
+    let init_angle = unsafe { *(env::EXT_ADDR as *const u32) };
+    rtt_target::rprintln!("init_angle {}", init_angle);
     loop {
         // let &(cmd, param) = cmd_iter.next().unwrap();
         // cmd_pio.refresh2(&confirm_cmd);
@@ -286,7 +288,7 @@ async fn main(spawner: Spawner) {
         let SyncState {
             last_tick,
             ticks_per_angle,
-            angle_offset,
+            angle_offset: _,
         } = motor_sync_sinal.wait().await;
         let dbg = cnt % DBG_INTREVAL == 0;
         DBG.store(dbg, core::sync::atomic::Ordering::Relaxed);
@@ -313,12 +315,13 @@ async fn main(spawner: Spawner) {
             // let offset = ANGLES_PER_MIRROR / 2;
             // show_angle应该是这个值
             // let show_angle = cur_angle + (TOTAL_ANGLES / 4) - ANGLES_PER_MIRROR / 2;
-            let show_angle = (cur_angle as i32 + 288 + angle_offset) as u32;
+            let show_angle = cur_angle + init_angle;
             match encoder.encode_next(show_angle) {
                 Some(buf) => {
                     dma_buf = buf;
                 }
                 None => {
+                    dma_buf = encoder.encode_next(0).unwrap();
                     cmd_pio.wait().await;
                     line.wait_stop().await;
                     break;

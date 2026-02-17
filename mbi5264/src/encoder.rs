@@ -17,9 +17,10 @@ struct EncoderCtx {
 impl EncoderCtx {
     fn new() -> Self {
         let img: &'static [mbi5264_common::AngleImage] = unsafe {
+            let len = *(crate::env::IMAGE_LEN_ADDR as *const u32);
             core::slice::from_raw_parts(
                 crate::env::IMAGE_ADDR as *const mbi5264_common::AngleImage,
-                crate::env::IMAGE_LEN,
+                len as usize,
             )
         };
         rtt_target::rprintln!("total angles {}", img.len());
