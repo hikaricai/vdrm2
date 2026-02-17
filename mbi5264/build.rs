@@ -39,6 +39,69 @@ fn gen_pyramid_surface() -> vdrm_alg::PixelSurface {
     pixel_surface
 }
 
+fn parse_angle_line(
+    angle: u32,
+    line: Vec<vdrm_alg::ScreenLine>,
+) -> Option<mbi5264_common::AngleImage> {
+    let mut img = mbi5264_common::AngleImage::new(angle);
+    let mut pixels: [Option<[u8; 4]>; mbi5264_common::IMG_HEIGHT] =
+        [None; mbi5264_common::IMG_HEIGHT];
+    if line.is_empty() {
+        return None;
+    }
+    for p in line {
+        let addr = p.addr;
+        if addr >= 144 {
+            continue;
+        }
+        // reverse
+        // addr = 143 - addr;
+        for (color, pixel) in p.pixels.iter().zip(&mut pixels) {
+            let Some(color) = color else {
+                continue;
+            };
+            let [r, g, b, _a] = color.to_ne_bytes();
+            match pixel {
+                Some(rgbh) => {
+                    let h = rgbh[3];
+                    if addr < h as u32 {
+                        *rgbh = [r, g, b, addr as u8];
+                    }
+                }
+                None => {
+                    *pixel = Some([r, g, b, addr as u8]);
+                }
+            }
+        }
+    }
+    for (c, p) in img.coloum.iter_mut().zip(pixels) {
+        if let Some(p) = p {
+            *c = p;
+        }
+    }
+    // optimize fps
+    for i in 0..64usize {
+        let region0 = i;
+        let region1 = i + 64;
+        let region2 = i + 128;
+        let regions = [region0, region1, region2];
+        let mut non_empty_h = 0u8;
+        for region in regions {
+            let p = img.coloum[region];
+            let h = p[3];
+            if p[..3] != [0, 0, 0] {
+                non_empty_h = h;
+            }
+        }
+        for region in regions {
+            let p = &mut img.coloum[region];
+            if p[..3] == [0, 0, 0] {
+                p[3] = non_empty_h;
+            }
+        }
+    }
+    Some(img)
+}
 fn main() {
     let crate_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
     let const_path = std::path::Path::new(crate_dir.as_str()).join("src/consts.rs");
@@ -52,80 +115,32 @@ fn main() {
     )
     .unwrap();
 
-    let image_path = std::path::Path::new(crate_dir.as_str()).join("img.bin");
-    if !image_path.exists() {
+    let image_dir = std::path::Path::new(crate_dir.as_str()).join("imgs");
+    if !image_dir.exists() {
+        std::fs::create_dir(&image_dir).unwrap();
         let codec = vdrm_alg::Codec::new(0..400);
         let pyramid = gen_pyramid_surface();
         let map = codec.encode(&pyramid, 0, true);
-        let mut angle_list = vec![];
+        let mut angle_lists = [0; vdrm_alg::NUM_SCREENS].map(|_| vec![]);
         for (angle, screen_lines) in map {
-            let mut img = mbi5264_common::AngleImage::new(angle);
-            let mut pixels: [Option<[u8; 4]>; mbi5264_common::IMG_HEIGHT] =
-                [None; mbi5264_common::IMG_HEIGHT];
-            let [line, ..] = screen_lines;
-            if line.is_empty() {
-                continue;
-            }
-            for p in line {
-                let addr = p.addr;
-                if addr >= 144 {
+            for (angle_list, line) in angle_lists.iter_mut().zip(screen_lines) {
+                let Some(img) = parse_angle_line(angle, line) else {
                     continue;
-                }
-                // reverse
-                // addr = 143 - addr;
-                for (color, pixel) in p.pixels.iter().zip(&mut pixels) {
-                    let Some(color) = color else {
-                        continue;
-                    };
-                    let [r, g, b, _a] = color.to_ne_bytes();
-                    match pixel {
-                        Some(rgbh) => {
-                            let h = rgbh[3];
-                            if addr < h as u32 {
-                                *rgbh = [r, g, b, addr as u8];
-                            }
-                        }
-                        None => {
-                            *pixel = Some([r, g, b, addr as u8]);
-                        }
-                    }
-                }
+                };
+                angle_list.push(img);
             }
-            for (c, p) in img.coloum.iter_mut().zip(pixels) {
-                if let Some(p) = p {
-                    *c = p;
-                }
-            }
-            // optimize fps
-            for i in 0..64usize {
-                let region0 = i;
-                let region1 = i + 64;
-                let region2 = i + 128;
-                let regions = [region0, region1, region2];
-                let mut non_empty_h = 0u8;
-                for region in regions {
-                    let p = img.coloum[region];
-                    let h = p[3];
-                    if p[..3] != [0, 0, 0] {
-                        non_empty_h = h;
-                    }
-                }
-                for region in regions {
-                    let p = &mut img.coloum[region];
-                    if p[..3] == [0, 0, 0] {
-                        p[3] = non_empty_h;
-                    }
-                }
-            }
-            angle_list.push(img);
         }
-        let buf = unsafe {
-            std::slice::from_raw_parts(
-                angle_list.as_ptr() as *const u8,
-                angle_list.len() * std::mem::size_of::<mbi5264_common::AngleImage>(),
-            )
-        };
-        std::fs::write(image_path, buf).unwrap();
+        for (idx, angle_list) in angle_lists.into_iter().enumerate() {
+            let len = angle_list.len();
+            let image_path = image_dir.join(format!("img{idx}_{len}.bin"));
+            let buf = unsafe {
+                std::slice::from_raw_parts(
+                    angle_list.as_ptr() as *const u8,
+                    angle_list.len() * std::mem::size_of::<mbi5264_common::AngleImage>(),
+                )
+            };
+            std::fs::write(image_path, buf).unwrap();
+        }
     }
     // skip build
     // std::process::exit(0);
