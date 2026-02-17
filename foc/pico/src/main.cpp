@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <SimpleFOC.h>
 #define PIN_SYNC     (28u)
+#define PIN_SYNC2     (29u)
 
 MagneticSensorI2C sensor = MagneticSensorI2C(AS5600_I2C);
 // magnetic sensor instance - MagneticSensorI2C
@@ -15,15 +16,20 @@ BLDCDriver3PWM driver = BLDCDriver3PWM(6, 8, 10, 12);
 //StepperDriver4PWM driver = StepperDriver4PWM(9, 5, 10, 6,  8);
 
 // velocity set point variable
-float target_velocity = 6.18 * 1.5;
+float target_velocity = -6.18 * 1.5;
 // instantiate the commander
 Commander command = Commander(Serial);
 void doTarget(char* cmd) { command.scalar(&target_velocity, cmd); }
+uint32_t raw_angle_offset = 0;
+void setOffset(char* cmd) {
+  raw_angle_offset = atoi(cmd);
+}
 
 void setup() {
 
   pinMode(LED_BUILTIN, OUTPUT);
   pinMode(PIN_SYNC, OUTPUT);
+  pinMode(PIN_SYNC2, OUTPUT);
   // use monitoring with serial
   Serial.begin(115200);
   // enable more verbose output for debugging
@@ -47,7 +53,7 @@ void setup() {
   motor.sensor_direction = Direction::CW;
   // FIXME 启动后大概率旋转方向和速度不符合预期 需要重试
   // WARN 自动或者手动配置 硬件变动后必须修正
-  // motor.zero_electric_angle = 3.98;
+  motor.zero_electric_angle = 1.15;
 
   // contoller configuration
   // default parameters in defaults.h
@@ -95,9 +101,11 @@ void triggle_pin(pin_size_t pin, PinStatus *pin_status) {
 
 PinStatus pin_status = PinStatus::LOW;
 PinStatus sync_status = PinStatus::LOW;
+PinStatus sync_status2 = PinStatus::LOW;
 uint32_t last_ts = 0;
 uint32_t last_ts_us = 0;
 uint32_t last_region = 0;
+uint32_t last_region2 = 0;
 uint32_t DBG_CNT = 10;
 uint32_t region_cnt = 0;
 const uint32_t CPR = 1 << 12;
@@ -120,7 +128,7 @@ void loop() {
   float angle = sensor.getMechanicalAngle();
   uint32_t raw_angle = (uint32_t)(angle * CPR_F / _2PI);
   // // (1 << 12) / 8 = 512
-  raw_angle += (TOTAL_ANGLES / 4 + TOTAL_ANGLES / 16);
+  raw_angle += raw_angle_offset;
   if (raw_angle > CPR) {
     raw_angle -= CPR;
   }
@@ -138,6 +146,16 @@ void loop() {
     }
   }
   last_region = region;
+
+  uint32_t raw_angle2 = raw_angle + CPR / 16;
+    if (raw_angle2 > CPR) {
+    raw_angle2 -= CPR;
+  }
+  uint32_t region2 = raw_angle2 / REGION_CPR;
+  if (last_region2 != region2) {
+    triggle_pin(PIN_SYNC, &sync_status2);
+  }
+  last_region2 = region2;
 
   // Motion control function
   // velocity, position or voltage (defined in motor.controller)
