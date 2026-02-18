@@ -208,7 +208,7 @@ async fn main(spawner: Spawner) {
 
     let motor_sync_sinal = MOTOR_SYNC_SIGNAL.init(embassy_sync::signal::Signal::new());
     let motor_sync_sinal = &*motor_sync_sinal;
-    let sync_signal = SyncSignal::new(Input::new(p.PIN_28, gpio::Pull::None), true);
+    let sync_signal = SyncSignal::new(Input::new(p.PIN_28, gpio::Pull::None), false);
 
     let spawner1 = SW1_EXECUTOR.start(interrupt::SWI_IRQ_1);
     spawner1

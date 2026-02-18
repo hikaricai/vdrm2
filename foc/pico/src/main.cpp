@@ -1,7 +1,7 @@
 #include <Arduino.h>
 #include <SimpleFOC.h>
-#define PIN_SYNC     (28u)
-#define PIN_SYNC2     (29u)
+#define PIN_SYNC     (18u)
+#define PIN_SYNC2     (19u)
 
 MagneticSensorI2C sensor = MagneticSensorI2C(AS5600_I2C);
 // magnetic sensor instance - MagneticSensorI2C
@@ -153,7 +153,7 @@ void loop() {
   }
   uint32_t region2 = raw_angle2 / REGION_CPR;
   if (last_region2 != region2) {
-    triggle_pin(PIN_SYNC, &sync_status2);
+    triggle_pin(PIN_SYNC2, &sync_status2);
   }
   last_region2 = region2;
 
