@@ -20,9 +20,11 @@ float target_velocity = -6.18 * 1.5;
 // instantiate the commander
 Commander command = Commander(Serial);
 void doTarget(char* cmd) { command.scalar(&target_velocity, cmd); }
-uint32_t raw_angle_offset = 0;
+uint32_t raw_angle_offset = 300;
 void setOffset(char* cmd) {
   raw_angle_offset = atoi(cmd);
+  Serial.print(F("raw_angle_offset: "));
+  Serial.println(raw_angle_offset);
 }
 
 void setup() {
@@ -88,6 +90,7 @@ void setup() {
 
   // add target command T
   command.add('T', doTarget, "target velocity");
+  command.add('o', setOffset, "raw_angle_offset");
 
   Serial.println(F("Motor ready."));
   Serial.println(F("Set the target velocity using serial terminal:"));

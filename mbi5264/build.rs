@@ -8,10 +8,51 @@
 //! updating `memory.x` ensures a rebuild of the application with the
 //! new memory settings.
 
+fn brighten_gamma(v: u8, gamma: f32) -> u8 {
+    let normalized = v as f32 / 255.0;
+    let corrected = normalized.powf(gamma);
+    (corrected * 255.0).round().clamp(0.0, 255.0) as u8
+}
+
 use std::env;
 use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
+fn gen_rrds_surface() -> vdrm_alg::PixelSurface {
+    // const PATH: &'static str = "/Users/hikari/rust/vdrm-codec/frames/1738589846_rrds";
+    const SCREEN_WIDTH: usize = 256;
+    const SCREEN_HEIGHT: usize = 192;
+    const IMG_LEN: usize = SCREEN_HEIGHT * SCREEN_WIDTH + 1;
+    let img_path = "/Users/hikari/rust/vdrm-codec/frames/1738589846_rrds";
+    let img = std::fs::read(img_path).unwrap();
+    let img: &[u64] = unsafe { std::slice::from_raw_parts(img.as_ptr() as *const u64, IMG_LEN) };
+
+    let mut pixel_surface = vdrm_alg::PixelSurface::new();
+
+    for y in 0..SCREEN_HEIGHT {
+        for x in 0..SCREEN_HEIGHT {
+            let idx = x + 32 + y * SCREEN_WIDTH + 1;
+            let pixel = img[idx];
+            let abgr = (pixel >> 32) as u32;
+            let [r, g, b, _a] = abgr.to_ne_bytes();
+            let gamma = 0.8f32;
+            let r = brighten_gamma(r, gamma);
+            let g = brighten_gamma(g, gamma);
+            let b = brighten_gamma(b, gamma);
+            let rgb = u32::from_ne_bytes([r, g, b, 0]);
+            let z = (pixel & 0xFFFF) as u32;
+            let z = (z as f32) / 0xFFFF as f32;
+            let mut z = ((1.0 - z) * 96.0) as u32;
+            if rgb == 0 {
+                z = 0;
+            }
+            z = z + 10;
+            // z = std::cmp::max(z, 96);
+            pixel_surface.push((x as u32, y as u32, (z, rgb)));
+        }
+    }
+    return pixel_surface;
+}
 
 fn gen_pyramid_surface() -> vdrm_alg::PixelSurface {
     let mut pixel_surface = vdrm_alg::PixelSurface::new();
@@ -117,10 +158,9 @@ fn main() {
 
     let image_dir = std::path::Path::new(crate_dir.as_str()).join("imgs");
     if !image_dir.exists() {
-        std::fs::create_dir(&image_dir).unwrap();
-        let codec = vdrm_alg::Codec::new(0..400);
-        let pyramid = gen_pyramid_surface();
-        let map = codec.encode(&pyramid, 0, true);
+        let codec = vdrm_alg::Codec::new();
+        let surface = gen_rrds_surface();
+        let map = codec.encode(&surface, 0, true);
         let mut angle_lists = [0; vdrm_alg::NUM_SCREENS].map(|_| vec![]);
         for (angle, screen_lines) in map {
             for (angle_list, line) in angle_lists.iter_mut().zip(screen_lines) {
@@ -130,17 +170,12 @@ fn main() {
                 angle_list.push(img);
             }
         }
+        std::fs::create_dir(&image_dir).unwrap();
         for (idx, angle_list) in angle_lists.into_iter().enumerate() {
             let mut init_angle = (vdrm_alg::TOTAL_ANGLES / 4) - vdrm_alg::W_PIXELS / 2;
-            match idx {
-                1 => {
-                    init_angle -= vdrm_alg::W_PIXELS / 4;
-                }
-                2 => {
-                    init_angle += vdrm_alg::W_PIXELS / 4;
-                }
-                _ => {}
-            }
+            let offset = vdrm_alg::W_PIXELS / 4;
+            init_angle -= offset;
+            init_angle += offset * idx;
             let len = angle_list.len();
             let image_path = image_dir.join(format!("img{idx}_{len}.bin"));
             let img_size = len * std::mem::size_of::<mbi5264_common::AngleImage>();
