@@ -100,7 +100,7 @@ impl SyncSignal {
     }
     async fn wait_sync(&mut self) {
         if self.is_mock {
-            Timer::at(self.last + Duration::from_millis(1000 / 12)).await;
+            Timer::at(self.last + Duration::from_millis(1000 / 24)).await;
             self.last = Instant::now();
             return;
         }
@@ -208,7 +208,8 @@ async fn main(spawner: Spawner) {
 
     let motor_sync_sinal = MOTOR_SYNC_SIGNAL.init(embassy_sync::signal::Signal::new());
     let motor_sync_sinal = &*motor_sync_sinal;
-    let sync_signal = SyncSignal::new(Input::new(p.PIN_28, gpio::Pull::None), false);
+    let is_mock = false;
+    let sync_signal = SyncSignal::new(Input::new(p.PIN_28, gpio::Pull::None), is_mock);
 
     let spawner1 = SW1_EXECUTOR.start(interrupt::SWI_IRQ_1);
     spawner1
@@ -266,8 +267,10 @@ async fn main(spawner: Spawner) {
         cmd_pio.refresh2(&Command::new(cmd as u8, param));
     }
 
-    // test_screen(&mut cmd_pio, &mut line, &mut led_pin).await;
-    // return;
+    //
+    test_screen(&mut cmd_pio, &mut line, &mut led_pin).await;
+    // must return to run test_screen
+    return;
 
     // rtt_target::rprintln!("first sync_signal");
     // let mut cmd_iter = core::iter::repeat(UMINI_CMDS.iter()).flatten();
@@ -379,19 +382,13 @@ async fn test_screen(
     led_pin: &mut gpio::Output<'static>,
 ) {
     let mut encoder = encoder::Encoder::new();
-    let mut next_angle = 0u32;
-    let mut dma_buf = encoder.encode_next(next_angle).unwrap();
+    let mut dma_buf = encoder.encode_next(0).unwrap();
     let mut cnt = 0usize;
     let mut last = Instant::now();
     loop {
         line.start();
         cmd_pio.refresh_ptr(dma_buf.ptr, dma_buf.len);
-        next_angle = if next_angle == dma_buf.img_angle {
-            0
-        } else {
-            dma_buf.img_angle
-        };
-        match encoder.encode_next(next_angle) {
+        match encoder.encode_next(dma_buf.img_angle) {
             Some(buf) => dma_buf = buf,
             None => {
                 dma_buf = encoder.encode_next(0).unwrap();

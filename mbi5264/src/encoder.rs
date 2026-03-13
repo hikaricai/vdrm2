@@ -304,7 +304,8 @@ impl<'a> ColorParser<'a> {
         empty_loops
     }
     pub fn add_empty_les(&mut self, empty_size: u32) {
-        const EMPTY_LEN_U32_CYCLES: usize = 8;
+        // 缩减latch的时钟 看起来只是让画面的行偏移了
+        const EMPTY_LEN_U32_CYCLES: usize = 7;
         if empty_size == 0 {
             return;
         }
