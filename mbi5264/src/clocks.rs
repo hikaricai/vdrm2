@@ -144,9 +144,9 @@ impl LineClock {
             init_dma1();
         };
         // for umini div is 5 w is 100 to get 125khz glck
-        let pwm_div = 10.into();
+        let pwm_div = (10 / 2).into();
 
-        let w = W;
+        let w = W / 2;
         let first_line_comp_cnt = 0u16;
         let first_line_comp = w * first_line_comp_cnt;
         let mut gclk_cfg = pwm::Config::default();
