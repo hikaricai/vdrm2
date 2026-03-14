@@ -409,6 +409,40 @@ async fn test_screen(
 }
 
 #[allow(unused)]
+async fn test_screen_line(
+    cmd_pio: &mut clocks::CmdClock,
+    line: &mut clocks::LineClockHdl,
+    led_pin: &mut gpio::Output<'static>,
+) {
+    let mut cnt = 0usize;
+    let mut last = Instant::now();
+    let mut buf = [0; 16384];
+    let mut parser = encoder::ColorParser::new(&mut buf);
+    let mut coloum: [crate::RGBH; crate::IMG_HEIGHT] = [[255, 255, 255, 0]; crate::IMG_HEIGHT];
+    for i in 0..crate::IMG_HEIGHT {
+        let h = i % 16;
+        coloum[i] = [255, 255, 255, h as u8 + 16 * 8];
+    }
+    let len = encoder::update_frame(&mut parser, &coloum);
+
+    loop {
+        line.start();
+        cmd_pio.refresh_ptr(buf.as_ptr() as u32, len);
+        cmd_pio.wait().await;
+        line.wait_stop().await;
+        cnt += 1;
+        if cnt & 0xFFF == 0 {
+            let now = Instant::now();
+            let ms = (now - last).as_millis() as u32;
+            last = now;
+            let fps = 0xFFF * 1024 / ms;
+            rtt_target::rprintln!("fps {}", fps);
+            led_pin.toggle();
+        }
+    }
+}
+
+#[allow(unused)]
 async fn test_screen2(
     cmd_pio: &mut clocks::CmdClock,
     line: &mut clocks::LineClockHdl,

@@ -135,7 +135,10 @@ impl RGBMeta {
     }
 }
 
-fn update_frame(parser: &mut ColorParser, rgbh_coloum: &[crate::RGBH; crate::IMG_HEIGHT]) -> u32 {
+pub fn update_frame(
+    parser: &mut ColorParser,
+    rgbh_coloum: &[crate::RGBH; crate::IMG_HEIGHT],
+) -> u32 {
     let region0 = &rgbh_coloum[0..64];
     let region1 = &rgbh_coloum[64..128];
     let region2 = &rgbh_coloum[128..];
@@ -425,7 +428,7 @@ impl<'a> ColorParser<'a> {
 
     pub fn add_empty_one_chip(&mut self, empty_size: u32) {
         // 缩减latch的时钟 看起来只是让画面的行偏移了
-        const EMPTY_LEN_U32_CYCLES: u32 = 3;
+        const EMPTY_LEN_U32_CYCLES: u32 = 14;
         if empty_size == 0 {
             return;
         }

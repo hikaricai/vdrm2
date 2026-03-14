@@ -107,11 +107,11 @@ impl Handler<PWM_IRQ_WRAP_0> for PwmInterruptHandler {
 enum PwmState {
     Idle,
     Freshing,
-    Ending,
 }
 
 struct LinePwmConfig {
     ba_cfg: pwm::Config,
+    b_high_cfg: pwm::Config,
 }
 
 pub struct LineClock {
@@ -120,7 +120,6 @@ pub struct LineClock {
     pwm_b: Pwm<'static>,
     pwm_a: Pwm<'static>,
     pwm_cfg: LinePwmConfig,
-    started: bool,
     state: PwmState,
     all_batch: PwmBatch,
     // pio_ba: PwmPio,
@@ -144,9 +143,10 @@ impl LineClock {
             init_dma1();
         };
         // for umini div is 5 w is 100 to get 125khz glck
+        // from 10 to 5
         let pwm_div = (10 / 2).into();
 
-        let w = W / 2;
+        let w = W / 1;
         let first_line_comp_cnt = 0u16;
         let first_line_comp = w * first_line_comp_cnt;
         let mut gclk_cfg = pwm::Config::default();
@@ -175,20 +175,27 @@ impl LineClock {
         let pwm_b = Pwm::new_output_a(pwm8, b_pin, ba_cfg.clone());
         let pwm_a = Pwm::new_output_a(pwm7, a_pin, ba_cfg.clone());
 
-        let pwm_cfg = LinePwmConfig { ba_cfg };
+        let mut b_high_cfg = pwm::Config::default();
+        b_high_cfg.divider = pwm_div;
+        let top = u16::MAX;
+        b_high_cfg.top = top;
+        b_high_cfg.compare_a = top;
+        b_high_cfg.enable = true;
+
+        let pwm_cfg = LinePwmConfig { ba_cfg, b_high_cfg };
         let mut all_batch: PwmBatch = unsafe { core::mem::transmute(0u32) };
 
         all_batch.enable(&pwm_gclk);
         all_batch.enable(&pwm_c);
         all_batch.enable(&pwm_b);
         all_batch.enable(&pwm_a);
+
         let this = Self {
             pwm_gclk,
             pwm_c,
             pwm_b,
             pwm_a,
             pwm_cfg,
-            started: false,
             state: PwmState::Idle,
             all_batch,
         };
@@ -207,7 +214,6 @@ impl LineClock {
 
         self.pwm_a.phase_retard();
         self.pwm_a.phase_retard();
-        self.started = true;
         self.state = PwmState::Freshing;
     }
 
@@ -217,7 +223,6 @@ impl LineClock {
             *batch = unsafe { core::mem::transmute_copy(&self.all_batch) };
         });
         // self.pio_ba.stop();
-        self.started = false;
         self.pwm_gclk.set_counter(0);
         self.pwm_c.set_counter(0);
         self.pwm_b.set_counter(0);
@@ -226,14 +231,7 @@ impl LineClock {
 
     #[inline]
     fn set_pwm_b_high(&mut self) {
-        let pwm_div = 5.into();
-        let mut ba_cfg = pwm::Config::default();
-        ba_cfg.divider = pwm_div;
-        let top = u16::MAX;
-        ba_cfg.top = top;
-        ba_cfg.compare_a = top;
-        ba_cfg.enable = true;
-        self.pwm_b.set_config(&ba_cfg);
+        self.pwm_b.set_config(&self.pwm_cfg.b_high_cfg);
         PwmBatch::set_enabled(false, |batch| {
             batch.enable(&self.pwm_b);
         });
@@ -247,11 +245,8 @@ impl LineClock {
         match self.state {
             PwmState::Idle => {}
             PwmState::Freshing => {
-                self.state = PwmState::Ending;
-                self.set_pwm_b_high();
-            }
-            PwmState::Ending => {
                 self.state = PwmState::Idle;
+                self.set_pwm_b_high();
             }
         }
     }
