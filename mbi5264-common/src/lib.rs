@@ -365,7 +365,7 @@ impl RegCfg13 {
         // let exp2 = 0b1010_0111_1001_0111;
         // assert_eq_const(exp, exp2, concat!("line", line!()));
         // pll_m from 19 to 39 to 79
-        let v = Self::new().with_pll_n(5).with_pll_m(79).0;
+        let v = Self::new().with_pll_n(5).with_pll_m(86).0;
         // assert_eq_const(v, exp, concat!("line", line!()));
         v
     }

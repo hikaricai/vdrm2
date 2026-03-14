@@ -147,7 +147,7 @@ impl LineClock {
         let pwm_div = (10 / 2).into();
 
         // 70左右效果最好
-        let w = 70;
+        let w = 75;
         let first_line_comp_cnt = 0u16;
         let first_line_comp = w * first_line_comp_cnt;
         let mut gclk_cfg = pwm::Config::default();
