@@ -25,9 +25,10 @@
 ## text block fill color table:
 ##  [#EF2929,#F66A32,#FCAE3E,#FBCA47,#FCE94F,#CDF040,#8AE234,#4EDC44,#55D795,#64D1D2
 ##  ,#729FCF,#D476C4,#9D79B9,#AD7FA8,#C2629B,#D7476F]
- 
+
 # 导出核心模块类，c代码实现的类
 import sigrokdecode as srd
+
 
 # 协议模块类
 class Decoder(srd.Decoder):
@@ -38,28 +39,28 @@ class Decoder(srd.Decoder):
     api_version = 3
 
     # 协议标识，必须唯一，这里我们用"example"给协议命名
-    id = 'mbi5264'
+    id = "mbi5264"
 
     # 协议名称, 不一定要求跟标识一致
-    name = 'mbi5264'
+    name = "mbi5264"
 
     # 协议长名称
-    longname = 'mbi5264'
+    longname = "mbi5264"
 
     # 简介内容
-    desc = 'This is an protocol for mbi5264'
+    desc = "This is an protocol for mbi5264"
 
     # 开源协议
-    license = 'gplv2+'
+    license = "gplv2+"
 
     # 接收的输入的数据源名，如果是多层协议一起工作，可使用上一个协议的输出名
-    inputs = ['logic']
+    inputs = ["logic"]
 
     # 输出的数据源名，多层协议模式下，可作为下层协议的输入数据源名
-    outputs = ['mbi5264']
+    outputs = ["mbi5264"]
 
     # 适用范围标签
-    tags = ['Embedded/industrial']
+    tags = ["Embedded/industrial"]
 
     # 必须要绑定的通道定义，将在界面上可见
     # id:通道标识, 任意命名
@@ -68,9 +69,11 @@ class Decoder(srd.Decoder):
     # desc:该通道的说明
     # 注意元组的最后的逗号不能少
     channels = (
-        {'id': 'c1', type:0, 'name': 'dclk', 'desc': 'dclk'},
-        {'id': 'c2', type:0, 'name': 'le', 'desc': 'le'},
-        {'id': 'c3', type:1, 'name': 'di', 'desc': 'di'},
+        {"id": "c1", type: 0, "name": "dclk", "desc": "dclk"},
+        {"id": "c2", type: 0, "name": "le", "desc": "le"},
+        {"id": "c3", type: 1, "name": "dr", "desc": "dr"},
+        {"id": "c4", type: 1, "name": "dg", "desc": "dg"},
+        {"id": "c5", type: 1, "name": "db", "desc": "db"},
     )
 
     # 可选通道，其它跟上面的一样
@@ -84,22 +87,25 @@ class Decoder(srd.Decoder):
     # annotations里的每一项可以有2到3个属性，当有３个属性时，第一个表示类型
     # 类型对应0-16个颜色，当类型范围在200-299时，将绘制边沿箭头
     annotations = (
-        ('1', 'cmd', 'command'),
-        ('2', 'value', 'data value'),
+        ("1", "cmd", "command"),
+        ("2", "rvalue", "rdata value"),
+        ("3", "gvalue", "gdata value"),
+        ("4", "bvalue", "bdata value"),
     )
 
     # 解析结果行定义
     annotation_rows = (
         # (0,)表示可输出第1个定义的annotations类型
-        ('cmd', 'row1', (0,)),
-
+        ("cmd", "row1", (0,)),
         # (1,2)表示可输出第1个和第2个定义的annotations类型
-        ('value', 'row2', (1,)),
+        ("rvalue", "row2", (1,)),
+        ("gvalue", "row3", (2,)),
+        ("vvalue", "row4", (3,)),
     )
 
     # 构造函数，自动被调用
     def __init__(self):
-         # 这里调用一个类成员函数，完成一些参数的初始化
+        # 这里调用一个类成员函数，完成一些参数的初始化
         self.reset()
 
     # 重置函数，在这里做一些重置和定义类私有变量工作
@@ -112,7 +118,7 @@ class Decoder(srd.Decoder):
     # 类型有: OUTPUT_ANN，OUTPUT_PYTHON，OUTPUT_BINARY，OUTPUT_META
     # self.register函数是c底层类提供的
     def start(self):
-       self.out_ann = self.register(srd.OUTPUT_ANN)
+        self.out_ann = self.register(srd.OUTPUT_ANN)
 
     # 定义一个输出函数
     # a,b为采样位置的起点和终点
@@ -130,7 +136,9 @@ class Decoder(srd.Decoder):
     # 奇数次显示第二行，偶数次显示在第一行，我们只指定annotations里定义的序号
     # 软件会自动根据annotation_rows的设置，决定显示在哪一行
     def decode(self):
-        value = 0
+        rvalue = 0
+        gvalue = 0
+        bvalue = 0
         cmd = 0
         last_clk = 0
         last_le = 0
@@ -140,33 +148,47 @@ class Decoder(srd.Decoder):
         # 不断循环，处理完所有数据
         while True:
             # 取一个条件，调用wait函数，找到符合条件的数据
-            # (a,b)是一个元组，里边的变量数一定要跟channel数一致    
-            (clk, le, dio) = self.wait()
+            # (a,b)是一个元组，里边的变量数一定要跟channel数一致
+            (clk, le, dr, dg, db) = self.wait()
             if clk != last_clk:
                 clks += 1
-                value <<= 1
+                rvalue <<= 1
+                gvalue <<= 1
+                bvalue <<= 1
+                rvalue &= 0xFFFF
+                gvalue &= 0xFFFF
+                bvalue &= 0xFFFF
                 # value &= 0xffff
-                value |= dio
+                rvalue |= dr
+                gvalue |= dg
+                bvalue |= db
                 if le > 0:
                     cmd += 1
             # if clks == 16 and show_width != 160:
             #     show_width = self.samplenum
             # le下降锁存命令
-            if le == 0 and last_le > 0:
-                start = self.samplenum - show_width if self.samplenum > show_width else 0
+            if le == 0 and last_le > 0 and cmd > 2 and cmd != 0xE:
+                start = (
+                    self.samplenum - show_width if self.samplenum > show_width else 0
+                )
                 end = self.samplenum
-                shift_cnt = 0;
-                while value & 0xffff == 0 and shift_cnt < 9:
-                    value >>= 16
-                    shift_cnt += 1
-                value &= 0xffff
-                row1 = '%02X' % cmd
-                row2 = '%02X_%d' % (value, shift_cnt)
-                value = 0
+                shift_cnt = 0
+                # while value & 0xFFFF == 0 and shift_cnt < 9:
+                #     value >>= 16
+                #     shift_cnt += 1
+                row1 = "%02X" % cmd
+                # row2 = "%02X_%d" % (rvalue, shift_cnt)
+                row2 = "%02X" % rvalue
+                row3 = "%02X" % gvalue
+                row4 = "%02X" % bvalue
+                rvalue = 0
+                gvalue = 0
+                bvalue = 0
                 self.put_ann(start, end, 0, [row1])
                 self.put_ann(start, end, 1, [row2])
+                self.put_ann(start, end, 2, [row3])
+                self.put_ann(start, end, 3, [row4])
             if le == 0:
                 cmd = 0
             last_clk = clk
             last_le = le
-
