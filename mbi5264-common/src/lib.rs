@@ -4,6 +4,23 @@ type MbiWave = u8;
 type Reg = u16;
 
 pub type RGBH = [u8; 4];
+#[derive(Clone, Copy)]
+pub enum CmdParam {
+    Comm(u16),
+    RGB((u16, u16, u16)),
+}
+
+impl From<u16> for CmdParam {
+    fn from(value: u16) -> Self {
+        Self::Comm(value)
+    }
+}
+
+impl From<(u16, u16, u16)> for CmdParam {
+    fn from(value: (u16, u16, u16)) -> Self {
+        Self::RGB(value)
+    }
+}
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -34,27 +51,27 @@ pub enum CMD {
     Latch = 1,
     VSync = 2,
     Unknown3 = 3,
-    WriteCfg1 = 4,
-    WriteCfg7 = 6,
+    WriteCfg1_4 = 4,
+    WriteCfg7_6 = 6,
     ErrDetect = 7,
-    WriteCfg2 = 8,
-    ResetSoft = 10,  // A
-    EnableAll = 11,  // B
-    DisableAll = 12, // C
-    WriteCfg5 = 13,  // D
-    Confirm = 14,    // E
-    WriteCfg6 = 15,  // F
-    WriteCfg3 = 16,  // 10
-    WriteCfg4 = 18,  // 12
-    WriteCfg8 = 23,  // 17
-    WriteCfg9 = 24,  // 18
-    WriteCfg10 = 25, // 19
-    WriteCfg11 = 26, // 1A
-    WriteCfg12 = 27, // 1B
-    WriteCfg13 = 28, // 1C
-    WriteCfg14 = 29, // 1D
-    WriteCfg15 = 30, // 1E
-    WriteCfg16 = 31, // 1F
+    WriteCfg2_8 = 8,
+    ResetSoft = 10,     // A
+    EnableAll = 11,     // B
+    DisableAll = 12,    // C
+    WriteCfg5_0D = 13,  // D
+    Confirm = 14,       // E
+    WriteCfg6_0F = 15,  // F
+    WriteCfg3_10 = 16,  // 10
+    WriteCfg4_12 = 18,  // 12
+    WriteCfg8_17 = 23,  // 17
+    WriteCfg9_18 = 24,  // 18
+    WriteCfg10_19 = 25, // 19
+    WriteCfg11_1A = 26, // 1A
+    WriteCfg12_1B = 27, // 1B
+    WriteCfg13_1C = 28, // 1C
+    WriteCfg14_1D = 29, // 1D
+    WriteCfg15_1E = 30, // 1E
+    WriteCfg16_1F = 31, // 1F
 }
 
 pub struct Unknown3(u16);
@@ -112,29 +129,85 @@ impl RegCfg1 {
         assert_eq_const(v, exp, concat!("line", line!()));
         v
     }
+
+    const fn umini_rgbs() -> (u16, u16, u16) {
+        // (0x9FBA, 0x9FBC, 0x9FBF)
+        let v = Self::new()
+            .with_current_gain(0x3F)
+            .with_spwm_mode_low(true)
+            .with_scan_lines_low(31)
+            .0;
+        (v, v, v)
+    }
 }
 
 #[bitfield(u16)]
-struct RegCfg2 {
-    #[bits(10, default = 0x201)]
-    _reserved0: u16,
-    #[bits(default = true)]
-    double_fresh: bool,
-    #[bits(3)]
-    color_compensation: u8,
-    spwm_mode_high: bool,
+struct RegCfg4 {
+    #[bits(5, default = 0x1F)]
+    dimm_compensation3: u8,
+    #[bits(5, default = 0x1F)]
+    dimm_compensation1: u8,
+    #[bits(5, default = 0x1F)]
+    dimm_compensation_first_line: u8,
     #[bits(default = true)]
     _reserved1: bool,
 }
 
-impl RegCfg2 {
+impl RegCfg4 {
     const fn umini_default() -> u16 {
-        let exp = 0xC601;
-        let exp2 = 0b1100_0110_0000_0001;
+        let exp = 0xAC1F;
+        let exp2 = 0b1010_1100_0001_1111;
         assert_eq_const(exp, exp2, concat!("line", line!()));
-        let v = Self::new().with_spwm_mode_high(true).0;
+        let v = Self::new()
+            .with_dimm_compensation1(0x00)
+            .with_dimm_compensation_first_line(0x0B)
+            .0;
+        // let v = Self::new().0; //only show red
+        // let exp = 0xffff;
         assert_eq_const(v, exp, concat!("line", line!()));
         v
+    }
+    const fn umini_rgbs() -> (u16, u16, u16) {
+        // (0xCC1F, 0xAC1F, 0x9C1F)
+        let v = Self::new()
+            .with_dimm_compensation1(31)
+            .with_dimm_compensation3(31)
+            .0;
+        let v = Self::new()
+            .with_dimm_compensation1(0x00)
+            .with_dimm_compensation_first_line(0x0B)
+            .0;
+        (v, v, v)
+    }
+}
+
+#[bitfield(u16)]
+struct RegCfg7 {
+    #[bits(2)]
+    _reserved0: u8,
+    #[bits(default = true)]
+    scan_lines_high: bool,
+    #[bits(3)]
+    _reserved1: u8,
+    #[bits()]
+    reset: bool,
+    #[bits(9, default = 0x100)]
+    reserved2: u16,
+}
+impl RegCfg7 {
+    const fn umini_default() -> u16 {
+        let exp = 0x8A04;
+        let exp2 = 0b1000_1010_0000_0100;
+        let exp = 0x8C04;
+        let exp2 = 0b1000_1100_0000_0100;
+
+        assert_eq_const(exp, exp2, concat!("line", line!()));
+        let v = Self::new().with_reserved2(0x118).0;
+        assert_eq_const(v, exp, concat!("line", line!()));
+        v
+    }
+    const fn umini_rgbs() -> (u16, u16, u16) {
+        (0x8A04, 0x8C04, 0x8E04)
     }
 }
 
@@ -160,33 +233,46 @@ impl RegCfg3 {
             .with_dark_compensation2(0x17)
             .0;
         assert_eq_const(v, exp, concat!("line", line!()));
+        // v
+        // 这个有效果 显著改善亮度
         v
+    }
+
+    const fn umini_rgbs() -> (u16, u16, u16) {
+        let v = Self::new()
+            .with_dark_compensation3(0)
+            .with_dark_compensation2(0)
+            // .with_dark_compensation1(0x10)
+            .0;
+        let vb = Self::new()
+            .with_dark_compensation3(0x19)
+            .with_dark_compensation2(0x17)
+            // .with_dark_compensation1(0x10)
+            .0;
+
+        (v, v, vb)
     }
 }
 
 #[bitfield(u16)]
-struct RegCfg4 {
-    #[bits(5, default = 0x1F)]
-    dimm_compensation3: u8,
-    #[bits(5, default = 0x1F)]
-    dimm_compensation2: u8,
-    #[bits(5, default = 0x1F)]
-    dimm_compensation1: u8,
+struct RegCfg2 {
+    #[bits(10, default = 0x201)]
+    _reserved0: u16,
+    #[bits(default = true)]
+    double_fresh: bool,
+    #[bits(3)]
+    color_compensation2: u8,
+    spwm_mode_high: bool,
     #[bits(default = true)]
     _reserved1: bool,
 }
 
-impl RegCfg4 {
+impl RegCfg2 {
     const fn umini_default() -> u16 {
-        let exp = 0xAC1F;
-        let exp2 = 0b1010_1100_0001_1111;
+        let exp = 0xC601;
+        let exp2 = 0b1100_0110_0000_0001;
         assert_eq_const(exp, exp2, concat!("line", line!()));
-        let v = Self::new()
-            .with_dimm_compensation2(0x00)
-            .with_dimm_compensation1(0x0B)
-            .0;
-        // let v = Self::new().0; //only show red
-        // let exp = 0xffff;
+        let v = Self::new().with_spwm_mode_high(true).0;
         assert_eq_const(v, exp, concat!("line", line!()));
         v
     }
@@ -222,40 +308,12 @@ impl RegCfg6 {
 }
 
 #[bitfield(u16)]
-struct RegCfg7 {
-    #[bits(2)]
-    _reserved0: u8,
-    #[bits(default = true)]
-    scan_lines_high: bool,
-    #[bits(3)]
-    _reserved1: u8,
-    #[bits()]
-    reset: bool,
-    #[bits(9, default = 0x100)]
-    reserved2: u16,
-}
-
-impl RegCfg7 {
-    const fn umini_default() -> u16 {
-        let exp = 0x8A04;
-        let exp2 = 0b1000_1010_0000_0100;
-        let exp = 0x8C04;
-        let exp2 = 0b1000_1100_0000_0100;
-
-        assert_eq_const(exp, exp2, concat!("line", line!()));
-        let v = Self::new().with_reserved2(0x118).0;
-        assert_eq_const(v, exp, concat!("line", line!()));
-        v
-    }
-}
-
-#[bitfield(u16)]
 struct RegCfg8 {
     #[bits(5)]
     gclk_change: u8,
     #[bits(7)]
     _reserved0: u8,
-    #[bits()]
+    #[bits(1)]
     gradient_compensation: bool,
     #[bits(3)]
     reserved1: u16,
@@ -306,11 +364,10 @@ struct RegCfg11 {
 impl RegCfg11 {
     const fn umini_default() -> u16 {
         // dsview is 844F or 89F or 44F
-        // let exp = 0x044F;
+        let exp = 0x044F;
         // let exp2 = 0b0000_0100_0100_1111;
-        // assert_eq_const(exp, exp2, concat!("line", line!()));
         let v = Self::new().with_gclk_change(0x4F).0;
-        // assert_eq_const(v, exp, concat!("line", line!()));
+        assert_eq_const(v, exp, concat!("line", line!()));
         v
     }
 }
@@ -330,7 +387,11 @@ impl RegCfg12 {
         // assert_eq_const(exp, exp2, concat!("line", line!()));
         let v = Self::new().with_dummy_gclk_period(0x4F).0;
         // assert_eq_const(v, exp, concat!("line", line!()));
-        v
+        // v
+        Self::new()
+            .with_dummy_gclk_period(0x1)
+            .with_color_compensation(63)
+            .0
     }
 }
 
@@ -352,13 +413,13 @@ impl RegCfg13 {
         // gclk = x / n
         // gclk = x * m
 
-        // clk = 10m
+        // clk = 9m
         // gclk_freq >= 125k * (spwm_mod 0b11) 512 == 64m
-        // ? pll_multi == (79 + 1) / (7 + 1) = 10
-        // ? gclk == 9m * 10 > 64m
-        // dsview is A79F or A797
-        // let exp = 0xA79F;
-        // let exp2 = 0b1010_0111_1001_1111;
+        // ? pll_multi == (79 + 1) / (5) / 1 = 16
+        // ? gclk == 9m * 16 > 64m
+        // dsview is A797
+        // let exp = 0xA797;
+        // let exp2 = 0b1010_0111_1001_0111;
         // assert_eq_const(exp, exp2, concat!("line", line!()));
 
         // let exp = 0xA797;
@@ -395,25 +456,25 @@ impl RegCfg16 {
     }
 }
 
-pub const fn unimi_cmds() -> [(CMD, u16); 17] {
+pub fn unimi_cmds() -> [(CMD, CmdParam); 16] {
     [
-        (CMD::Unknown3, Unknown3::umini_default()),
-        (CMD::WriteCfg1, RegCfg1::umini_default()),
-        (CMD::WriteCfg7, RegCfg7::umini_default()),
-        (CMD::WriteCfg2, RegCfg2::umini_default()),
-        (CMD::WriteCfg5, RegCfg5::umini_default()),
-        (CMD::WriteCfg6, RegCfg6::umini_default()),
-        (CMD::WriteCfg3, RegCfg3::umini_default()),
-        (CMD::WriteCfg4, RegCfg4::umini_default()),
-        (CMD::WriteCfg8, RegCfg8::umini_default()),
-        (CMD::WriteCfg9, RegCfg9::umini_default()),
-        (CMD::WriteCfg10, RegCfg10::umini_default()),
-        (CMD::WriteCfg11, RegCfg11::umini_default()),
-        (CMD::WriteCfg12, RegCfg12::umini_default()),
-        (CMD::WriteCfg13, RegCfg13::umini_default()),
-        (CMD::WriteCfg14, RegCfg14::umini_default()),
-        (CMD::WriteCfg15, RegCfg15::umini_default()),
-        (CMD::WriteCfg16, RegCfg16::umini_default()),
+        // (CMD::Unknown3, Unknown3::umini_default()),
+        (CMD::WriteCfg1_4, RegCfg1::umini_rgbs().into()),
+        (CMD::WriteCfg7_6, RegCfg7::umini_rgbs().into()),
+        (CMD::WriteCfg4_12, RegCfg4::umini_rgbs().into()),
+        (CMD::WriteCfg3_10, RegCfg3::umini_rgbs().into()),
+        (CMD::WriteCfg2_8, RegCfg2::umini_default().into()),
+        (CMD::WriteCfg5_0D, RegCfg5::umini_default().into()),
+        (CMD::WriteCfg6_0F, RegCfg6::umini_default().into()),
+        (CMD::WriteCfg8_17, RegCfg8::umini_default().into()),
+        (CMD::WriteCfg9_18, RegCfg9::umini_default().into()),
+        (CMD::WriteCfg10_19, RegCfg10::umini_default().into()),
+        (CMD::WriteCfg11_1A, RegCfg11::umini_default().into()),
+        (CMD::WriteCfg12_1B, RegCfg12::umini_default().into()),
+        (CMD::WriteCfg13_1C, RegCfg13::umini_default().into()),
+        (CMD::WriteCfg14_1D, RegCfg14::umini_default().into()),
+        (CMD::WriteCfg15_1E, RegCfg15::umini_default().into()),
+        (CMD::WriteCfg16_1F, RegCfg16::umini_default().into()),
     ]
     // return vec![(CMD::EnableAll, 0)];
 }

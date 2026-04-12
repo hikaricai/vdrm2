@@ -12,6 +12,7 @@ use embassy_rp::gpio::{self, Input};
 use embassy_rp::interrupt;
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, zerocopy_channel};
 use embassy_time::{Duration, Instant, Timer};
+use mbi5264_common::CmdParam;
 use panic_rtt_target as _;
 use static_cell::StaticCell;
 
@@ -67,11 +68,13 @@ pub struct Command {
 }
 
 impl Command {
-    fn new(cmd: u8, param: u16) -> Self {
-        Self {
-            cmd,
-            regs: [[param; 3]; 9],
-        }
+    fn new(cmd: u8, param: CmdParam) -> Self {
+        let regs = match param {
+            CmdParam::Comm(param) => [[param; 3]; 9],
+            CmdParam::RGB((r, g, b)) => [[r, g, b]; 9],
+        };
+
+        Self { cmd, regs }
     }
 
     fn new_confirm() -> Self {
@@ -81,8 +84,6 @@ impl Command {
         }
     }
 }
-
-const UMINI_CMDS: &[(mbi5264_common::CMD, u16)] = &mbi5264_common::unimi_cmds();
 
 struct SyncSignal {
     pin: Input<'static>,
@@ -260,7 +261,8 @@ async fn main(spawner: Spawner) {
     let mut cmd_pio = clocks::CmdClock::new(p.PIO0, pins, data_ch);
     let confirm_cmd = Command::new_confirm();
     let mut cnt: usize = 0;
-    let cmd_iter = UMINI_CMDS.iter();
+    let umini_cmds = mbi5264_common::unimi_cmds();
+    let cmd_iter = umini_cmds.iter();
 
     for &(cmd, param) in cmd_iter {
         cmd_pio.refresh2(&confirm_cmd);
@@ -420,8 +422,12 @@ async fn test_screen_line(
     let mut parser = encoder::ColorParser::new(&mut buf);
     let mut coloum: [crate::RGBH; crate::IMG_HEIGHT] = [[255, 255, 255, 0]; crate::IMG_HEIGHT];
     for i in 0..crate::IMG_HEIGHT {
-        let h = i % 16;
-        coloum[i] = [255, 255, 255, h as u8 + 16 * 8];
+        // let h = i % 16;
+        let h = 8;
+        let line = i % 64;
+        let gray = line as u8 * 4 + 3;
+        let b = if gray < 64 { gray + 30 } else { gray };
+        coloum[i] = [gray, gray, b, h as u8 + 16 * 8];
     }
     let len = encoder::update_frame(&mut parser, &coloum);
 
