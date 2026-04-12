@@ -16,11 +16,11 @@ BLDCDriver3PWM driver = BLDCDriver3PWM(6, 8, 10, 12);
 //StepperDriver4PWM driver = StepperDriver4PWM(9, 5, 10, 6,  8);
 
 // velocity set point variable
-float target_velocity = -6.18 * 1.5;
+float target_velocity = -6.18 * 1.9;
 // instantiate the commander
 Commander command = Commander(Serial);
 void doTarget(char* cmd) { command.scalar(&target_velocity, cmd); }
-uint32_t raw_angle_offset = 300;
+uint32_t raw_angle_offset = 200;
 void setOffset(char* cmd) {
   raw_angle_offset = atoi(cmd);
   Serial.print(F("raw_angle_offset: "));

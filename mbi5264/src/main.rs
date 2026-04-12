@@ -269,10 +269,10 @@ async fn main(spawner: Spawner) {
         cmd_pio.refresh2(&Command::new(cmd as u8, param));
     }
 
-    //
-    test_screen(&mut cmd_pio, &mut line, &mut led_pin).await;
-    // must return to run test_screen
-    return;
+    // //
+    // test_screen(&mut cmd_pio, &mut line, &mut led_pin).await;
+    // // must return to run test_screen
+    // return;
 
     // rtt_target::rprintln!("first sync_signal");
     // let mut cmd_iter = core::iter::repeat(UMINI_CMDS.iter()).flatten();
