@@ -37,16 +37,20 @@ fn gen_rrds_surface() -> vdrm_alg::PixelSurface {
             let [r, g, b, _a] = abgr.to_ne_bytes();
             let gamma = 0.8f32;
             let r = brighten_gamma(r, gamma);
-            let g = brighten_gamma(g, gamma);
-            let b = brighten_gamma(b, gamma);
+            let g = brighten_gamma(g, 0.5);
+            let b = brighten_gamma(b, 0.5);
             let rgb = u32::from_ne_bytes([r, g, b, 0]);
             let z = (pixel & 0xFFFF) as u32;
             let z = (z as f32) / 0xFFFF as f32;
-            let mut z = ((1.0 - z) * 96.0) as u32;
+            let z = ((1.0 - z) * 96.0) as u32;
+            let mut z = core::cmp::min(95, z);
             if rgb == 0 {
                 z = 0;
+            } else if z >= 20 {
+                z = z - 20;
+            } else {
+                continue;
             }
-            z = z + 10;
             // z = std::cmp::max(z, 96);
             pixel_surface.push((x as u32, y as u32, (z, rgb)));
         }
@@ -66,8 +70,8 @@ fn gen_pyramid_surface() -> vdrm_alg::PixelSurface {
             if h >= vdrm_alg::H_PIXELS as i32 {
                 continue;
             }
-            let z = vdrm_alg::H_PIXELS as u32 - 1 - h as u32;
-            // let z = h as u32;
+            // let z = vdrm_alg::H_PIXELS as u32 - 1 - h as u32;
+            let z = h as u32;
             let color = match (x_i32 >= 0, y_i32 >= 0) {
                 (true, true) => u32::from_ne_bytes([gray, gray, gray, 0]),
                 (false, true) => u32::from_ne_bytes([gray, 0, 0, 0]),
@@ -159,7 +163,8 @@ fn main() {
     let image_dir = std::path::Path::new(crate_dir.as_str()).join("imgs");
     if !image_dir.exists() {
         let codec = vdrm_alg::Codec::new();
-        let surface = gen_rrds_surface();
+        // let surface = gen_rrds_surface();
+        let surface = gen_pyramid_surface();
         let map = codec.encode(&surface, 0, true);
         let mut angle_lists = [0; vdrm_alg::NUM_SCREENS].map(|_| vec![]);
         for (angle, screen_lines) in map {
