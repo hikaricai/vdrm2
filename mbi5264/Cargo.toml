@@ -47,6 +47,7 @@ panic-rtt-target = "0.2.0"
 vdrm-alg = { path = "/Users/hikari/rust/vdrm/vdrm-alg/" }
 # vdrm-alg = { git = "https://github.com/hikaricai/vdrm.git", package = "vdrm-alg", branch = "master" }
 mbi5264-common = { path = "../mbi5264-common" }
+image = "0.25.0"
 
 [profile.release]
 codegen-units = 1

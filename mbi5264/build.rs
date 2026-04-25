@@ -7,17 +7,45 @@
 //! Cargo re-run the build script whenever `memory.x` is changed,
 //! updating `memory.x` ensures a rebuild of the application with the
 //! new memory settings.
-
+use std::env;
+use std::fs::File;
+use std::io::Write;
+use std::path::PathBuf;
 fn brighten_gamma(v: u8, gamma: f32) -> u8 {
     let normalized = v as f32 / 255.0;
     let corrected = normalized.powf(gamma);
     (corrected * 255.0).round().clamp(0.0, 255.0) as u8
 }
 
-use std::env;
-use std::fs::File;
-use std::io::Write;
-use std::path::PathBuf;
+fn gen_threed_surface() -> vdrm_alg::PixelSurface {
+    let path = "/Users/hikari/rust/vdrmtd/output_rgbh.png";
+    let img = image::open(path).unwrap();
+    let rgb_img = img.as_rgb8().unwrap();
+    let width = img.width();
+    let height = img.height();
+    assert_eq!(width, 384 * 2);
+    assert_eq!(height, 384);
+    let mut surface = vdrm_alg::PixelSurface::default();
+    for y in 0..192u32 {
+        for x in 0..192u32 {
+            let px = x * 2;
+            let px2 = px + 384;
+            let py = y * 2;
+            let [r, g, b] = rgb_img.get_pixel(px, py).0;
+            let gamma = 0.5f32;
+            let r = brighten_gamma(r, gamma);
+            let g = brighten_gamma(g, gamma);
+            let b = brighten_gamma(b, gamma);
+            let h = rgb_img.get_pixel(px2, py).0[0];
+            let h = (255 - h) / 2;
+            let rgb = u32::from_ne_bytes([r, g, b, 0]);
+            let x = 191 - x;
+            surface.push((x, y, (h as u32, rgb)));
+        }
+    }
+    surface
+}
+
 fn gen_rrds_surface() -> vdrm_alg::PixelSurface {
     // const PATH: &'static str = "/Users/hikari/rust/vdrm-codec/frames/1738589846_rrds";
     const SCREEN_WIDTH: usize = 256;
@@ -164,7 +192,8 @@ fn main() {
     if !image_dir.exists() {
         let codec = vdrm_alg::Codec::new();
         // let surface = gen_rrds_surface();
-        let surface = gen_pyramid_surface();
+        // let surface = gen_pyramid_surface();
+        let surface = gen_threed_surface();
         let map = codec.encode(&surface, 0, true);
         let mut angle_lists = [0; vdrm_alg::NUM_SCREENS].map(|_| vec![]);
         for (angle, screen_lines) in map {
