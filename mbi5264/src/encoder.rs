@@ -317,7 +317,7 @@ impl PixelSlot {
             let r = (r >> i) & 1;
             let g = (g >> i) & 1;
             let b = (b >> i) & 1;
-            let sel_data = h_div >> (i / 2);
+            let sel_data = h_div >> (i / 2) & 1;
             let rgb = (r | (g << 1) | (b << 2) | (sel_data << 3)) as u16;
             *buf |= rgb << (4 * region);
             let sel_clk = (i as u16 + 1) & 1;
@@ -335,13 +335,14 @@ impl PixelSlot {
 
     #[inline]
     fn update(&mut self, rgbh_meta: &RGBMeta) {
+        // return;
         let region = rgbh_meta.region;
         let [r, g, b, _] = rgbh_meta.rgbh;
         for (i, buf) in (0..8).rev().zip(self.buf.iter_mut()) {
             let r = (r >> i) & 1;
             let g = (g >> i) & 1;
             let b = (b >> i) & 1;
-            let sel_data = self.h_div >> (i / 2);
+            let sel_data = rgbh_meta.h_div >> (i / 2) & 1;
             let rgb = (r | (g << 1) | (b << 2) | (sel_data << 3)) as u16;
             *buf |= rgb << (4 * region);
         }

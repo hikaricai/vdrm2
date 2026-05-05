@@ -127,14 +127,14 @@ pub struct LineClock {
 const W: u16 = 160;
 impl LineClock {
     pub fn new(
-        pwm6: peripherals::PWM_SLICE6,
-        pwm7: peripherals::PWM_SLICE7,
-        pwm8: peripherals::PWM_SLICE0,
-        pwm9: peripherals::PWM_SLICE1,
-        gclk_pin: peripherals::PIN_12,
-        a_pin: peripherals::PIN_14,
-        b_pin: peripherals::PIN_16,
-        c_pin: peripherals::PIN_18,
+        pwm3: peripherals::PWM_SLICE3,
+        pwm0: peripherals::PWM_SLICE0,
+        pwm1: peripherals::PWM_SLICE1,
+        pwm2: peripherals::PWM_SLICE2,
+        gclk_pin: peripherals::PIN_22,
+        a_pin: peripherals::PIN_16,
+        b_pin: peripherals::PIN_18,
+        c_pin: peripherals::PIN_20,
     ) -> LineClockHdl {
         PWM_IRQ_WRAP_0::unpend();
         unsafe {
@@ -156,7 +156,7 @@ impl LineClock {
         gclk_cfg.compare_a = w / 2 + first_line_comp / 2;
         gclk_cfg.enable = false;
 
-        let pwm_gclk = Pwm::new_output_a(pwm6, gclk_pin, gclk_cfg);
+        let pwm_gclk = Pwm::new_output_a(pwm3, gclk_pin, gclk_cfg);
         let mut c_cfg = pwm::Config::default();
         c_cfg.divider = pwm_div;
         // let c_ount = 64;
@@ -165,16 +165,16 @@ impl LineClock {
         c_cfg.top = w * c_ount + first_line_comp - w / 2 - 1;
         c_cfg.compare_a = w / 2;
         c_cfg.enable = false;
-        let pwm_c = Pwm::new_output_a(pwm9, c_pin, c_cfg);
-        embassy_rp::pac::PWM.irq0_inte().modify(|w| w.set_ch1(true));
+        let pwm_c = Pwm::new_output_a(pwm2, c_pin, c_cfg);
+        embassy_rp::pac::PWM.irq0_inte().modify(|w| w.set_ch2(true));
 
         let mut ba_cfg = pwm::Config::default();
         ba_cfg.divider = pwm_div;
         ba_cfg.top = w + first_line_comp - 1;
         ba_cfg.compare_a = 3;
         ba_cfg.enable = false;
-        let pwm_b = Pwm::new_output_a(pwm8, b_pin, ba_cfg.clone());
-        let pwm_a = Pwm::new_output_a(pwm7, a_pin, ba_cfg.clone());
+        let pwm_b = Pwm::new_output_a(pwm1, b_pin, ba_cfg.clone());
+        let pwm_a = Pwm::new_output_a(pwm0, a_pin, ba_cfg.clone());
 
         let mut b_high_cfg = pwm::Config::default();
         b_high_cfg.divider = pwm_div;
@@ -287,14 +287,19 @@ pub struct CmdClockPins {
     pub r0_pin: peripherals::PIN_0,
     pub g0_pin: peripherals::PIN_1,
     pub b0_pin: peripherals::PIN_2,
-    pub r1_pin: peripherals::PIN_3,
-    pub g1_pin: peripherals::PIN_4,
-    pub b1_pin: peripherals::PIN_5,
-    pub r2_pin: peripherals::PIN_6,
-    pub g2_pin: peripherals::PIN_7,
-    pub b2_pin: peripherals::PIN_8,
-    pub le_pin: peripherals::PIN_9,
-    pub clk_pin: peripherals::PIN_10,
+    pub sel_d0_pin: peripherals::PIN_3,
+    pub r1_pin: peripherals::PIN_4,
+    pub g1_pin: peripherals::PIN_5,
+    pub b1_pin: peripherals::PIN_6,
+    pub sel_d1_pin: peripherals::PIN_7,
+    pub r2_pin: peripherals::PIN_8,
+    pub g2_pin: peripherals::PIN_9,
+    pub b2_pin: peripherals::PIN_10,
+    pub sel_d2_pin: peripherals::PIN_11,
+    pub le_pin: peripherals::PIN_12,
+    pub sel_clk_pin: peripherals::PIN_13,
+    pub sel_lat_pin: peripherals::PIN_14,
+    pub clk_pin: peripherals::PIN_15,
 }
 
 pub struct CmdClock {
@@ -367,20 +372,40 @@ impl CmdClock {
         let r0_pin = common.make_pio_pin(pins.r0_pin);
         let g0_pin = common.make_pio_pin(pins.g0_pin);
         let b0_pin = common.make_pio_pin(pins.b0_pin);
+        let sel_d0_pin = common.make_pio_pin(pins.sel_d0_pin);
 
         let r1_pin = common.make_pio_pin(pins.r1_pin);
         let g1_pin = common.make_pio_pin(pins.g1_pin);
         let b1_pin = common.make_pio_pin(pins.b1_pin);
+        let sel_d1_pin = common.make_pio_pin(pins.sel_d1_pin);
 
         let r2_pin = common.make_pio_pin(pins.r2_pin);
         let g2_pin = common.make_pio_pin(pins.g2_pin);
         let b2_pin = common.make_pio_pin(pins.b2_pin);
+        let sel_d2_pin = common.make_pio_pin(pins.sel_d2_pin);
+
         let le_pin = common.make_pio_pin(pins.le_pin);
+
+        let sel_clk_pin = common.make_pio_pin(pins.sel_clk_pin);
+        let sel_lat_pin = common.make_pio_pin(pins.sel_lat_pin);
         data_sm.set_pin_dirs(
             pio::Direction::Out,
             &[
-                &r0_pin, &g0_pin, &b0_pin, &r1_pin, &g1_pin, &b1_pin, &r2_pin, &g2_pin, &b2_pin,
+                &r0_pin,
+                &g0_pin,
+                &b0_pin,
+                &sel_d0_pin,
+                &r1_pin,
+                &g1_pin,
+                &b1_pin,
+                &sel_d1_pin,
+                &r2_pin,
+                &g2_pin,
+                &b2_pin,
+                &sel_d2_pin,
                 &le_pin,
+                &sel_clk_pin,
+                &sel_lat_pin,
             ],
         );
 
@@ -388,8 +413,21 @@ impl CmdClock {
         cfg.clock_divider = clk_div;
         cfg.use_program(&data_prog, &[]);
         cfg.set_out_pins(&[
-            &r0_pin, &g0_pin, &b0_pin, &r1_pin, &g1_pin, &b1_pin, &r2_pin, &g2_pin, &b2_pin,
+            &r0_pin,
+            &g0_pin,
+            &b0_pin,
+            &sel_d0_pin,
+            &r1_pin,
+            &g1_pin,
+            &b1_pin,
+            &sel_d1_pin,
+            &r2_pin,
+            &g2_pin,
+            &b2_pin,
+            &sel_d2_pin,
             &le_pin,
+            &sel_clk_pin,
+            &sel_lat_pin,
         ]);
         cfg.fifo_join = pio::FifoJoin::TxOnly;
         cfg.shift_out = ShiftConfig {

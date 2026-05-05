@@ -238,25 +238,30 @@ async fn main(spawner: Spawner) {
         r0_pin: p.PIN_0,
         g0_pin: p.PIN_1,
         b0_pin: p.PIN_2,
-        r1_pin: p.PIN_3,
-        g1_pin: p.PIN_4,
-        b1_pin: p.PIN_5,
-        r2_pin: p.PIN_6,
-        g2_pin: p.PIN_7,
-        b2_pin: p.PIN_8,
-        le_pin: p.PIN_9,
-        clk_pin: p.PIN_10,
+        sel_d0_pin: p.PIN_3,
+        r1_pin: p.PIN_4,
+        g1_pin: p.PIN_5,
+        b1_pin: p.PIN_6,
+        sel_d1_pin: p.PIN_7,
+        r2_pin: p.PIN_8,
+        g2_pin: p.PIN_9,
+        b2_pin: p.PIN_10,
+        sel_d2_pin: p.PIN_11,
+        le_pin: p.PIN_12,
+        sel_clk_pin: p.PIN_13,
+        sel_lat_pin: p.PIN_14,
+        clk_pin: p.PIN_15,
     };
     let data_ch = p.DMA_CH0;
     let mut line = clocks::LineClock::new(
-        p.PWM_SLICE6,
-        p.PWM_SLICE7,
+        p.PWM_SLICE3,
         p.PWM_SLICE0,
         p.PWM_SLICE1,
-        p.PIN_12,
-        p.PIN_14,
+        p.PWM_SLICE2,
+        p.PIN_22,
         p.PIN_16,
         p.PIN_18,
+        p.PIN_20,
     );
     let mut cmd_pio = clocks::CmdClock::new(p.PIO0, pins, data_ch);
     let confirm_cmd = Command::new_confirm();
@@ -460,12 +465,12 @@ async fn test_screen_onechip(
     let mut parser = encoder::ColorParser::new(&mut buf);
     let mut coloum: [crate::RGBH; crate::IMG_HEIGHT] = [[255, 255, 255, 0]; crate::IMG_HEIGHT];
     for i in 0..crate::IMG_HEIGHT {
-        // let offset = i / 64;
-        let offset = 0;
-        let h = (i + offset) % 32;
-        let h = if h > 15 { h - 16 } else { 15 - h };
-        let h = 8;
-        // let h = h / 2;
+        let offset = i / 64;
+        // let offset = 0;
+        // let h = (i + offset) % 32;
+        // let h = if h > 15 { h - 16 } else { 15 - h };
+        // let h = 8;
+        let h = i % 144;
         coloum[i] = [255, 255, 255, h as u8];
     }
     let len = encoder::update_frame_one_chip(&mut parser, &coloum);
