@@ -470,7 +470,7 @@ async fn test_screen_onechip(
         // let h = (i + offset) % 32;
         // let h = if h > 15 { h - 16 } else { 15 - h };
         // let h = 8;
-        let h = i % 144;
+        let h = (i * 16) & 0xff;
         coloum[i] = [255, 255, 255, h as u8];
     }
     let len = encoder::update_frame_one_chip(&mut parser, &coloum);
