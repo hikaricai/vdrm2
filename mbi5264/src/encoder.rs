@@ -7,6 +7,10 @@ pub struct DmaBuf {
     pub len: u32,
 }
 
+// 再大就异常了
+const RAM_IMG_SIZE: usize = 100;
+static mut IMG_RAM: [mbi5264_common::AngleImage; RAM_IMG_SIZE] =
+    [mbi5264_common::AngleImage::new(0); RAM_IMG_SIZE];
 struct EncoderCtx {
     img: &'static [mbi5264_common::AngleImage],
     idx_mod: usize,
@@ -19,10 +23,20 @@ impl EncoderCtx {
     fn new() -> Self {
         let img: &'static [mbi5264_common::AngleImage] = unsafe {
             let len = *(crate::env::IMAGE_LEN_ADDR as *const u32);
-            core::slice::from_raw_parts(
+            let img_ref: &'static [mbi5264_common::AngleImage] = core::slice::from_raw_parts(
                 crate::env::IMAGE_ADDR as *const mbi5264_common::AngleImage,
                 len as usize,
-            )
+            );
+            let img_ram = core::slice::from_raw_parts_mut(
+                IMG_RAM.as_ptr() as *mut mbi5264_common::AngleImage,
+                RAM_IMG_SIZE,
+            );
+            for (line_ram, line) in img_ram.iter_mut().zip(img_ref) {
+                rtt_target::rprintln!("iter line {}", line.angle);
+                *line_ram = *line;
+                rtt_target::rprintln!("line_ram {}", line_ram.angle);
+            }
+            img_ram
         };
         rtt_target::rprintln!("total angles {}", img.len());
         rtt_target::rprintln!("first angle {}", img[0].angle);

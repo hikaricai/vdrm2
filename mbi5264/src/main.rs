@@ -271,6 +271,8 @@ async fn main(spawner: Spawner) {
 
     //
     test_screen(&mut cmd_pio, &mut line, &mut led_pin).await;
+    // test_screen_line(&mut cmd_pio, &mut line, &mut led_pin).await;
+    // test_screen_line_onechip(&mut cmd_pio, &mut line, &mut led_pin).await;
     // test_screen_onechip(&mut cmd_pio, &mut line, &mut led_pin).await;
     // must return to run test_screen
     return;
@@ -401,6 +403,12 @@ async fn test_screen(
         line.wait_stop().await;
         cnt += 1;
         if cnt & 0xFFF == 0 {
+            // match encoder.encode_next(dma_buf.img_angle) {
+            //     Some(buf) => dma_buf = buf,
+            //     None => {
+            //         dma_buf = encoder.encode_next(0).unwrap();
+            //     }
+            // }
             let now = Instant::now();
             let ms = (now - last).as_millis() as u32;
             last = now;
@@ -450,7 +458,7 @@ async fn test_screen_line(
 }
 
 #[allow(unused)]
-async fn test_screen_onechip(
+async fn test_screen_line_onechip(
     cmd_pio: &mut clocks::CmdClock,
     line: &mut clocks::LineClockHdl,
     led_pin: &mut gpio::Output<'static>,
@@ -478,6 +486,45 @@ async fn test_screen_onechip(
         line.wait_stop().await;
         cnt += 1;
         if cnt & 0xFFF == 0 {
+            let now = Instant::now();
+            let ms = (now - last).as_millis() as u32;
+            last = now;
+            let fps = 0xFFF * 1024 / ms;
+            rtt_target::rprintln!("fps {}", fps);
+            led_pin.toggle();
+        }
+    }
+}
+
+#[allow(unused)]
+async fn test_screen_onechip(
+    cmd_pio: &mut clocks::CmdClock,
+    line: &mut clocks::LineClockHdl,
+    led_pin: &mut gpio::Output<'static>,
+) {
+    let mut encoder = encoder::Encoder::new();
+    let mut dma_buf = encoder.encode_next_one_chip(0).unwrap();
+    let mut cnt = 0usize;
+    let mut last = Instant::now();
+    loop {
+        line.start();
+        cmd_pio.refresh_ptr(dma_buf.ptr, dma_buf.len);
+        // match encoder.encode_next_one_chip(dma_buf.img_angle) {
+        //     Some(buf) => dma_buf = buf,
+        //     None => {
+        //         dma_buf = encoder.encode_next_one_chip(0).unwrap();
+        //     }
+        // }
+        cmd_pio.wait().await;
+        line.wait_stop().await;
+        cnt += 1;
+        if cnt & 0xFFF == 0 {
+            match encoder.encode_next_one_chip(dma_buf.img_angle) {
+                Some(buf) => dma_buf = buf,
+                None => {
+                    dma_buf = encoder.encode_next_one_chip(0).unwrap();
+                }
+            }
             let now = Instant::now();
             let ms = (now - last).as_millis() as u32;
             last = now;
