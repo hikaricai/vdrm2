@@ -289,8 +289,8 @@ async fn main(spawner: Spawner) {
     // }
 
     //
-    test_screen(&mut cmd_pio, &mut line, &mut led_pin).await;
-    // test_screen_line(&mut cmd_pio, &mut line, &mut led_pin).await;
+    // test_screen(&mut cmd_pio, &mut line, &mut led_pin).await;
+    test_screen_line(&mut cmd_pio, &mut line, &mut led_pin).await;
     // test_screen_line_onechip(&mut cmd_pio, &mut line, &mut led_pin).await;
     // test_screen_onechip(&mut cmd_pio, &mut line, &mut led_pin).await;
     // must return to run test_screen
@@ -399,6 +399,7 @@ async fn main(spawner: Spawner) {
     }
 }
 
+// 3000 fps
 #[allow(unused)]
 async fn test_screen(
     cmd_pio: &mut clocks::CmdClock,
@@ -438,6 +439,7 @@ async fn test_screen(
     }
 }
 
+// 3500 fps
 #[allow(unused)]
 async fn test_screen_line(
     cmd_pio: &mut clocks::CmdClock,
@@ -447,7 +449,7 @@ async fn test_screen_line(
     let mut cnt = 0usize;
     let mut last = Instant::now();
     let mut buf = [0; 16384];
-    let mut parser = encoder::ColorParser::new(&mut buf);
+
     let mut coloum: [crate::RGBH; crate::IMG_HEIGHT] = [[255, 255, 255, 0]; crate::IMG_HEIGHT];
     for i in 0..crate::IMG_HEIGHT {
         // let h = i % 16;
@@ -457,6 +459,7 @@ async fn test_screen_line(
         let b = if gray < 64 { gray + 30 } else { gray };
         coloum[i] = [gray, gray, b, h as u8 + 16 * 8];
     }
+    let mut parser = encoder::ColorParser::new(&mut buf);
     let len = encoder::update_frame(&mut parser, &coloum);
 
     loop {
