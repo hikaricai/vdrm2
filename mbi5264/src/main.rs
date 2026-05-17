@@ -288,8 +288,9 @@ async fn main(spawner: Spawner) {
     }
     // }
 
-    // //
-    test_screen_onechip(&mut cmd_pio, &mut line, &mut led_pin).await;
+    //
+    test_screen(&mut cmd_pio, &mut line, &mut led_pin).await;
+    // test_screen_onechip(&mut cmd_pio, &mut line, &mut led_pin).await;
     // must return to run test_screen
     return;
 
