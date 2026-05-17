@@ -1,5 +1,6 @@
 const INDEX_MOD: usize = 2;
-
+const SERIAL_CHIPS: u32 = 3;
+const LAST_CHIP_IDX: u32 = SERIAL_CHIPS - 1;
 pub struct DmaBuf {
     pub img_angle: u32,
     pub ptr: u32,
@@ -125,6 +126,7 @@ impl RGBMeta {
     fn new(rgbh: [u8; 4], region: u16) -> Self {
         let h = rgbh[3];
         let h_div = (h >> 4) & 0x0F;
+        let h_div = h_div % SERIAL_CHIPS as u8;
         let h_mod = h & 0x0F;
         Self {
             rgbh,
@@ -409,7 +411,7 @@ impl<'a> ColorParser<'a> {
 
             // empty with le
             let meta: &mut ColorTranserTail = add_buf_ptr(&mut self.buf);
-            let empty_loops: u32 = 16 * 9;
+            let empty_loops: u32 = 16 * SERIAL_CHIPS;
             meta.empty_loops = Self::reduce_empty_loops(self.last_empties, empty_loops);
             meta.data_loops = 2 - 2;
             meta.buf = [0, crate::clocks::LE_HIGH];
@@ -468,7 +470,7 @@ impl<'a> ColorParser<'a> {
     }
 
     pub fn add_color(&mut self, buf: &[u16; 8], chip_index: u32, last_chip_idx: u32) {
-        let le = chip_index == 8;
+        let le = chip_index == LAST_CHIP_IDX;
         let chip_inc_index = chip_index - last_chip_idx;
         let empty_loops = chip_inc_index * 16 + 8;
         unsafe {
@@ -521,11 +523,11 @@ impl<'a> ColorParser<'a> {
         self.last_empties = 0;
     }
 
-    pub fn add_color_end(&mut self, buf: &[u16; 8], chip_index: u32, last_chip_idx: u32) {
-        let le = chip_index == 8;
+    fn add_color_end(&mut self, buf: &[u16; 8], chip_index: u32, last_chip_idx: u32) {
+        let le = chip_index == LAST_CHIP_IDX;
         self.add_color(buf, chip_index, last_chip_idx);
         if !le {
-            self.add_empty_le(8 - chip_index as u32);
+            self.add_empty_le(LAST_CHIP_IDX - chip_index as u32);
         }
     }
 

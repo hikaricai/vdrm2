@@ -271,6 +271,7 @@ async fn main(spawner: Spawner) {
 
     //
     test_screen(&mut cmd_pio, &mut line, &mut led_pin).await;
+    // test_screen_onechip(&mut cmd_pio, &mut line, &mut led_pin).await;
     // must return to run test_screen
     return;
 
@@ -464,7 +465,7 @@ async fn test_screen_onechip(
         let offset = 0;
         let h = (i + offset) % 32;
         let h = if h > 15 { h - 16 } else { 15 - h };
-        let h = 8;
+        // let h = 8;
         // let h = h / 2;
         coloum[i] = [255, 255, 255, h as u8];
     }
