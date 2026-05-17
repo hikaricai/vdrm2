@@ -31,7 +31,11 @@ fn gen_threed_surface() -> vdrm_alg::PixelSurface {
             let px = x * 2;
             let px2 = px + 384;
             let py = y * 2;
-            let [r, g, b] = rgb_img.get_pixel(px, py).0;
+            let rgb = rgb_img.get_pixel(px, py).0;
+            if rgb == [0; 3] {
+                continue;
+            }
+            let [r, g, b] = rgb;
             let gamma = 0.5f32;
             let r = brighten_gamma(r, gamma);
             let g = brighten_gamma(g, gamma);
