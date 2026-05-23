@@ -31,9 +31,7 @@ impl EncoderCtx {
                 RAM_IMG_SIZE,
             );
             for (line_ram, line) in img_ram.iter_mut().zip(img_ref) {
-                rtt_target::rprintln!("iter line {}", line.angle);
                 *line_ram = *line;
-                rtt_target::rprintln!("line_ram {}", line_ram.angle);
             }
             img_ram
         };
