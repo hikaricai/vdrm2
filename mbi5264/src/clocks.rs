@@ -146,8 +146,8 @@ impl LineClock {
         // from 10 to 5
         let pwm_div = (10 / 2).into();
 
-        // no emi
-        let w = 245;
+        // no emi 210 - 260
+        let w = 235;
         let first_line_comp_cnt = 0u16;
         let first_line_comp = w * first_line_comp_cnt;
         let mut gclk_cfg = pwm::Config::default();

@@ -429,7 +429,8 @@ impl<'a> ColorParser<'a> {
             // // must be odd
             // // 4 cause emi
             // // const SIZE: usize = 4;
-            // const SIZE: usize = 6;
+            // // emi with 4
+            // const SIZE: usize = 4;
             // meta.data_loops += SIZE as u32 * (empty_size - 1);
 
             // for _i in 1..empty_size {
