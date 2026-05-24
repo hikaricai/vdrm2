@@ -326,6 +326,7 @@ impl RegCfg8 {
         assert_eq_const(exp, exp2, concat!("line", line!()));
         let v = Self::new()
             .with_gclk_change(1)
+            // 配置成false变白变亮
             .with_gradient_compensation(true)
             .with_reserved1(4)
             .0;
@@ -426,7 +427,9 @@ impl RegCfg13 {
         // let exp2 = 0b1010_0111_1001_0111;
         // assert_eq_const(exp, exp2, concat!("line", line!()));
         // pll_m from 19 to 39 to 79
-        let v = Self::new().with_pll_n(5).with_pll_m(12).0;
+        // let v = Self::new().with_pll_n(10).with_pll_m(27).0;
+        // 24-
+        let v = Self::new().with_pll_n(10).with_pll_m(26).0;
         // assert_eq_const(v, exp, concat!("line", line!()));
         v
     }
