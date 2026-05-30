@@ -269,10 +269,14 @@ async fn main(spawner: Spawner) {
     let umini_cmds = mbi5264_common::unimi_cmds();
     let cmd_iter = umini_cmds.iter();
 
-    for &(cmd, param) in cmd_iter {
+    cmd_pio.sel_all_chip();
+    // for i in 0..10 {
+    // loop {
+    for &(cmd, param) in umini_cmds.iter() {
         cmd_pio.refresh2(&confirm_cmd);
         cmd_pio.refresh2(&Command::new(cmd as u8, param));
     }
+    // }
 
     // //
     test_screen_onechip(&mut cmd_pio, &mut line, &mut led_pin).await;
@@ -470,7 +474,7 @@ async fn test_screen_onechip(
         // let h = (i + offset) % 32;
         // let h = if h > 15 { h - 16 } else { 15 - h };
         // let h = 8;
-        let h = (i * 16) & 0xff;
+        let h = ((i % 9) * 16) & 0xff;
         coloum[i] = [255, 255, 255, h as u8];
     }
     let len = encoder::update_frame_one_chip(&mut parser, &coloum);

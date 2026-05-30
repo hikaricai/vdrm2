@@ -459,7 +459,7 @@ impl<'a> ColorParser<'a> {
                 meta.buf = [0, crate::clocks::LE_HIGH];
             }
         }
-        self.last_empties = 16 * 9;
+        self.last_empties = 0;
     }
 
     pub fn add_color(&mut self, buf: &[u16; 8], chip_index: u32, last_chip_idx: u32) {

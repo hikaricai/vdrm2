@@ -471,6 +471,34 @@ impl CmdClock {
     }
 
     #[inline]
+    pub fn encode_chip_sel(data_buf: &mut [u16; CMD_BUF_SIZE]) {
+        let mut buf_iter = data_buf.iter_mut().skip(6);
+
+        for i in 0..8 {
+            let buf = buf_iter.next().unwrap();
+            let rgb = 0b1000;
+            *buf = rgb | (rgb << 4) | (rgb << 8);
+            let sel_clk = i & 1;
+            *buf |= sel_clk << 13;
+            let sel_lat = 1;
+            *buf |= sel_lat << 14;
+        }
+        let buf: &mut [u32; CMD_BUF_SIZE / 2] = unsafe { core::mem::transmute(data_buf) };
+        buf[0] = 1 - 1; // loop cnt
+        buf[1] = 3 - 3; // empty cnt
+        buf[2] = 8 - 2;
+    }
+
+    #[inline]
+    pub fn sel_all_chip(&mut self) {
+        Self::encode_chip_sel(&mut self.data_buf);
+        let p = self.data_ch.regs();
+        let buf: &[u32; 7] = unsafe { core::mem::transmute(&self.data_buf) };
+        p.trans_count()
+            .write_value(pac::dma::regs::ChTransCount(buf.len() as u32));
+        p.al3_read_addr_trig().write_value(buf.as_ptr() as u32);
+        while p.ctrl_trig().read().busy() {}
+    }
     pub fn encode_cmd(transaction: &super::Command, data_buf: &mut [u16; CMD_BUF_SIZE]) {
         let mut buf_iter = data_buf.iter_mut().skip(6);
         for [r, g, b] in transaction.regs {
@@ -479,8 +507,8 @@ impl CmdClock {
                 let r = (r >> i) & 1;
                 let g = (g >> i) & 1;
                 let b = (b >> i) & 1;
-                let rgb = r | (g << 1) | (b << 2);
-                *buf = rgb | (rgb << 3) | (rgb << 6);
+                let rgb = (r | (g << 1) | (b << 2)) as u16;
+                *buf = rgb | (rgb << 4) | (rgb << 8);
             }
         }
         // set le
