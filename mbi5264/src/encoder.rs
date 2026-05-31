@@ -430,23 +430,23 @@ impl<'a> ColorParser<'a> {
             // // 4 cause emi
             // // const SIZE: usize = 4;
             // // emi with 4
-            // const SIZE: usize = 4;
-            // meta.data_loops += SIZE as u32 * (empty_size - 1);
+            const SIZE: usize = 4;
+            meta.data_loops += SIZE as u32 * (empty_size - 1);
 
-            // for _i in 1..empty_size {
-            //     let slice = add_buf_slice(&mut self.buf, SIZE);
-            //     slice.copy_from_slice(&[0; SIZE]);
-            //     slice[SIZE - 1] = crate::clocks::LE_HIGH;
-            // }
+            for _i in 1..empty_size {
+                let slice = add_buf_slice(&mut self.buf, SIZE);
+                slice.copy_from_slice(&[0; SIZE]);
+                slice[SIZE - 1] = crate::clocks::LE_HIGH;
+            }
 
             // many le
-            for _i in 1..empty_size {
-                *self.loops += 1;
-                let meta: &mut ColorTranserTail = add_buf_ptr(&mut self.buf);
-                meta.empty_loops = EMPTY_LEN_U32_CYCLES - 3;
-                meta.data_loops = 2 - 2;
-                meta.buf = [0, crate::clocks::LE_HIGH];
-            }
+            // for _i in 1..empty_size {
+            //     *self.loops += 1;
+            //     let meta: &mut ColorTranserTail = add_buf_ptr(&mut self.buf);
+            //     meta.empty_loops = EMPTY_LEN_U32_CYCLES - 3;
+            //     meta.data_loops = 2 - 2;
+            //     meta.buf = [0, crate::clocks::LE_HIGH];
+            // }
         }
         self.last_empties = 16 * 9;
     }

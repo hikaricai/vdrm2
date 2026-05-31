@@ -330,7 +330,7 @@ impl CmdClock {
             ".wrap",
         );
         let clk_prog = common.load_program(&clk_program_data.program);
-        let clk_pin = common.make_pio_pin(pins.clk_pin);
+        let mut clk_pin = common.make_pio_pin(pins.clk_pin);
         clk_sm.set_pin_dirs(pio::Direction::Out, &[&clk_pin]);
 
         let mut cfg = pio::Config::default();
@@ -364,18 +364,36 @@ impl CmdClock {
             ".wrap",
         );
         let data_prog = common.load_program(&data_program_data.program);
-        let r0_pin = common.make_pio_pin(pins.r0_pin);
-        let g0_pin = common.make_pio_pin(pins.g0_pin);
-        let b0_pin = common.make_pio_pin(pins.b0_pin);
+        let mut r0_pin = common.make_pio_pin(pins.r0_pin);
+        let mut g0_pin = common.make_pio_pin(pins.g0_pin);
+        let mut b0_pin = common.make_pio_pin(pins.b0_pin);
 
-        let r1_pin = common.make_pio_pin(pins.r1_pin);
-        let g1_pin = common.make_pio_pin(pins.g1_pin);
-        let b1_pin = common.make_pio_pin(pins.b1_pin);
+        let mut r1_pin = common.make_pio_pin(pins.r1_pin);
+        let mut g1_pin = common.make_pio_pin(pins.g1_pin);
+        let mut b1_pin = common.make_pio_pin(pins.b1_pin);
 
-        let r2_pin = common.make_pio_pin(pins.r2_pin);
-        let g2_pin = common.make_pio_pin(pins.g2_pin);
-        let b2_pin = common.make_pio_pin(pins.b2_pin);
-        let le_pin = common.make_pio_pin(pins.le_pin);
+        let mut r2_pin = common.make_pio_pin(pins.r2_pin);
+        let mut g2_pin = common.make_pio_pin(pins.g2_pin);
+        let mut b2_pin = common.make_pio_pin(pins.b2_pin);
+        let mut le_pin = common.make_pio_pin(pins.le_pin);
+        let drive_pins = [
+            &mut clk_pin,
+            &mut le_pin,
+            &mut r0_pin,
+            &mut g0_pin,
+            &mut b0_pin,
+            &mut r1_pin,
+            &mut g1_pin,
+            &mut b1_pin,
+            &mut r2_pin,
+            &mut g2_pin,
+            &mut b2_pin,
+        ];
+        for p in drive_pins {
+            // p.set_drive_strength(gpio::Drive::_12mA);
+            p.set_drive_strength(gpio::Drive::_12mA);
+        }
+
         data_sm.set_pin_dirs(
             pio::Direction::Out,
             &[
