@@ -12,7 +12,7 @@ use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::signal::Signal;
 use embassy_sync::waitqueue::AtomicWaker;
 
-pub const LE_HIGH: u16 = 1 << 12;
+pub const LE_HIGH: u16 = 1 << 10;
 
 static LINE_CLOCK: Mutex<ThreadModeRawMutex, RefCell<Option<LineClock>>> =
     Mutex::new(RefCell::new(None));
@@ -518,10 +518,11 @@ impl CmdClock {
             for i in (0..16).rev() {
                 let buf = buf_iter.next().unwrap();
                 let r = (r >> i) & 1;
-                let g = (g >> i) & 1;
-                let b = (b >> i) & 1;
-                let rgb = (r | (g << 1) | (b << 2)) as u16;
-                *buf = rgb | (rgb << 4) | (rgb << 8);
+                // let g = (g >> i) & 1;
+                // let b = (b >> i) & 1;
+                // let rgb = (r | (g << 1) | (b << 2)) as u16;
+                // *buf = rgb | (rgb << 4) | (rgb << 8);
+                *buf = r << 13;
             }
         }
         // set le

@@ -314,16 +314,18 @@ impl PixelSlot {
         } = rgbh_meta;
         let [r, g, b, _h] = rgbh;
         for (i, buf) in (0..8).rev().zip(buf.iter_mut()) {
-            let r = (r >> i) & 1;
-            let g = (g >> i) & 1;
-            let b = (b >> i) & 1;
-            let sel_data = h_div >> (i / 2) & 1;
-            let rgb = (r | (g << 1) | (b << 2) | (sel_data << 3)) as u16;
-            *buf |= rgb << (4 * region);
-            let sel_clk = (i as u16 + 1) & 1;
-            *buf |= sel_clk << 13;
-            let sel_lat = 1;
-            *buf |= sel_lat << 14;
+            // let r = (r >> i) & 1;
+            // let g = (g >> i) & 1;
+            // let b = (b >> i) & 1;
+            // let sel_data = h_div >> (i / 2) & 1;
+            // let rgb = (r | (g << 1) | (b << 2) | (sel_data << 3)) as u16;
+            // *buf |= rgb << (4 * region);
+            // let sel_clk = (i as u16 + 1) & 1;
+            // *buf |= sel_clk << 13;
+            // let sel_lat = 1;
+            // *buf |= sel_lat << 14;
+            let r = ((r >> i) & 1) as u16;
+            *buf |= r << 13;
         }
         Self {
             buf,
@@ -339,12 +341,14 @@ impl PixelSlot {
         let region = rgbh_meta.region;
         let [r, g, b, _] = rgbh_meta.rgbh;
         for (i, buf) in (0..8).rev().zip(self.buf.iter_mut()) {
-            let r = (r >> i) & 1;
-            let g = (g >> i) & 1;
-            let b = (b >> i) & 1;
-            let sel_data = rgbh_meta.h_div >> (i / 2) & 1;
-            let rgb = (r | (g << 1) | (b << 2) | (sel_data << 3)) as u16;
-            *buf |= rgb << (4 * region);
+            // let r = (r >> i) & 1;
+            // let g = (g >> i) & 1;
+            // let b = (b >> i) & 1;
+            // let sel_data = rgbh_meta.h_div >> (i / 2) & 1;
+            // let rgb = (r | (g << 1) | (b << 2) | (sel_data << 3)) as u16;
+            // *buf |= rgb << (4 * region);
+            let r = ((r >> i) & 1) as u16;
+            *buf |= r << 13;
         }
     }
 }
