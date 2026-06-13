@@ -201,6 +201,7 @@ async fn main(spawner: Spawner) {
     // overclock
     // sys_pll.post_div1 = 4;
     sys_pll.post_div1 = 6;
+    sys_pll.post_div2 = 4;
     let p = embassy_rp::init(config);
     embassy_rp::pac::BUSCTRL.bus_priority().write(|w| {
         w.set_dma_r(true);
@@ -269,6 +270,15 @@ async fn main(spawner: Spawner) {
     let umini_cmds = mbi5264_common::unimi_cmds();
     let cmd_iter = umini_cmds.iter();
 
+    cmd_pio.sel_all_chip();
+    cmd_pio.sel_all_chip();
+    // for i in 0..10 {
+    // loop {
+    for &(cmd, param) in umini_cmds.iter() {
+        cmd_pio.refresh2(&confirm_cmd);
+        cmd_pio.refresh2(&Command::new(cmd as u8, param));
+    }
+    cmd_pio.sel_all_chip();
     cmd_pio.sel_all_chip();
     // for i in 0..10 {
     // loop {
@@ -468,18 +478,34 @@ async fn test_screen_onechip(
     let mut buf = [0; 16384];
     let mut parser = encoder::ColorParser::new(&mut buf);
     let mut coloum: [crate::RGBH; crate::IMG_HEIGHT] = [[255, 255, 255, 0]; crate::IMG_HEIGHT];
+    let mut loop_idx = 0usize;
     for i in 0..crate::IMG_HEIGHT {
         // let offset = i / 64;
         let offset = 0;
         let h = (i + offset) % 32;
-        let h = if h > 15 { h - 16 } else { 15 - h };
-        // let h = 8;
+        // let h = if h > 15 { h - 16 } else { 15 - h };
+        // let h = h + (loop_idx % 8) * 16;
+        let h = h + 16 * 1;
         // let h = h / 2;
         coloum[i] = [255, 255, 255, h as u8];
     }
     let len = encoder::update_frame_one_chip(&mut parser, &coloum);
 
     loop {
+        for i in 0..crate::IMG_HEIGHT {
+            // let offset = i / 64;
+            let offset = 0;
+            let h = (i + offset) % 32;
+            let h = if h > 15 { h - 16 } else { 15 - h };
+            let h = h + (loop_idx / 10 % 8) * 16;
+            // let h = h + 16 * 1;
+            // let h = h / 2;
+            coloum[i] = [255, 255, 255, h as u8];
+        }
+        buf = [0; 16384];
+        let mut parser = encoder::ColorParser::new(&mut buf);
+        let len = encoder::update_frame_one_chip(&mut parser, &coloum);
+        loop_idx += 1;
         line.start();
         cmd_pio.refresh_ptr(buf.as_ptr() as u32, len);
         cmd_pio.wait().await;
