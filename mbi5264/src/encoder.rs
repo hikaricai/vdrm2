@@ -262,6 +262,14 @@ pub fn update_frame_one_chip(
     }
     parser.add_empty_one_chip(15 - last_h_mod as u32);
     //
+    parser.add_empty(8);
+    parser.add_sync(8);
+    parser.add_empty(8);
+    parser.encode()
+}
+
+pub fn update_sync(parser: &mut ColorParser) -> u32 {
+    parser.add_empty(8);
     parser.add_sync(8);
     parser.add_empty(8);
     parser.encode()
@@ -454,14 +462,27 @@ impl<'a> ColorParser<'a> {
             meta.data_loops = 2 - 2;
             meta.buf = [0, crate::clocks::LE_HIGH];
 
-            // many le
+            // // must be odd
+            // // 4 cause emi
+            // // const SIZE: usize = 4;
+            // // emi with 4
+            const SIZE: usize = 2;
+            meta.data_loops += SIZE as u32 * (empty_size - 1);
+
             for _i in 1..empty_size {
-                *self.loops += 1;
-                let meta: &mut ColorTranserTail = add_buf_ptr(&mut self.buf);
-                meta.empty_loops = EMPTY_LEN_U32_CYCLES - 3;
-                meta.data_loops = 2 - 2;
-                meta.buf = [0, crate::clocks::LE_HIGH];
+                let slice = add_buf_slice(&mut self.buf, SIZE);
+                slice.copy_from_slice(&[0; SIZE]);
+                slice[SIZE - 1] = crate::clocks::LE_HIGH;
             }
+
+            // many le
+            // for _i in 1..empty_size {
+            //     *self.loops += 1;
+            //     let meta: &mut ColorTranserTail = add_buf_ptr(&mut self.buf);
+            //     meta.empty_loops = EMPTY_LEN_U32_CYCLES - 3;
+            //     meta.data_loops = 2 - 2;
+            //     meta.buf = [0, crate::clocks::LE_HIGH];
+            // }
         }
         self.last_empties = 0;
     }
@@ -560,4 +581,10 @@ unsafe fn add_buf_ptr<B, T>(buf: &mut *mut B) -> &mut T {
     let t: &mut T = core::mem::transmute(*buf);
     *buf = buf.add(core::mem::size_of::<T>() / core::mem::size_of::<B>());
     t
+}
+
+unsafe fn add_buf_slice<B>(buf: &mut *mut B, len: usize) -> &mut [B] {
+    let slice = core::slice::from_raw_parts_mut(*buf, len);
+    *buf = buf.add(len);
+    slice
 }

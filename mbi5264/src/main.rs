@@ -466,7 +466,10 @@ async fn test_screen_onechip(
     let mut cnt = 0usize;
     let mut last = Instant::now();
     let mut buf = [0; 16384];
+    let mut sync_buf = [0u16; 128];
     let mut parser = encoder::ColorParser::new(&mut buf);
+    let mut sync_parser = encoder::ColorParser::new(&mut sync_buf);
+    let sync_len = encoder::update_sync(&mut sync_parser);
     let mut coloum: [crate::RGBH; crate::IMG_HEIGHT] = [[255, 255, 255, 0]; crate::IMG_HEIGHT];
     for i in 0..crate::IMG_HEIGHT {
         // let offset = i / 64;
@@ -484,6 +487,8 @@ async fn test_screen_onechip(
         cmd_pio.refresh_ptr(buf.as_ptr() as u32, len);
         cmd_pio.wait().await;
         line.wait_stop().await;
+        // cmd_pio.refresh_ptr(sync_buf.as_ptr() as u32, sync_len);
+        // cmd_pio.wait().await;
         cnt += 1;
         if cnt & 0xFFF == 0 {
             let now = Instant::now();
