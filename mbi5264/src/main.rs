@@ -201,7 +201,7 @@ async fn main(spawner: Spawner) {
     // overclock
     // sys_pll.post_div1 = 4;
     sys_pll.post_div1 = 6;
-    sys_pll.post_div2 = 4;
+    // sys_pll.post_div2 = 2;
     let p = embassy_rp::init(config);
     embassy_rp::pac::BUSCTRL.bus_priority().write(|w| {
         w.set_dma_r(true);

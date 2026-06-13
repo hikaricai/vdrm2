@@ -395,8 +395,8 @@ impl CmdClock {
             &mut b0_pin,
         ];
         for p in drive_pins {
-            // p.set_drive_strength(gpio::Drive::_12mA);
-            p.set_drive_strength(gpio::Drive::_2mA);
+            p.set_drive_strength(gpio::Drive::_12mA);
+            // p.set_drive_strength(gpio::Drive::_2mA);
         }
 
         let sel_clk_pin = common.make_pio_pin(pins.sel_clk_pin);
