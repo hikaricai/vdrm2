@@ -197,11 +197,11 @@ async fn main(spawner: Spawner) {
         .sys_pll
         .as_mut()
         .unwrap();
-    sys_pll.fbdiv = 125;
+    sys_pll.fbdiv = 140;
     // overclock
     // sys_pll.post_div1 = 4;
     sys_pll.post_div1 = 6;
-    // sys_pll.post_div2 = 2;
+    sys_pll.post_div2 = 2;
     let p = embassy_rp::init(config);
     embassy_rp::pac::BUSCTRL.bus_priority().write(|w| {
         w.set_dma_r(true);
@@ -483,8 +483,8 @@ async fn test_screen_onechip(
         // let offset = i / 64;
         let offset = 0;
         let h = (i + offset) % 32;
-        // let h = if h > 15 { h - 16 } else { 15 - h };
-        // let h = h + (loop_idx % 8) * 16;
+        let h = if h > 15 { h - 16 } else { 15 - h };
+        // let h = h + (loop_idx % 1) * 16;
         let h = h + 16 * 1;
         // let h = h / 2;
         coloum[i] = [255, 255, 255, h as u8];
@@ -492,19 +492,19 @@ async fn test_screen_onechip(
     let len = encoder::update_frame_one_chip(&mut parser, &coloum);
 
     loop {
-        for i in 0..crate::IMG_HEIGHT {
-            // let offset = i / 64;
-            let offset = 0;
-            let h = (i + offset) % 32;
-            let h = if h > 15 { h - 16 } else { 15 - h };
-            let h = h + (loop_idx / 10 % 8) * 16;
-            // let h = h + 16 * 1;
-            // let h = h / 2;
-            coloum[i] = [255, 255, 255, h as u8];
-        }
-        buf = [0; 16384];
-        let mut parser = encoder::ColorParser::new(&mut buf);
-        let len = encoder::update_frame_one_chip(&mut parser, &coloum);
+        // for i in 0..crate::IMG_HEIGHT {
+        //     // let offset = i / 64;
+        //     let offset = 0;
+        //     let h = (i + offset) % 32;
+        //     let h = if h > 15 { h - 16 } else { 15 - h };
+        //     // let h = h + (loop_idx / 1 % 8) * 16;
+        //     let h = h + 16 * 1;
+        //     // let h = h / 2;
+        //     coloum[i] = [255, 255, 255, h as u8];
+        // }
+        // buf = [0; 16384];
+        // let mut parser = encoder::ColorParser::new(&mut buf);
+        // let len = encoder::update_frame_one_chip(&mut parser, &coloum);
         loop_idx += 1;
         line.start();
         cmd_pio.refresh_ptr(buf.as_ptr() as u32, len);
