@@ -1,39 +1,22 @@
 `timescale 1ns / 1ps
-//////////////////////////////////////////////////////////////////////////////////
-// Company: 
-// Engineer: 
-// 
-// Create Date:    23:24:04 03/29/2026 
-// Design Name: 
-// Module Name:    hc595 
-// Project Name: 
-// Target Devices: 
-// Tool versions: 
-// Description: 
-//
-// Dependencies: 
-//
-// Revision: 
-// Revision 0.01 - File Created
-// Additional Comments: 
-//
-//////////////////////////////////////////////////////////////////////////////////
+
+`timescale 1ns / 1ps
 module hc595(
-    input        clk,      // ��λ�Ĵ���ʱ�� SRCLK
-    input        latch,    // �洢�Ĵ������� RCLK
-    input        sr_in,    // �������� SER
-    output reg [3:0] q     // ������� Q0-Q7
+    input        clk,
+    input        latch,
+    input        sr_in,
+    output reg [1:0] q
 );
 
-reg [3:0] shift_reg; // ��λ�Ĵ����ڲ�״̬
+reg [1:0] shift_reg;
 
 always @(posedge clk) begin
-    shift_reg <= {shift_reg[2:0], sr_in}; // ����һλ�����뵽���λ
+    shift_reg <= {shift_reg[0:0], sr_in};
 end
 
-// ����Ĵ���
+
 always @(negedge latch) begin
-    q <= shift_reg; // ����λ�Ĵ���������������������
+    q <= shift_reg;
 end
 
 endmodule
