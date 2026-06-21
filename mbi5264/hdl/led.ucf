@@ -1,29 +1,29 @@
-# NET "clk"  LOC = "P34"  ;
-# NET "sr_addr"  LOC = "P41"  ;
-# NET "sr_addr2"  LOC = "P38"  ;
-# NET "sr_clk"  LOC = "P37"  ;
-# NET "latch"  LOC = "P36"  ;
+NET "sr_addr"  LOC = "P39"  ;
+NET "sr_addr2"  LOC = "P38"  ;
+NET "sr_clk"  LOC = "P37"  ;
+NET "latch"  LOC = "P36"  ;
+NET "clk"  LOC = "P34"  ;
 
-# NET "i_rgbs0"  LOC = "P44"  ;
-# NET "i_rgbs1"  LOC = "P43"  ;
-# NET "i_rgbs2"  LOC = "P42"  ;
-# NET "i_rgbs3"  LOC = "P40"  ;
-# NET "i_rgbs4"  LOC = "P39"  ;
-# NET "o_rgbs0[0]"  LOC = "P3"  ;
-# NET "o_rgbs0[1]"  LOC = "P2"  ;
-# NET "o_rgbs0[2]"  LOC = "P1"  ;
-# NET "o_rgbs1[0]"  LOC = "P7"  ;
-# NET "o_rgbs1[1]"  LOC = "P6"  ;
-# NET "o_rgbs1[2]"  LOC = "P5"  ;
-# NET "o_rgbs2[0]"  LOC = "P13"  ;
-# NET "o_rgbs2[1]"  LOC = "P12"  ;
-# NET "o_rgbs2[2]"  LOC = "P8"  ;
-# NET "o_rgbs3[0]"  LOC = "P18"  ;
-# NET "o_rgbs3[1]"  LOC = "P16"  ;
-# NET "o_rgbs3[2]"  LOC = "P14"  ;
-# NET "o_rgbs4[0]"  LOC = "P21"  ;
-# NET "o_rgbs4[1]"  LOC = "P20"  ;
-# NET "o_rgbs4[2]"  LOC = "P19"  ;
+NET "i_rgbs0"  LOC = "P44"  ;
+NET "i_rgbs1"  LOC = "P43"  ;
+NET "i_rgbs2"  LOC = "P42"  ;
+NET "i_rgbs3"  LOC = "P41"  ;
+NET "i_rgbs4"  LOC = "P40"  ;
+NET "o_rgbs0[0]"  LOC = "P3"  ;
+NET "o_rgbs0[1]"  LOC = "P2"  ;
+NET "o_rgbs0[2]"  LOC = "P1"  ;
+NET "o_rgbs1[0]"  LOC = "P7"  ;
+NET "o_rgbs1[1]"  LOC = "P6"  ;
+NET "o_rgbs1[2]"  LOC = "P5"  ;
+NET "o_rgbs2[0]"  LOC = "P13"  ;
+NET "o_rgbs2[1]"  LOC = "P12"  ;
+NET "o_rgbs2[2]"  LOC = "P8"  ;
+NET "o_rgbs3[0]"  LOC = "P18"  ;
+NET "o_rgbs3[1]"  LOC = "P16"  ;
+NET "o_rgbs3[2]"  LOC = "P14"  ;
+NET "o_rgbs4[0]"  LOC = "P21"  ;
+NET "o_rgbs4[1]"  LOC = "P20"  ;
+NET "o_rgbs4[2]"  LOC = "P19"  ;
 #PACE: Start of PACE Area Constraints
 
 #PACE: Start of PACE Prohibit Constraints
