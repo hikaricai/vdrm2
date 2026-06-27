@@ -1,6 +1,25 @@
 `timescale 1ns / 1ps
 
 `timescale 1ns / 1ps
+//////////////////////////////////////////////////////////////////////////////////
+// Company:
+// Engineer:
+//
+// Create Date:    23:23:26 03/29/2026
+// Design Name:
+// Module Name:    main
+// Project Name:
+// Target Devices:
+// Tool versions:
+// Description:
+//
+// Dependencies:
+//
+// Revision:
+// Revision 0.01 - File Created
+// Additional Comments:
+//
+//////////////////////////////////////////////////////////////////////////////////
 module led (
     output wire [2:0] o_rgbs0,
     output wire [2:0] o_rgbs1,
@@ -20,8 +39,8 @@ module led (
     input  wire latch,
     input  wire clk
 );
-reg [2:0] o_rgbs_tmp_a[0:4];
-reg [2:0] o_rgbs_tmp_b[0:4];
+reg [1:0] o_rgbs_tmp_a[0:4];
+reg [1:0] o_rgbs_tmp_b[0:4];
 wire i_rgbs [0:4];
 wire  [2:0] uo_rgbs [0:4];
 wire  [2:0] o_rgbs [0:4];
@@ -65,6 +84,7 @@ generate
                 .a(shit_out_addr),
                 .v(i_rgbs[i]),
                 .o(uo_rgbs[i])
+                // .o(o_rgbs[i])
         );
     end
 endgenerate
@@ -74,20 +94,28 @@ generate
                 .a(shit_out_addr2),
                 .v(i_rgbs[i]),
                 .o(uo_rgbs[i])
+                // .o(o_rgbs[i])
         );
     end
 endgenerate
 
+(* KEEP = "TRUE" *) wire [8:0] _clk2;
+(* KEEP = "TRUE" *) wire [8:0] _clk3;
+
+assign _clk2 = ~clk;
+assign _clk3 = ~_clk2;
+
 generate
     for(i=0; i<5; i=i+1) begin : CLK_ARR
+        assign o_rgbs[i][0:0] = uo_rgbs[i][0:0];
         always @(posedge clk) begin
-            o_rgbs_tmp_a[i] <= uo_rgbs[i];
+            o_rgbs_tmp_a[i] <= uo_rgbs[i][2:1];
         end
 
         always @(negedge clk) begin
-            o_rgbs_tmp_b[i] <= uo_rgbs[i];
+            o_rgbs_tmp_b[i] <= uo_rgbs[i][2:1];
         end
-        assign o_rgbs[i] = clk ? o_rgbs_tmp_a[i] : o_rgbs_tmp_b[i];
+        assign o_rgbs[i][2:1] = _clk3 ? o_rgbs_tmp_a[i] : o_rgbs_tmp_b[i];
     end
 endgenerate
 

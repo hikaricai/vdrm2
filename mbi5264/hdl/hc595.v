@@ -1,6 +1,23 @@
 `timescale 1ns / 1ps
-
-`timescale 1ns / 1ps
+//////////////////////////////////////////////////////////////////////////////////
+// Company:
+// Engineer:
+//
+// Create Date:    23:24:04 03/29/2026
+// Design Name:
+// Module Name:    hc595
+// Project Name:
+// Target Devices:
+// Tool versions:
+// Description:
+//
+// Dependencies:
+//
+// Revision:
+// Revision 0.01 - File Created
+// Additional Comments:
+//
+//////////////////////////////////////////////////////////////////////////////////
 module hc595(
     input        clk,
     input        latch,
