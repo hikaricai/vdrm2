@@ -197,7 +197,7 @@ async fn main(spawner: Spawner) {
         .sys_pll
         .as_mut()
         .unwrap();
-    sys_pll.fbdiv = 140;
+    // sys_pll.fbdiv = 140;
     // overclock
     // sys_pll.post_div1 = 4;
     sys_pll.post_div1 = 6;
@@ -485,7 +485,7 @@ async fn test_screen_onechip(
         let h = (i + offset) % 32;
         let h = if h > 15 { h - 16 } else { 15 - h };
         // let h = h + (loop_idx % 1) * 16;
-        let h = h + 16 * 1;
+        let h = h + 16 * 0;
         // let h = h / 2;
         coloum[i] = [255, 255, 255, h as u8];
     }
