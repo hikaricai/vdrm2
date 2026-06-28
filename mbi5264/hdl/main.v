@@ -39,7 +39,7 @@ module led (
     input  wire latch,
     input  wire clk
 );
-reg [1:0] o_rgbs_tmp_a[0:4];
+// reg [1:0] o_rgbs_tmp_a[0:4];
 reg [1:0] o_rgbs_tmp_b[0:4];
 wire i_rgbs [0:4];
 wire  [2:0] uo_rgbs [0:4];
@@ -99,23 +99,38 @@ generate
     end
 endgenerate
 
-(* KEEP = "TRUE" *) wire [8:0] _clk2;
-(* KEEP = "TRUE" *) wire [8:0] _clk3;
+// (* KEEP = "TRUE" *) wire [8:0] _clk2;
+// (* KEEP = "TRUE" *) wire [8:0] _clk3;
 
-assign _clk2 = ~clk;
-assign _clk3 = ~_clk2;
+// assign _clk2 = ~clk;
+// assign _clk3 = ~_clk2;
+
+reg pos;
+reg neg;
+
+always @(posedge clk) begin
+    if (pos == neg) begin
+        pos <= ~pos;
+    end
+end
+
+always @(negedge clk) begin
+    if (pos != neg) begin
+        neg <= ~neg;
+    end
+end
 
 generate
     for(i=0; i<5; i=i+1) begin : CLK_ARR
         assign o_rgbs[i][0:0] = uo_rgbs[i][0:0];
-        always @(posedge clk) begin
-            o_rgbs_tmp_a[i] <= uo_rgbs[i][2:1];
-        end
+        // always @(posedge clk) begin
+        //     o_rgbs_tmp_a[i] <= uo_rgbs[i][2:1];
+        // end
 
         always @(negedge clk) begin
             o_rgbs_tmp_b[i] <= uo_rgbs[i][2:1];
         end
-        assign o_rgbs[i][2:1] = _clk3 ? o_rgbs_tmp_a[i] : o_rgbs_tmp_b[i];
+        assign o_rgbs[i][2:1] = (pos != neg) ? uo_rgbs[i] : o_rgbs_tmp_b[i];
     end
 endgenerate
 
