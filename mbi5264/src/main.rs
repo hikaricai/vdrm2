@@ -453,11 +453,11 @@ async fn test_screen_line(
     let mut coloum: [crate::RGBH; crate::IMG_HEIGHT] = [[255, 255, 255, 0]; crate::IMG_HEIGHT];
     for i in 0..crate::IMG_HEIGHT {
         // let h = i % 16;
-        let h = 8;
+        let h = 143;
         let line = i % 64;
         let gray = line as u8 * 4 + 3;
-        let b = if gray < 64 { gray + 30 } else { gray };
-        coloum[i] = [gray, gray, b, h as u8 + 16 * 8];
+        // let b = if gray < 64 { gray + 30 } else { gray };
+        coloum[i] = [gray, gray, gray, h as u8];
     }
     let mut parser = encoder::ColorParser::new(&mut buf);
     let len = encoder::update_frame(&mut parser, &coloum);

@@ -130,7 +130,7 @@ generate
         always @(negedge clk) begin
             o_rgbs_tmp_b[i] <= uo_rgbs[i][2:1];
         end
-        assign o_rgbs[i][2:1] = (pos != neg) ? uo_rgbs[i] : o_rgbs_tmp_b[i];
+        assign o_rgbs[i][2:1] = (pos != neg) ? uo_rgbs[i][2:1] : o_rgbs_tmp_b[i];
     end
 endgenerate
 
