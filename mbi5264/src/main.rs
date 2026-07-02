@@ -451,18 +451,37 @@ async fn test_screen_line(
     let mut buf = [0; 16384];
 
     let mut coloum: [crate::RGBH; crate::IMG_HEIGHT] = [[255, 255, 255, 0]; crate::IMG_HEIGHT];
-    for i in 0..crate::IMG_HEIGHT {
-        // let h = i % 16;
-        let h = 143;
-        let line = i % 64;
-        let gray = line as u8 * 4 + 3;
-        // let b = if gray < 64 { gray + 30 } else { gray };
-        coloum[i] = [gray, gray, gray, h as u8];
-    }
-    let mut parser = encoder::ColorParser::new(&mut buf);
-    let len = encoder::update_frame(&mut parser, &coloum);
+    // for i in 0..crate::IMG_HEIGHT {
+    //     // let h = i % 16;
+    //     let h = i % 32;
+    //     let h = if h > 15 { h - 16 } else { 15 - h };
+    //     let h = h + 16 * 4;
+    //     let h = 103;
+    //     let line = i % 64;
+    //     let gray = line as u8 * 4 + 3;
+    //     // let b = if gray < 64 { gray + 30 } else { gray };
+    //     coloum[i] = [gray, gray, gray, h as u8];
+    // }
+    // let mut parser = encoder::ColorParser::new(&mut buf);
+    // let len = encoder::update_frame(&mut parser, &coloum);
 
+    let mut loop_idx = 0usize;
     loop {
+        for i in 0..crate::IMG_HEIGHT {
+            // let offset = i / 64;
+            let offset = 0;
+            let h = (i + offset) % 32;
+            let h = if h > 15 { h - 16 } else { 15 - h };
+            let h = (loop_idx / 100 + h) % (16 * 9);
+            // let h = h + 16 * 1;
+            // let h = h / 2;
+            coloum[i] = [255, 255, 255, h as u8];
+        }
+        buf = [0; 16384];
+        let mut parser = encoder::ColorParser::new(&mut buf);
+        let len = encoder::update_frame(&mut parser, &coloum);
+
+        loop_idx += 1;
         line.start();
         cmd_pio.refresh_ptr(buf.as_ptr() as u32, len);
         cmd_pio.wait().await;

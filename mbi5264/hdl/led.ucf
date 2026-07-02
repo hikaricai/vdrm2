@@ -75,21 +75,21 @@ NET "i_rgbs1"  LOC = "P43"  ;
 NET "i_rgbs2"  LOC = "P42"  ;
 NET "i_rgbs3"  LOC = "P41"  ;
 NET "i_rgbs4"  LOC = "P40"  ;
-NET "o_rgbs0[0]"  LOC = "P1"   | SLEW = SLOW ;
+NET "o_rgbs0[0]"  LOC = "P3"   | SLEW = SLOW ;
 NET "o_rgbs0[1]"  LOC = "P2"   | SLEW = SLOW ;
-NET "o_rgbs0[2]"  LOC = "P3"   | SLEW = SLOW ;
-NET "o_rgbs1[0]"  LOC = "P5"   | SLEW = SLOW ;
+NET "o_rgbs0[2]"  LOC = "P1"   | SLEW = SLOW ;
+NET "o_rgbs1[0]"  LOC = "P7"   | SLEW = SLOW ;
 NET "o_rgbs1[1]"  LOC = "P6"   | SLEW = SLOW ;
-NET "o_rgbs1[2]"  LOC = "P7"   | SLEW = SLOW ;
-NET "o_rgbs2[0]"  LOC = "P8"   | SLEW = SLOW ;
+NET "o_rgbs1[2]"  LOC = "P5"   | SLEW = SLOW ;
+NET "o_rgbs2[0]"  LOC = "P13"   | SLEW = SLOW ;
 NET "o_rgbs2[1]"  LOC = "P12"   | SLEW = SLOW ;
-NET "o_rgbs2[2]"  LOC = "P13"   | SLEW = SLOW ;
-NET "o_rgbs3[0]"  LOC = "P14"   | SLEW = SLOW ;
+NET "o_rgbs2[2]"  LOC = "P8"   | SLEW = SLOW ;
+NET "o_rgbs3[0]"  LOC = "P18"   | SLEW = SLOW ;
 NET "o_rgbs3[1]"  LOC = "P16"   | SLEW = SLOW ;
-NET "o_rgbs3[2]"  LOC = "P18"   | SLEW = SLOW ;
-NET "o_rgbs4[0]"  LOC = "P19"   | SLEW = SLOW ;
+NET "o_rgbs3[2]"  LOC = "P14"   | SLEW = SLOW ;
+NET "o_rgbs4[0]"  LOC = "P21"   | SLEW = SLOW ;
 NET "o_rgbs4[1]"  LOC = "P20"   | SLEW = SLOW ;
-NET "o_rgbs4[2]"  LOC = "P21"   | SLEW = SLOW ;
+NET "o_rgbs4[2]"  LOC = "P19"   | SLEW = SLOW ;
 #PACE: Start of PACE Area Constraints
 
 #PACE: Start of PACE Prohibit Constraints

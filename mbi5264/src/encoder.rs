@@ -131,6 +131,7 @@ impl Encoder {
 struct RGBMeta {
     rgbh: [u8; 4],
     h_div: u8,
+    h_idx: u8,
     h_mod: u8,
     region: u16,
 }
@@ -140,11 +141,13 @@ impl RGBMeta {
     fn new(rgbh: [u8; 4], region: u16) -> Self {
         let h = rgbh[3];
         let h_div = (h >> 4) & 0x0F;
+        let h_idx = h_div / SERIAL_CHIPS as u8;
         let h_div = h_div % SERIAL_CHIPS as u8;
         let h_mod = h & 0x0F;
         Self {
             rgbh,
             h_div,
+            h_idx,
             h_mod,
             region,
         }
@@ -326,6 +329,7 @@ impl PixelSlot {
             rgbh,
             region,
             h_div,
+            h_idx,
             h_mod,
         } = rgbh_meta;
         let [r, g, b, _h] = rgbh;
@@ -333,7 +337,7 @@ impl PixelSlot {
             let r = (r >> i) & 1;
             let g = (g >> i) & 1;
             let b = (b >> i) & 1;
-            let sel_data = h_div >> (i / 4) & 1;
+            let sel_data = (h_idx >> (i / 4)) & 1;
             // let sel_data = (0) >> (i / 4) & 1;
             let rgb = (r | (g << 1) | (b << 2) | (sel_data << 3)) as u16;
             *buf |= rgb << (4 * region);
@@ -359,7 +363,7 @@ impl PixelSlot {
             let r = (r >> i) & 1;
             let g = (g >> i) & 1;
             let b = (b >> i) & 1;
-            let sel_data = rgbh_meta.h_div >> (i / 4) & 1;
+            let sel_data = (rgbh_meta.h_idx >> (i / 4)) & 1;
             // let sel_data = (0) >> (i / 4) & 1;
             let rgb = (r | (g << 1) | (b << 2) | (sel_data << 3)) as u16;
             *buf |= rgb << (4 * region);
