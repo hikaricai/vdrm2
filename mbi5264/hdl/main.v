@@ -122,15 +122,15 @@ end
 
 generate
     for(i=0; i<5; i=i+1) begin : CLK_ARR
-        assign o_rgbs[i][0:0] = uo_rgbs[i][0:0];
+        assign o_rgbs[i][2:2] = uo_rgbs[i][2:2];
         // always @(posedge clk) begin
-        //     o_rgbs_tmp_a[i] <= uo_rgbs[i][2:1];
+        //     o_rgbs_tmp_a[i] <= uo_rgbs[i][1:0];
         // end
 
         always @(negedge clk) begin
-            o_rgbs_tmp_b[i] <= uo_rgbs[i][2:1];
+            o_rgbs_tmp_b[i] <= uo_rgbs[i][1:0];
         end
-        assign o_rgbs[i][2:1] = (pos != neg) ? uo_rgbs[i][2:1] : o_rgbs_tmp_b[i];
+        assign o_rgbs[i][1:0] = (pos != neg) ? uo_rgbs[i][1:0] : o_rgbs_tmp_b[i];
     end
 endgenerate
 

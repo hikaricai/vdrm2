@@ -472,7 +472,8 @@ async fn test_screen_line(
             let offset = 0;
             let h = (i + offset) % 32;
             let h = if h > 15 { h - 16 } else { 15 - h };
-            let h = (loop_idx / 100 + h) % (16 * 9);
+            // let h = h + 16 * 8 - 1;
+            let h = (loop_idx / 100 + h) % (16 * 9) + 16 * 0;
             // let h = h + 16 * 1;
             // let h = h / 2;
             coloum[i] = [255, 255, 255, h as u8];
