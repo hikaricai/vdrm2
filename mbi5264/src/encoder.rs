@@ -1,4 +1,4 @@
-const INDEX_MOD: usize = 2;
+const INDEX_MOD: usize = 1;
 const SERIAL_CHIPS: u32 = 3;
 const LAST_CHIP_IDX: u32 = SERIAL_CHIPS - 1;
 pub struct DmaBuf {
@@ -138,10 +138,9 @@ struct RGBMeta {
 
 impl RGBMeta {
     #[inline]
-    fn new(rgbh: [u8; 4], region: u16) -> Self {
+    fn new(rgbh: [u8; 4], region: u16, h_idx: u8) -> Self {
         let h = rgbh[3];
         let h_div = (h >> 4) & 0x0F;
-        let h_idx = h_div / SERIAL_CHIPS as u8;
         let h_div = h_div % SERIAL_CHIPS as u8;
         let h_mod = h & 0x0F;
         Self {
@@ -158,6 +157,14 @@ pub fn update_frame(
     parser: &mut ColorParser,
     rgbh_coloum: &[crate::RGBH; crate::IMG_HEIGHT],
 ) -> u32 {
+    let mut h_idx_list: [u8; crate::IMG_HEIGHT] = [0; crate::IMG_HEIGHT];
+    for i in 0..crate::IMG_HEIGHT {
+        let idx = if i % 64 == 63 { i - 63 } else { i + 1 };
+        let h = rgbh_coloum[idx][3];
+        let h_div = (h >> 4) & 0x0F;
+        let h_idx = h_div / SERIAL_CHIPS as u8;
+        h_idx_list[i] = h_idx;
+    }
     let region0 = &rgbh_coloum[0..64];
     let region1 = &rgbh_coloum[64..128];
     let region2 = &rgbh_coloum[128..];
@@ -170,9 +177,9 @@ pub fn update_frame(
     for line in 0..64usize {
         // rtt_target::rprintln!("line {}", line);
         // TODO optimize speed
-        let p0 = RGBMeta::new(region0[line], 0);
-        let p1 = RGBMeta::new(region1[line], 1);
-        let p2 = RGBMeta::new(region2[line], 2);
+        let p0 = RGBMeta::new(region0[line], 0, h_idx_list[line]);
+        let p1 = RGBMeta::new(region1[line], 1, h_idx_list[line + 64]);
+        let p2 = RGBMeta::new(region2[line], 2, h_idx_list[line + 64 * 2]);
         let mut pixels = [p0, p1, p2];
         bubble_rgbh(&mut pixels);
         let mut pixel_iter = pixels.iter();
@@ -244,9 +251,9 @@ pub fn update_frame_one_chip(
     for line in 0..64usize {
         // rtt_target::rprintln!("line {}", line);
         // TODO optimize speed
-        let p0 = RGBMeta::new(region0[line], 0);
-        let p1 = RGBMeta::new(region1[line], 1);
-        let p2 = RGBMeta::new(region2[line], 2);
+        let p0 = RGBMeta::new(region0[line], 0, 0);
+        let p1 = RGBMeta::new(region1[line], 1, 0);
+        let p2 = RGBMeta::new(region2[line], 2, 0);
         let mut pixels = [p0, p1, p2];
         bubble_rgbh_one_chip(&mut pixels);
         let mut pixel_iter = pixels.iter();
