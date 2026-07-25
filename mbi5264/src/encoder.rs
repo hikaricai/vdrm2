@@ -27,9 +27,10 @@ impl EncoderCtx {
                 crate::env::IMAGE_ADDR as *const mbi5264_common::AngleImage,
                 len as usize,
             );
+            let len = core::cmp::min(RAM_IMG_SIZE, len as usize);
             let img_ram = core::slice::from_raw_parts_mut(
                 IMG_RAM.as_ptr() as *mut mbi5264_common::AngleImage,
-                RAM_IMG_SIZE,
+                len,
             );
             for (line_ram, line) in img_ram.iter_mut().zip(img_ref) {
                 rtt_target::rprintln!("iter line {}", line.angle);
@@ -450,6 +451,15 @@ impl<'a> ColorParser<'a> {
             meta.data_loops = 2 - 2;
             meta.buf = [0, crate::clocks::LE_HIGH];
 
+            // const SIZE: usize = 4;
+            // meta.data_loops += SIZE as u32 * (empty_size - 1);
+
+            // for _i in 1..empty_size {
+            //     let slice = add_buf_slice(&mut self.buf, SIZE);
+            //     slice.copy_from_slice(&[0; SIZE]);
+            //     slice[SIZE - 1] = crate::clocks::LE_HIGH;
+            // }
+
             // many le
             for _i in 1..empty_size {
                 *self.loops += 1;
@@ -585,4 +595,10 @@ unsafe fn add_buf_ptr<B, T>(buf: &mut *mut B) -> &mut T {
     let t: &mut T = core::mem::transmute(*buf);
     *buf = buf.add(core::mem::size_of::<T>() / core::mem::size_of::<B>());
     t
+}
+
+unsafe fn add_buf_slice<B>(buf: &mut *mut B, len: usize) -> &mut [B] {
+    let slice = core::slice::from_raw_parts_mut(*buf, len);
+    *buf = buf.add(len);
+    slice
 }

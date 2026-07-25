@@ -8,6 +8,7 @@
 //! updating `memory.x` ensures a rebuild of the application with the
 //! new memory settings.
 use std::env;
+use std::fmt::Write as FMT;
 use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
@@ -18,7 +19,7 @@ fn brighten_gamma(v: u8, gamma: f32) -> u8 {
 }
 
 fn gen_threed_surface() -> vdrm_alg::PixelSurface {
-    let path = "/Users/hikari/rust/vdrmtd/output_rgbh.png";
+    let path = "/Users/hikari/rust/vdrmtd/output_rgbh_1784951521_front.png";
     let img = image::open(path).unwrap();
     let rgb_img = img.as_rgb8().unwrap();
     let width = img.width();
@@ -224,6 +225,22 @@ fn main() {
                 unsafe { std::slice::from_raw_parts(angle_list.as_ptr() as *const u8, img_size) };
             buf.extend_from_slice(img_buf);
             std::fs::write(image_path, buf).unwrap();
+
+            let dbg_path = image_dir.join(format!("img{idx}_{len}.dbg"));
+            let mut dbg_buf = String::new();
+            writeln!(&mut dbg_buf, "init_angle {init_angle}").unwrap();
+            for angle_img in angle_list {
+                write!(&mut dbg_buf, "{:03}:", angle_img.angle).unwrap();
+                for (idx, p) in angle_img.coloum.iter().enumerate() {
+                    if p[0..3] == [0; 3] {
+                        continue;
+                    }
+                    let h = p[3];
+                    write!(&mut dbg_buf, "[{idx:03?},{h:03?}] ").unwrap();
+                }
+                dbg_buf += "\n";
+            }
+            std::fs::write(dbg_path, dbg_buf).unwrap();
         }
     }
     // skip build
