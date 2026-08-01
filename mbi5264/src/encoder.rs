@@ -8,8 +8,8 @@ pub struct DmaBuf {
 
 // 再大就异常了
 const RAM_IMG_SIZE: usize = 104;
-static mut IMG_RAM: [mbi5264_common::AngleImage; RAM_IMG_SIZE] =
-    [mbi5264_common::AngleImage::new(0); RAM_IMG_SIZE];
+// static mut IMG_RAM: [mbi5264_common::AngleImage; RAM_IMG_SIZE] =
+//     [mbi5264_common::AngleImage::new(0); RAM_IMG_SIZE];
 struct EncoderCtx {
     img: &'static [mbi5264_common::AngleImage],
     idx_mod: usize,
@@ -26,14 +26,14 @@ impl EncoderCtx {
                 crate::env::IMAGE_ADDR as *const mbi5264_common::AngleImage,
                 len as usize,
             );
-            let img_ram = core::slice::from_raw_parts_mut(
-                IMG_RAM.as_ptr() as *mut mbi5264_common::AngleImage,
-                RAM_IMG_SIZE,
-            );
-            for (line_ram, line) in img_ram.iter_mut().zip(img_ref) {
-                *line_ram = *line;
-            }
-            img_ram
+            // let img_ram = core::slice::from_raw_parts_mut(
+            //     IMG_RAM.as_ptr() as *mut mbi5264_common::AngleImage,
+            //     RAM_IMG_SIZE,
+            // );
+            // for (line_ram, line) in img_ram.iter_mut().zip(img_ref) {
+            //     *line_ram = *line;
+            // }
+            img_ref
         };
         rtt_target::rprintln!("total angles {}", img.len());
         rtt_target::rprintln!("first angle {}", img[0].angle);
@@ -430,23 +430,23 @@ impl<'a> ColorParser<'a> {
             // // 4 cause emi
             // // const SIZE: usize = 4;
             // // emi with 4
-            const SIZE: usize = 4;
-            meta.data_loops += SIZE as u32 * (empty_size - 1);
+            // const SIZE: usize = 4;
+            // meta.data_loops += SIZE as u32 * (empty_size - 1);
 
-            for _i in 1..empty_size {
-                let slice = add_buf_slice(&mut self.buf, SIZE);
-                slice.copy_from_slice(&[0; SIZE]);
-                slice[SIZE - 1] = crate::clocks::LE_HIGH;
-            }
+            // for _i in 1..empty_size {
+            //     let slice = add_buf_slice(&mut self.buf, SIZE);
+            //     slice.copy_from_slice(&[0; SIZE]);
+            //     slice[SIZE - 1] = crate::clocks::LE_HIGH;
+            // }
 
             // many le
-            // for _i in 1..empty_size {
-            //     *self.loops += 1;
-            //     let meta: &mut ColorTranserTail = add_buf_ptr(&mut self.buf);
-            //     meta.empty_loops = EMPTY_LEN_U32_CYCLES - 3;
-            //     meta.data_loops = 2 - 2;
-            //     meta.buf = [0, crate::clocks::LE_HIGH];
-            // }
+            for _i in 1..empty_size {
+                *self.loops += 1;
+                let meta: &mut ColorTranserTail = add_buf_ptr(&mut self.buf);
+                meta.empty_loops = EMPTY_LEN_U32_CYCLES - 3;
+                meta.data_loops = 2 - 2;
+                meta.buf = [0, crate::clocks::LE_HIGH];
+            }
         }
         self.last_empties = 16 * 9;
     }
