@@ -289,19 +289,20 @@ async fn main(spawner: Spawner) {
     // }
 
     //
-    test_screen(&mut cmd_pio, &mut line, &mut led_pin).await;
+    // test_screen(&mut cmd_pio, &mut line, &mut led_pin).await;
     // test_screen_line(&mut cmd_pio, &mut line, &mut led_pin).await;
     // test_screen_line_onechip(&mut cmd_pio, &mut line, &mut led_pin).await;
     // test_screen_onechip(&mut cmd_pio, &mut line, &mut led_pin).await;
     // must return to run test_screen
-    return;
+    // return;
 
     // rtt_target::rprintln!("first sync_signal");
     // let mut cmd_iter = core::iter::repeat(UMINI_CMDS.iter()).flatten();
-    let mut dbg_pin = gpio::Output::new(p.PIN_22, gpio::Level::Low);
+    let mut dbg_pin = gpio::Output::new(p.PIN_24, gpio::Level::Low);
     // encode_sinal.signal(0);
     let mut encoder = encoder::Encoder::new();
     let mut dma_buf = encoder.encode_next(0).unwrap();
+    let mut loop_angle = 0u32;
     let init_angle = unsafe { *(env::EXT_ADDR as *const u32) };
     rtt_target::rprintln!("init_angle {}", init_angle);
     loop {
@@ -319,7 +320,7 @@ async fn main(spawner: Spawner) {
         } = motor_sync_sinal.wait().await;
         let dbg = cnt % DBG_INTREVAL == 0;
         DBG.store(dbg, core::sync::atomic::Ordering::Relaxed);
-
+        loop_angle = 0;
         loop {
             total_frames += 1;
             dbg_pin.set_high();
@@ -329,7 +330,7 @@ async fn main(spawner: Spawner) {
             let now = Instant::now();
             let cur_angle = (now.as_ticks() - last_tick.as_ticks()) as u32 / ticks_per_angle;
 
-            if cur_angle >= ANGLES_PER_MIRROR {
+            if cur_angle + 7 >= ANGLES_PER_MIRROR {
                 dma_buf = encoder.encode_next(0).unwrap();
                 cmd_pio.wait().await;
                 line.wait_stop().await;
@@ -342,16 +343,14 @@ async fn main(spawner: Spawner) {
             // let offset = ANGLES_PER_MIRROR / 2;
             // show_angle应该是这个值
             // let show_angle = cur_angle + (TOTAL_ANGLES / 4) - ANGLES_PER_MIRROR / 2;
-            let show_angle = cur_angle + init_angle;
+            let show_angle = cur_angle + init_angle - loop_angle;
             match encoder.encode_next(show_angle) {
                 Some(buf) => {
                     dma_buf = buf;
                 }
                 None => {
+                    loop_angle = cur_angle;
                     dma_buf = encoder.encode_next(0).unwrap();
-                    cmd_pio.wait().await;
-                    line.wait_stop().await;
-                    break;
                 }
             }
             let img_angle = dma_buf.img_angle;
