@@ -303,7 +303,7 @@ async fn main(spawner: Spawner) {
     let mut encoder = encoder::Encoder::new();
     let mut dma_buf = encoder.encode_next(0).unwrap();
     let mut loop_angle = 0u32;
-    let init_angle = unsafe { *(env::EXT_ADDR as *const u32) };
+    let init_angle = encoder.init_angle();
     rtt_target::rprintln!("init_angle {}", init_angle);
     loop {
         // let &(cmd, param) = cmd_iter.next().unwrap();

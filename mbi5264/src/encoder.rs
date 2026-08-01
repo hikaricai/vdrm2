@@ -12,6 +12,8 @@ const RAM_IMG_SIZE: usize = 100;
 static mut IMG_RAM: [mbi5264_common::AngleImage; RAM_IMG_SIZE] =
     [mbi5264_common::AngleImage::new(0); RAM_IMG_SIZE];
 struct EncoderCtx {
+    imgs_addr_list: &'static [u32],
+    init_angle: u32,
     img: &'static [mbi5264_common::AngleImage],
     idx_mod: usize,
     img_idx: usize,
@@ -21,10 +23,27 @@ struct EncoderCtx {
 
 impl EncoderCtx {
     fn new() -> Self {
-        let img: &'static [mbi5264_common::AngleImage] = unsafe {
-            let len = *(crate::env::IMAGE_LEN_ADDR as *const u32);
+        let imgs_addr_list = unsafe {
+            let len = *(crate::env::IMGS_LEN_ADDR as *const u32);
+            rtt_target::rprintln!("total imgs {}", len);
+            let imgs_addr_list: &'static [u32] =
+                core::slice::from_raw_parts(crate::env::IMGS_LIST_ADDR as *const u32, len as usize);
+            for imgs_addr in imgs_addr_list {
+                rtt_target::rprintln!("imgs_addr {}", *imgs_addr);
+            }
+            imgs_addr_list
+        };
+        let (img, init_angle): (&'static [mbi5264_common::AngleImage], u32) = unsafe {
+            let img_base_addr = crate::env::IMGS_LEN_ADDR + imgs_addr_list[0] as usize;
+            let img_len_addr = img_base_addr + core::mem::size_of::<u32>();
+
+            let init_angle = *(img_base_addr as *const u32);
+
+            let img_addr = img_len_addr + core::mem::size_of::<u32>();
+            let len = *(img_len_addr as *const u32);
+            rtt_target::rprintln!("img angles {}", len);
             let img_ref: &'static [mbi5264_common::AngleImage] = core::slice::from_raw_parts(
-                crate::env::IMAGE_ADDR as *const mbi5264_common::AngleImage,
+                img_addr as *const mbi5264_common::AngleImage,
                 len as usize,
             );
             let len = core::cmp::min(RAM_IMG_SIZE, len as usize);
@@ -37,12 +56,14 @@ impl EncoderCtx {
                 *line_ram = *line;
                 rtt_target::rprintln!("line_ram {}", line_ram.angle);
             }
-            img_ram
+            (img_ram, init_angle)
         };
         rtt_target::rprintln!("total angles {}", img.len());
         rtt_target::rprintln!("first angle {}", img[0].angle);
 
         Self {
+            init_angle,
+            imgs_addr_list,
             img,
             idx_mod: 0,
             img_idx: 0,
@@ -93,6 +114,9 @@ impl Encoder {
             buf0: [0; 16384],
             buf1: [0; 16384],
         }
+    }
+    pub fn init_angle(&self) -> u32 {
+        self.ctx.init_angle
     }
     pub fn encode_next(&mut self, angle: u32) -> Option<DmaBuf> {
         let angle_line = self.ctx.next_img_line(angle)?;
