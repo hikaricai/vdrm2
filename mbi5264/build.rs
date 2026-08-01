@@ -19,7 +19,7 @@ fn brighten_gamma(v: u8, gamma: f32) -> u8 {
 }
 
 fn gen_threed_surface() -> vdrm_alg::PixelSurface {
-    let path = "/Users/hikari/rust/vdrmtd/output_rgbh_1784951521_front.png";
+    let path = "/Users/hikari/rust/vdrmtd/output_rgbh_1784963625housecar.png";
     let img = image::open(path).unwrap();
     let rgb_img = img.as_rgb8().unwrap();
     let width = img.width();

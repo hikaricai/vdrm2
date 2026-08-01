@@ -24,6 +24,7 @@ const TOTAL_ANGLES: u32 = consts::TOTAL_ANGLES as u32;
 const TOTAL_MIRRORS: u32 = 8;
 const ANGLES_PER_MIRROR: u32 = TOTAL_ANGLES / TOTAL_MIRRORS;
 const DBG_INTREVAL: usize = 100;
+const IMG_UPDATE_INTREVAL: usize = 200;
 // const SHOW_ANGLE_MAX: u32 = ANGLES_PER_MIRROR + 190;
 
 static MOTOR_SYNC_SIGNAL: StaticCell<
@@ -302,9 +303,6 @@ async fn main(spawner: Spawner) {
     // encode_sinal.signal(0);
     let mut encoder = encoder::Encoder::new();
     let mut dma_buf = encoder.encode_next(0).unwrap();
-    let mut loop_angle = 0u32;
-    let init_angle = encoder.init_angle();
-    rtt_target::rprintln!("init_angle {}", init_angle);
     loop {
         // let &(cmd, param) = cmd_iter.next().unwrap();
         // cmd_pio.refresh2(&confirm_cmd);
@@ -313,6 +311,8 @@ async fn main(spawner: Spawner) {
         let mut late_frames = 0u32;
         let mut fast_frames = 0u32;
         let mut fast_angles = 0u32;
+        let init_angle = encoder.init_angle();
+
         let SyncState {
             last_tick,
             ticks_per_angle,
@@ -320,7 +320,7 @@ async fn main(spawner: Spawner) {
         } = motor_sync_sinal.wait().await;
         let dbg = cnt % DBG_INTREVAL == 0;
         DBG.store(dbg, core::sync::atomic::Ordering::Relaxed);
-        loop_angle = 0;
+        let mut loop_angle = 0u32;
         loop {
             total_frames += 1;
             dbg_pin.set_high();
@@ -395,6 +395,9 @@ async fn main(spawner: Spawner) {
             led_pin.toggle();
         }
         cnt += 1;
+        if cnt % IMG_UPDATE_INTREVAL == 0 {
+            encoder.update_to_next_image();
+        }
     }
 }
 

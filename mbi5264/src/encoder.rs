@@ -11,12 +11,41 @@ pub struct DmaBuf {
 const RAM_IMG_SIZE: usize = 100;
 static mut IMG_RAM: [mbi5264_common::AngleImage; RAM_IMG_SIZE] =
     [mbi5264_common::AngleImage::new(0); RAM_IMG_SIZE];
+
+fn load_img(img_addr_offset: usize) -> (&'static [mbi5264_common::AngleImage], u32) {
+    let (img, init_angle): (&'static [mbi5264_common::AngleImage], u32) = unsafe {
+        let img_base_addr = crate::env::IMGS_LEN_ADDR + img_addr_offset;
+        let img_len_addr = img_base_addr + core::mem::size_of::<u32>();
+
+        let init_angle = *(img_base_addr as *const u32);
+
+        let img_addr = img_len_addr + core::mem::size_of::<u32>();
+        let len = *(img_len_addr as *const u32);
+        let img_ref: &'static [mbi5264_common::AngleImage] = core::slice::from_raw_parts(
+            img_addr as *const mbi5264_common::AngleImage,
+            len as usize,
+        );
+        let len = core::cmp::min(RAM_IMG_SIZE, len as usize);
+        let img_ram = core::slice::from_raw_parts_mut(
+            IMG_RAM.as_ptr() as *mut mbi5264_common::AngleImage,
+            len,
+        );
+        for (line_ram, line) in img_ram.iter_mut().zip(img_ref) {
+            // rtt_target::rprintln!("iter line {}", line.angle);
+            *line_ram = *line;
+            // rtt_target::rprintln!("line_ram {}", line_ram.angle);
+        }
+        (img_ram, init_angle)
+    };
+    (img, init_angle)
+}
 struct EncoderCtx {
     imgs_addr_list: &'static [u32],
+    img_idx: usize,
     init_angle: u32,
     img: &'static [mbi5264_common::AngleImage],
     idx_mod: usize,
-    img_idx: usize,
+    line_idx: usize,
     last_angle: u32,
     max_img_angle: u32,
 }
@@ -33,63 +62,55 @@ impl EncoderCtx {
             }
             imgs_addr_list
         };
-        let (img, init_angle): (&'static [mbi5264_common::AngleImage], u32) = unsafe {
-            let img_base_addr = crate::env::IMGS_LEN_ADDR + imgs_addr_list[0] as usize;
-            let img_len_addr = img_base_addr + core::mem::size_of::<u32>();
 
-            let init_angle = *(img_base_addr as *const u32);
+        let (img, init_angle) = load_img(imgs_addr_list[0] as usize);
 
-            let img_addr = img_len_addr + core::mem::size_of::<u32>();
-            let len = *(img_len_addr as *const u32);
-            rtt_target::rprintln!("img angles {}", len);
-            let img_ref: &'static [mbi5264_common::AngleImage] = core::slice::from_raw_parts(
-                img_addr as *const mbi5264_common::AngleImage,
-                len as usize,
-            );
-            let len = core::cmp::min(RAM_IMG_SIZE, len as usize);
-            let img_ram = core::slice::from_raw_parts_mut(
-                IMG_RAM.as_ptr() as *mut mbi5264_common::AngleImage,
-                len,
-            );
-            for (line_ram, line) in img_ram.iter_mut().zip(img_ref) {
-                rtt_target::rprintln!("iter line {}", line.angle);
-                *line_ram = *line;
-                rtt_target::rprintln!("line_ram {}", line_ram.angle);
-            }
-            (img_ram, init_angle)
-        };
         rtt_target::rprintln!("total angles {}", img.len());
-        rtt_target::rprintln!("first angle {}", img[0].angle);
+        rtt_target::rprintln!("first line_angle {}", img[0].angle);
+        rtt_target::rprintln!("init_angle {}", init_angle);
 
         Self {
             init_angle,
             imgs_addr_list,
+            img_idx: 0,
             img,
             idx_mod: 0,
-            img_idx: 0,
+            line_idx: 0,
             last_angle: 0,
             max_img_angle: img.last().unwrap().angle,
         }
     }
 
+    pub fn update_to_next_image(&mut self) {
+        let img_idx = (self.img_idx + 1) % self.imgs_addr_list.len();
+        let (img, init_angle) = load_img(self.imgs_addr_list[img_idx] as usize);
+        self.img_idx = img_idx;
+        self.init_angle = init_angle;
+        self.img = img;
+        self.idx_mod = 0;
+        self.line_idx = 0;
+        self.last_angle = 0;
+        self.max_img_angle = img.last().unwrap().angle;
+    }
+
     fn next_img_line(&mut self, angle: u32) -> Option<&mbi5264_common::AngleImage> {
         if angle < self.last_angle {
-            self.img_idx = self.idx_mod;
+            self.line_idx = self.idx_mod;
             self.idx_mod += 1;
             self.idx_mod %= INDEX_MOD;
         }
-        if self.img_idx >= self.img.len() {
-            self.img_idx = self.idx_mod;
+        if self.line_idx >= self.img.len() {
+            self.line_idx = self.idx_mod;
         }
         self.last_angle = angle;
         if angle > self.max_img_angle {
             return None;
         }
         loop {
-            let angle_line = &self.img[self.img_idx];
-            self.img_idx += INDEX_MOD;
-            if self.img_idx >= self.img.len() {
-                self.img_idx = self.idx_mod;
+            let angle_line = &self.img[self.line_idx];
+            self.line_idx += INDEX_MOD;
+            if self.line_idx >= self.img.len() {
+                self.line_idx = self.idx_mod;
                 return None;
             }
             if angle_line.angle >= angle {
@@ -114,6 +135,9 @@ impl Encoder {
             buf0: [0; 16384],
             buf1: [0; 16384],
         }
+    }
+    pub fn update_to_next_image(&mut self) {
+        self.ctx.update_to_next_image();
     }
     pub fn init_angle(&self) -> u32 {
         self.ctx.init_angle
