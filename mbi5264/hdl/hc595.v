@@ -22,13 +22,13 @@ module hc595(
     input        clk,
     input        latch,
     input        sr_in,
-    output reg [1:0] q
+    output reg [2:0] q
 );
 
-reg [1:0] shift_reg;
+reg [2:0] shift_reg;
 
 always @(posedge clk) begin
-    shift_reg <= {shift_reg[0:0], sr_in};
+    shift_reg <= {shift_reg[1:0], sr_in};
 end
 
 
