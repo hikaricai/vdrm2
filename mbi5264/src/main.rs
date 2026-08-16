@@ -291,11 +291,11 @@ async fn main(spawner: Spawner) {
 
     //
     // test_screen(&mut cmd_pio, &mut line, &mut led_pin).await;
-    // test_screen_line(&mut cmd_pio, &mut line, &mut led_pin).await;
+    test_screen_line(&mut cmd_pio, &mut line, &mut led_pin).await;
     // test_screen_line_onechip(&mut cmd_pio, &mut line, &mut led_pin).await;
     // test_screen_onechip(&mut cmd_pio, &mut line, &mut led_pin).await;
     // must return to run test_screen
-    // return;
+    return;
 
     // rtt_target::rprintln!("first sync_signal");
     // let mut cmd_iter = core::iter::repeat(UMINI_CMDS.iter()).flatten();
@@ -457,10 +457,11 @@ async fn test_screen_line(
         // let h = i % 16;
         let h = i % 32;
         let h = if h > 15 { h - 16 } else { 15 - h };
-        let h = h + 16 * 4;
-        let h = 103;
+        // let h = h + 16 * 4;
+        // let h = 103;
         let line = i % 64;
         let gray = line as u8 * 4 + 3;
+        let gray = 255;
         // let b = if gray < 64 { gray + 30 } else { gray };
         coloum[i] = [gray, gray, gray, h as u8];
     }

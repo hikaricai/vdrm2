@@ -24,7 +24,7 @@ module decoder(
     output wire [4:0] o
 );
 
-wire [2:0] y;
+wire [4:0] y;
 // (* KEEP = "TRUE" *) wire [8:0] o1;
 // (* KEEP = "TRUE" *) wire [8:0] o2;
 

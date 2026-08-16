@@ -1,5 +1,5 @@
 const INDEX_MOD: usize = 1;
-const SERIAL_CHIPS: u32 = 3;
+const SERIAL_CHIPS: u32 = 2;
 const LAST_CHIP_IDX: u32 = SERIAL_CHIPS - 1;
 pub struct DmaBuf {
     pub img_angle: u32,
@@ -393,12 +393,13 @@ impl PixelSlot {
             let r = (r >> i) & 1;
             let g = (g >> i) & 1;
             let b = (b >> i) & 1;
-            let sel_data = (h_idx >> (i / 4)) & 1;
+            // let sel_data = (h_idx >> (i / 4)) & 1;
+            let sel_data = 1;
             // let sel_data = (0) >> (i / 4) & 1;
             let rgb = (r | (g << 1) | (b << 2) | (sel_data << 3)) as u16;
             *buf |= rgb << (4 * region);
-            let sel_clk = ((i as u16 + 1) / 2) & 1;
-            *buf |= sel_clk << 13;
+            // let sel_clk = ((i as u16 + 1) / 2) & 1;
+            // *buf |= sel_clk << 13;
             let sel_lat = 1;
             *buf |= sel_lat << 14;
         }
@@ -420,7 +421,7 @@ impl PixelSlot {
             let g = (g >> i) & 1;
             let b = (b >> i) & 1;
             let sel_data = (rgbh_meta.h_idx >> (i / 4)) & 1;
-            // let sel_data = (0) >> (i / 4) & 1;
+            let sel_data = 1;
             let rgb = (r | (g << 1) | (b << 2) | (sel_data << 3)) as u16;
             *buf |= rgb << (4 * region);
         }
