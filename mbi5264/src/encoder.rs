@@ -7,9 +7,9 @@ pub struct DmaBuf {
 }
 
 // 再大就异常了
-const RAM_IMG_SIZE: usize = 104;
-// static mut IMG_RAM: [mbi5264_common::AngleImage; RAM_IMG_SIZE] =
-//     [mbi5264_common::AngleImage::new(0); RAM_IMG_SIZE];
+const RAM_IMG_SIZE: usize = 153;
+static mut IMG_RAM: [mbi5264_common::AngleImage; RAM_IMG_SIZE] =
+    [mbi5264_common::AngleImage::new(0); RAM_IMG_SIZE];
 struct EncoderCtx {
     img: &'static [mbi5264_common::AngleImage],
     idx_mod: usize,
@@ -26,14 +26,17 @@ impl EncoderCtx {
                 crate::env::IMAGE_ADDR as *const mbi5264_common::AngleImage,
                 len as usize,
             );
-            // let img_ram = core::slice::from_raw_parts_mut(
-            //     IMG_RAM.as_ptr() as *mut mbi5264_common::AngleImage,
-            //     RAM_IMG_SIZE,
-            // );
-            // for (line_ram, line) in img_ram.iter_mut().zip(img_ref) {
-            //     *line_ram = *line;
-            // }
-            img_ref
+            rtt_target::rprintln!("flash total angles {}", len);
+            // 实际拷贝帧数受限于 RAM 容量和 flash 帧数，取较小值
+            let copy_len = core::cmp::min(RAM_IMG_SIZE, len as usize);
+            let img_ram = core::slice::from_raw_parts_mut(
+                IMG_RAM.as_ptr() as *mut mbi5264_common::AngleImage,
+                copy_len,
+            );
+            for (line_ram, line) in img_ram.iter_mut().zip(img_ref) {
+                *line_ram = *line;
+            }
+            img_ram
         };
         rtt_target::rprintln!("total angles {}", img.len());
         rtt_target::rprintln!("first angle {}", img[0].angle);
