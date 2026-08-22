@@ -34,6 +34,52 @@ static DBG: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new
 
 static SW1_EXECUTOR: InterruptExecutor = InterruptExecutor::new();
 
+// 由链接脚本(link.x)提供: 栈顶(高地址)与栈底(低地址, 即 .bss 顶)
+extern "C" {
+    static _stack_start: u32;
+    static _stack_end: u32;
+}
+const STACK_SENTINEL: u32 = 0xDEAD_BEEF;
+
+/// 从栈底(低地址)向上涂哨兵, 直到当前 SP 下方留 64B 边距。
+/// 只涂当前未使用的深处区域, 不触碰活跃栈帧; 需在关注的工作负载开始前调用一次。
+/// 全程关中断: 中断执行器与本函数共用 MSP, 若涂色途中被抢占, 中断会用到当前 SP
+/// 以下的内存, 恰是我们正在涂的区域, 关中断可避免踩到中断的活跃栈帧。
+#[inline(never)]
+fn paint_stack() {
+    cortex_m::interrupt::free(|_| {
+        let lo = core::ptr::addr_of!(_stack_end) as usize;
+        let sp = cortex_m::register::msp::read() as usize;
+        // 4 字节对齐, 留边距避免涂到本函数正在用的栈帧下沿
+        let hi = sp.saturating_sub(64) & !3;
+        let mut p = lo as *mut u32;
+        let end = hi as *mut u32;
+        while (p as usize) < (end as usize) {
+            unsafe {
+                core::ptr::write_volatile(p, STACK_SENTINEL);
+                p = p.add(1);
+            }
+        }
+    });
+}
+
+/// 返回栈历史峰值(字节): 从栈底找第一个被改写(非哨兵)的字。
+fn stack_high_water() -> u32 {
+    let lo = core::ptr::addr_of!(_stack_end) as usize;
+    let top = core::ptr::addr_of!(_stack_start) as usize;
+    let mut p = lo as *const u32;
+    let end = top as *const u32;
+    while (p as usize) < (end as usize) {
+        unsafe {
+            if core::ptr::read_volatile(p) != STACK_SENTINEL {
+                break;
+            }
+            p = p.add(1);
+        }
+    }
+    (top - (p as usize)) as u32
+}
+
 #[interrupt]
 unsafe fn SWI_IRQ_1() {
     SW1_EXECUTOR.on_interrupt()
@@ -210,7 +256,7 @@ async fn main(spawner: Spawner) {
 
     let motor_sync_sinal = MOTOR_SYNC_SIGNAL.init(embassy_sync::signal::Signal::new());
     let motor_sync_sinal = &*motor_sync_sinal;
-    let is_mock = false;
+    let is_mock = true;
     let sync_signal = SyncSignal::new(Input::new(p.PIN_28, gpio::Pull::None), is_mock);
 
     let spawner1 = SW1_EXECUTOR.start(interrupt::SWI_IRQ_1);
@@ -270,10 +316,13 @@ async fn main(spawner: Spawner) {
         cmd_pio.refresh2(&Command::new(cmd as u8, param));
     }
 
+    // 在进入主循环前涂色一次, 之后周期性读取峰值
+    paint_stack();
+    rtt_target::rprintln!("stack peak {} B", stack_high_water());
     //
     test_screen(&mut cmd_pio, &mut line, &mut led_pin).await;
     // must return to run test_screen
-    return;
+    // return;
 
     // rtt_target::rprintln!("first sync_signal");
     // let mut cmd_iter = core::iter::repeat(UMINI_CMDS.iter()).flatten();
@@ -370,6 +419,7 @@ async fn main(spawner: Spawner) {
             rtt_target::rprintln!("fast_frames {}", fast_frames);
             rtt_target::rprintln!("fast_angles {}", fast_angles);
             rtt_target::rprintln!("total_frames {}\n", total_frames);
+            rtt_target::rprintln!("stack peak {} B", stack_high_water());
         }
         if cnt & 0x1 == 0 {
             led_pin.toggle();
@@ -406,6 +456,7 @@ async fn test_screen(
             last = now;
             let fps = 0xFFF * 1024 / ms;
             rtt_target::rprintln!("fps {}", fps);
+            rtt_target::rprintln!("stack peak {} B", stack_high_water());
             led_pin.toggle();
         }
     }
