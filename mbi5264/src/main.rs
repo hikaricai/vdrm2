@@ -457,7 +457,7 @@ async fn test_screen_line(
         // let h = i % 16;
         let h = i % 32;
         let h = if h > 15 { h - 16 } else { 15 - h };
-        // let h = h + 16 * 4;
+        let h = h + 16 * 2;
         // let h = 103;
         let line = i % 64;
         let gray = line as u8 * 4 + 3;

@@ -393,8 +393,8 @@ impl PixelSlot {
             let r = (r >> i) & 1;
             let g = (g >> i) & 1;
             let b = (b >> i) & 1;
-            // let sel_data = (h_idx >> (i / 4)) & 1;
-            let sel_data = 1;
+            let sel_data = (h_idx >> (i / 2)) & 1;
+            // let sel_data = 1;
             // let sel_data = (0) >> (i / 4) & 1;
             let rgb = (r | (g << 1) | (b << 2) | (sel_data << 3)) as u16;
             *buf |= rgb << (4 * region);
@@ -420,8 +420,8 @@ impl PixelSlot {
             let r = (r >> i) & 1;
             let g = (g >> i) & 1;
             let b = (b >> i) & 1;
-            let sel_data = (rgbh_meta.h_idx >> (i / 4)) & 1;
-            let sel_data = 1;
+            let sel_data = (rgbh_meta.h_idx >> (i / 2)) & 1;
+            // let sel_data = 1;
             let rgb = (r | (g << 1) | (b << 2) | (sel_data << 3)) as u16;
             *buf |= rgb << (4 * region);
         }
