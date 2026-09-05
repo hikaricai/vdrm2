@@ -102,7 +102,7 @@ impl SyncSignal {
     }
     async fn wait_sync(&mut self) {
         if self.is_mock {
-            Timer::at(self.last + Duration::from_millis(1000 / 24)).await;
+            Timer::at(self.last + Duration::from_millis(1000 / 20)).await;
             self.last = Instant::now();
             return;
         }
@@ -211,7 +211,7 @@ async fn main(spawner: Spawner) {
 
     let motor_sync_sinal = MOTOR_SYNC_SIGNAL.init(embassy_sync::signal::Signal::new());
     let motor_sync_sinal = &*motor_sync_sinal;
-    let is_mock = false;
+    let is_mock = true;
     let sync_signal = SyncSignal::new(Input::new(p.PIN_28, gpio::Pull::None), is_mock);
 
     let spawner1 = SW1_EXECUTOR.start(interrupt::SWI_IRQ_1);
@@ -291,11 +291,9 @@ async fn main(spawner: Spawner) {
 
     //
     // test_screen(&mut cmd_pio, &mut line, &mut led_pin).await;
-    test_screen_line(&mut cmd_pio, &mut line, &mut led_pin).await;
-    // test_screen_line_onechip(&mut cmd_pio, &mut line, &mut led_pin).await;
-    // test_screen_onechip(&mut cmd_pio, &mut line, &mut led_pin).await;
+    // test_screen_line(&mut cmd_pio, &mut line, &mut led_pin).await;
     // must return to run test_screen
-    return;
+    // return;
 
     // rtt_target::rprintln!("first sync_signal");
     // let mut cmd_iter = core::iter::repeat(UMINI_CMDS.iter()).flatten();
@@ -320,7 +318,6 @@ async fn main(spawner: Spawner) {
         } = motor_sync_sinal.wait().await;
         let dbg = cnt % DBG_INTREVAL == 0;
         DBG.store(dbg, core::sync::atomic::Ordering::Relaxed);
-        let mut loop_angle = 0u32;
         loop {
             total_frames += 1;
             dbg_pin.set_high();
@@ -330,7 +327,7 @@ async fn main(spawner: Spawner) {
             let now = Instant::now();
             let cur_angle = (now.as_ticks() - last_tick.as_ticks()) as u32 / ticks_per_angle;
 
-            if cur_angle + 7 >= ANGLES_PER_MIRROR {
+            if cur_angle >= ANGLES_PER_MIRROR {
                 dma_buf = encoder.encode_next(0).unwrap();
                 cmd_pio.wait().await;
                 line.wait_stop().await;
@@ -343,14 +340,16 @@ async fn main(spawner: Spawner) {
             // let offset = ANGLES_PER_MIRROR / 2;
             // show_angle应该是这个值
             // let show_angle = cur_angle + (TOTAL_ANGLES / 4) - ANGLES_PER_MIRROR / 2;
-            let show_angle = cur_angle + init_angle - loop_angle;
+            let show_angle = cur_angle + init_angle;
             match encoder.encode_next(show_angle) {
                 Some(buf) => {
                     dma_buf = buf;
                 }
                 None => {
-                    loop_angle = cur_angle;
                     dma_buf = encoder.encode_next(0).unwrap();
+                    cmd_pio.wait().await;
+                    line.wait_stop().await;
+                    break;
                 }
             }
             let img_angle = dma_buf.img_angle;
@@ -453,37 +452,37 @@ async fn test_screen_line(
     let mut buf = [0; 16384];
 
     let mut coloum: [crate::RGBH; crate::IMG_HEIGHT] = [[255, 255, 255, 0]; crate::IMG_HEIGHT];
-    for i in 0..crate::IMG_HEIGHT {
-        // let h = i % 16;
-        let h = i % 32;
-        let h = if h > 15 { h - 16 } else { 15 - h };
-        let h = h + 16 * 2;
-        // let h = 103;
-        let line = i % 64;
-        let gray = line as u8 * 4 + 3;
-        let gray = 255;
-        // let b = if gray < 64 { gray + 30 } else { gray };
-        coloum[i] = [gray, gray, gray, h as u8];
-    }
+    // for i in 0..crate::IMG_HEIGHT {
+    //     // let h = i % 16;
+    //     let h = i % 32;
+    //     let h = if h > 15 { h - 16 } else { 15 - h };
+    //     let h = h + 16 * 1;
+    //     // let h = 103;
+    //     let line = i % 64;
+    //     let gray = line as u8 * 4 + 3;
+    //     let gray = 255;
+    //     // let b = if gray < 64 { gray + 30 } else { gray };
+    //     coloum[i] = [gray, gray, gray, h as u8];
+    // }
     let mut parser = encoder::ColorParser::new(&mut buf);
     let len = encoder::update_frame(&mut parser, &coloum);
 
     let mut loop_idx = 0usize;
     loop {
-        // for i in 0..crate::IMG_HEIGHT {
-        //     // let offset = i / 64;
-        //     let offset = 0;
-        //     let h = (i + offset) % 32;
-        //     let h = if h > 15 { h - 16 } else { 15 - h };
-        //     // let h = h + 16 * 8 - 1;
-        //     let h = (loop_idx / 100 + h) % (16 * 9) + 16 * 0;
-        //     // let h = h + 16 * 1;
-        //     // let h = h / 2;
-        //     coloum[i] = [255, 255, 255, h as u8];
-        // }
-        // buf = [0; 16384];
-        // let mut parser = encoder::ColorParser::new(&mut buf);
-        // let len = encoder::update_frame(&mut parser, &coloum);
+        for i in 0..crate::IMG_HEIGHT {
+            // let offset = i / 64;
+            let offset = 0;
+            let h = (i + offset) % 32;
+            let h = if h > 15 { h - 16 } else { 15 - h };
+            // let h = h + 16 * 8 - 1;
+            let h = (loop_idx / 100 + h) % (16 * 9) + 16 * 1;
+            // let h = h + 16 * 1;
+            // let h = h / 2;
+            coloum[i] = [255, 255, 255, h as u8];
+        }
+        buf = [0; 16384];
+        let mut parser = encoder::ColorParser::new(&mut buf);
+        let len = encoder::update_frame(&mut parser, &coloum);
 
         loop_idx += 1;
         line.start();
@@ -492,100 +491,6 @@ async fn test_screen_line(
         line.wait_stop().await;
         cnt += 1;
         if cnt & 0xFFF == 0 {
-            let now = Instant::now();
-            let ms = (now - last).as_millis() as u32;
-            last = now;
-            let fps = 0xFFF * 1024 / ms;
-            rtt_target::rprintln!("fps {}", fps);
-            led_pin.toggle();
-        }
-    }
-}
-
-#[allow(unused)]
-async fn test_screen_line_onechip(
-    cmd_pio: &mut clocks::CmdClock,
-    line: &mut clocks::LineClockHdl,
-    led_pin: &mut gpio::Output<'static>,
-) {
-    let mut cnt = 0usize;
-    let mut last = Instant::now();
-    let mut buf = [0; 16384];
-    let mut parser = encoder::ColorParser::new(&mut buf);
-    let mut coloum: [crate::RGBH; crate::IMG_HEIGHT] = [[255, 255, 255, 0]; crate::IMG_HEIGHT];
-    let mut loop_idx = 0usize;
-    for i in 0..crate::IMG_HEIGHT {
-        // let offset = i / 64;
-        let offset = 0;
-        let h = (i + offset) % 32;
-        let h = if h > 15 { h - 16 } else { 15 - h };
-        // let h = h + (loop_idx % 1) * 16;
-        let h = h + 16 * 0;
-        // let h = h / 2;
-        coloum[i] = [255, 255, 255, h as u8];
-    }
-    let len = encoder::update_frame_one_chip(&mut parser, &coloum);
-
-    loop {
-        // for i in 0..crate::IMG_HEIGHT {
-        //     // let offset = i / 64;
-        //     let offset = 0;
-        //     let h = (i + offset) % 32;
-        //     let h = if h > 15 { h - 16 } else { 15 - h };
-        //     // let h = h + (loop_idx / 1 % 8) * 16;
-        //     let h = h + 16 * 1;
-        //     // let h = h / 2;
-        //     coloum[i] = [255, 255, 255, h as u8];
-        // }
-        // buf = [0; 16384];
-        // let mut parser = encoder::ColorParser::new(&mut buf);
-        // let len = encoder::update_frame_one_chip(&mut parser, &coloum);
-        loop_idx += 1;
-        line.start();
-        cmd_pio.refresh_ptr(buf.as_ptr() as u32, len);
-        cmd_pio.wait().await;
-        line.wait_stop().await;
-        cnt += 1;
-        if cnt & 0xFFF == 0 {
-            let now = Instant::now();
-            let ms = (now - last).as_millis() as u32;
-            last = now;
-            let fps = 0xFFF * 1024 / ms;
-            rtt_target::rprintln!("fps {}", fps);
-            led_pin.toggle();
-        }
-    }
-}
-
-#[allow(unused)]
-async fn test_screen_onechip(
-    cmd_pio: &mut clocks::CmdClock,
-    line: &mut clocks::LineClockHdl,
-    led_pin: &mut gpio::Output<'static>,
-) {
-    let mut encoder = encoder::Encoder::new();
-    let mut dma_buf = encoder.encode_next_one_chip(0).unwrap();
-    let mut cnt = 0usize;
-    let mut last = Instant::now();
-    loop {
-        line.start();
-        cmd_pio.refresh_ptr(dma_buf.ptr, dma_buf.len);
-        // match encoder.encode_next_one_chip(dma_buf.img_angle) {
-        //     Some(buf) => dma_buf = buf,
-        //     None => {
-        //         dma_buf = encoder.encode_next_one_chip(0).unwrap();
-        //     }
-        // }
-        cmd_pio.wait().await;
-        line.wait_stop().await;
-        cnt += 1;
-        if cnt & 0xFFF == 0 {
-            match encoder.encode_next_one_chip(dma_buf.img_angle) {
-                Some(buf) => dma_buf = buf,
-                None => {
-                    dma_buf = encoder.encode_next_one_chip(0).unwrap();
-                }
-            }
             let now = Instant::now();
             let ms = (now - last).as_millis() as u32;
             last = now;

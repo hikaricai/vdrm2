@@ -490,12 +490,12 @@ impl<'a> ColorParser<'a> {
         if empty_size == 0 {
             return;
         }
+        let empty_loops: u32 = 16 * SERIAL_CHIPS;
         unsafe {
             *self.loops += 1;
 
             // empty with le
             let meta: &mut ColorTranserTail = add_buf_ptr(&mut self.buf);
-            let empty_loops: u32 = 16 * SERIAL_CHIPS;
             meta.empty_loops = Self::reduce_empty_loops(self.last_empties, empty_loops);
             meta.data_loops = 2 - 2;
             meta.buf = [0, crate::clocks::LE_HIGH];
@@ -518,7 +518,7 @@ impl<'a> ColorParser<'a> {
                 meta.buf = [0, crate::clocks::LE_HIGH];
             }
         }
-        self.last_empties = 16 * 9;
+        self.last_empties = empty_loops;
     }
 
     pub fn add_empty_one_chip(&mut self, empty_size: u32) {
