@@ -1,5 +1,3 @@
-use std::fmt::Write as FMT;
-
 use clap::Parser;
 
 #[derive(Debug, Parser)]
@@ -131,9 +129,13 @@ fn main() {
     let mut angle_lists = [0; vdrm_alg::NUM_SCREENS].map(|_| vec![]);
     for (angle, screen_lines) in map {
         for (angle_list, line) in angle_lists.iter_mut().zip(screen_lines) {
-            let Some(img) = parse_angle_line(angle, line) else {
+            let Some(mut img) = parse_angle_line(angle, line) else {
                 continue;
             };
+            for rgbh in img.coloum.iter_mut() {
+                // fix hight for 5x circuit
+                rgbh[3] = rgbh[3] + 16;
+            }
             angle_list.push(img);
         }
     }
@@ -154,20 +156,31 @@ fn main() {
         buf.extend_from_slice(img_buf);
         std::fs::write(image_path, buf).unwrap();
 
-        let dbg_path = format!("{image_dir}/img{idx}_{len}.dbg");
-        let mut dbg_buf = String::new();
-        writeln!(&mut dbg_buf, "init_angle {init_angle}").unwrap();
+        let dbg_path = format!("{image_dir}/img{idx}_{len}.png");
+        let mut img = [[false; 160]; 192];
+
         for angle_img in angle_list {
-            write!(&mut dbg_buf, "{:03}:", angle_img.angle).unwrap();
-            for (idx, p) in angle_img.coloum.iter().enumerate() {
+            for (line, p) in angle_img.coloum.iter().enumerate() {
                 if p[0..3] == [0; 3] {
                     continue;
                 }
-                let h = p[3];
-                write!(&mut dbg_buf, "[{idx:03?},{h:03?}] ").unwrap();
+                let col = p[3];
+                img[line][col as usize] = true;
             }
-            dbg_buf += "\n";
         }
-        std::fs::write(dbg_path, dbg_buf).unwrap();
+
+        let mut dbg_buf = image::RgbImage::new(160, 192);
+        for (y, row) in img.iter().rev().enumerate() {
+            for (x, occupied) in row.iter().enumerate() {
+                let pixel = if *occupied {
+                    image::Rgb([255, 255, 255])
+                } else {
+                    image::Rgb([0, 0, 0])
+                };
+                dbg_buf.put_pixel(x as u32, y as u32, pixel);
+            }
+        }
+
+        dbg_buf.save(dbg_path).unwrap();
     }
 }

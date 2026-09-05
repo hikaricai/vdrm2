@@ -8,7 +8,7 @@ pub struct DmaBuf {
 }
 
 // 再大就异常了
-const RAM_IMG_SIZE: usize = 100;
+const RAM_IMG_SIZE: usize = 300;
 static mut IMG_RAM: [mbi5264_common::AngleImage; RAM_IMG_SIZE] =
     [mbi5264_common::AngleImage::new(0); RAM_IMG_SIZE];
 
@@ -158,23 +158,6 @@ impl Encoder {
             len,
         })
     }
-
-    pub fn encode_next_one_chip(&mut self, angle: u32) -> Option<DmaBuf> {
-        let angle_line = self.ctx.next_img_line(angle)?;
-        self.buf_idx += 1;
-        let buf = if self.buf_idx & 1 > 0 {
-            &mut self.buf1
-        } else {
-            &mut self.buf0
-        };
-        let mut parser = ColorParser::new(buf);
-        let len = update_frame_one_chip(&mut parser, &angle_line.coloum);
-        Some(DmaBuf {
-            img_angle: angle_line.angle,
-            ptr: buf.as_ptr() as u32,
-            len,
-        })
-    }
 }
 
 struct RGBMeta {
@@ -256,7 +239,7 @@ pub fn update_frame(
                 continue;
             }
             // assume data is optimized
-            unreachable!();
+            // unreachable!();
 
             #[allow(unreachable_code)]
             parser.add_color_end(
@@ -284,64 +267,6 @@ pub fn update_frame(
     parser.encode()
 }
 
-pub fn update_frame_one_chip(
-    parser: &mut ColorParser,
-    rgbh_coloum: &[crate::RGBH; crate::IMG_HEIGHT],
-) -> u32 {
-    let region0 = &rgbh_coloum[0..64];
-    let region1 = &rgbh_coloum[64..128];
-    let region2 = &rgbh_coloum[128..];
-    // init last_h_mod with 15, so the first line's "empty" is first h_mod
-    let mut last_h_mod = 15;
-    // FIXME maybe gclk share same sram
-    // will cause image brocken if too small
-    parser.add_empty(50);
-    // parser.add_empty(5000);
-    for line in 0..64usize {
-        // rtt_target::rprintln!("line {}", line);
-        // TODO optimize speed
-        let p0 = RGBMeta::new(region0[line], 0, 0);
-        let p1 = RGBMeta::new(region1[line], 1, 0);
-        let p2 = RGBMeta::new(region2[line], 2, 0);
-        let mut pixels = [p0, p1, p2];
-        bubble_rgbh_one_chip(&mut pixels);
-        let mut pixel_iter = pixels.iter();
-        let last_pixel = pixel_iter.next().unwrap();
-        let mut last_solt = PixelSlot::new(last_pixel, 0);
-
-        let empty = if last_solt.h_mod > last_h_mod {
-            15 + last_solt.h_mod - last_h_mod
-        } else {
-            15 - (last_h_mod - last_solt.h_mod)
-        };
-        last_h_mod = last_solt.h_mod;
-        parser.add_empty_one_chip(empty as u32);
-
-        for rgbh_meta in pixel_iter {
-            if rgbh_meta.h_mod == last_solt.h_mod {
-                last_solt.update(&rgbh_meta);
-                continue;
-            }
-            // assume data is optimized
-            unreachable!();
-
-            #[allow(unreachable_code)]
-            parser.add_color_one_chip(&last_solt.buf);
-
-            last_solt = PixelSlot::new(rgbh_meta, 0);
-            let empty = rgbh_meta.h_mod - last_h_mod - 1;
-            parser.add_empty_one_chip(empty as u32);
-            last_h_mod = rgbh_meta.h_mod;
-        }
-        parser.add_color_one_chip(&last_solt.buf);
-    }
-    parser.add_empty_one_chip(15 - last_h_mod as u32);
-    //
-    parser.add_sync(8);
-    parser.add_empty(8);
-    parser.encode()
-}
-
 #[inline]
 fn bubble_rgbh(slice: &mut [RGBMeta]) {
     let len = slice.len();
@@ -349,20 +274,6 @@ fn bubble_rgbh(slice: &mut [RGBMeta]) {
         for j in 0..len - 1 - i {
             let (l, r) = (&slice[j], &slice[j + 1]);
             if (l.h_mod, l.h_div) > (r.h_mod, r.h_div) {
-                // Swap elements
-                slice.swap(j, j + 1);
-            }
-        }
-    }
-}
-
-#[inline]
-fn bubble_rgbh_one_chip(slice: &mut [RGBMeta]) {
-    let len = slice.len();
-    for i in 0..len {
-        for j in 0..len - 1 - i {
-            let (l, r) = (&slice[j], &slice[j + 1]);
-            if l.h_mod > r.h_mod {
                 // Swap elements
                 slice.swap(j, j + 1);
             }
@@ -521,35 +432,6 @@ impl<'a> ColorParser<'a> {
         self.last_empties = empty_loops;
     }
 
-    pub fn add_empty_one_chip(&mut self, empty_size: u32) {
-        // 缩减latch的时钟 看起来只是让画面的行偏移了
-        // 3反而比5效果好
-        const EMPTY_LEN_U32_CYCLES: u32 = 3;
-        if empty_size == 0 {
-            return;
-        }
-        unsafe {
-            *self.loops += 1;
-
-            // empty with le
-            let meta: &mut ColorTranserTail = add_buf_ptr(&mut self.buf);
-            let empty_loops: u32 = EMPTY_LEN_U32_CYCLES - 3;
-            meta.empty_loops = empty_loops;
-            meta.data_loops = 2 - 2;
-            meta.buf = [0, crate::clocks::LE_HIGH];
-
-            // many le
-            for _i in 1..empty_size {
-                *self.loops += 1;
-                let meta: &mut ColorTranserTail = add_buf_ptr(&mut self.buf);
-                meta.empty_loops = EMPTY_LEN_U32_CYCLES - 3;
-                meta.data_loops = 2 - 2;
-                meta.buf = [0, crate::clocks::LE_HIGH];
-            }
-        }
-        self.last_empties = 0;
-    }
-
     pub fn add_color(&mut self, buf: &[u16; 8], chip_index: u32, last_chip_idx: u32) {
         let le = chip_index == LAST_CHIP_IDX;
         let chip_inc_index = chip_index - last_chip_idx;
@@ -568,24 +450,6 @@ impl<'a> ColorParser<'a> {
                 *le_buf = [0; 8];
                 le_buf[7] = crate::clocks::LE_HIGH;
             }
-        }
-        self.last_empties = 0;
-    }
-
-    pub fn add_color_one_chip(&mut self, buf: &[u16; 8]) {
-        unsafe {
-            *self.loops += 2;
-
-            let transfer: &mut ColorTranser = add_buf_ptr(&mut self.buf);
-            transfer.empty_loops = 3 - 3;
-            transfer.data_loops = 8 - 2;
-            transfer.buf = *buf;
-
-            let transfer: &mut ColorTranserTail = add_buf_ptr(&mut self.buf);
-            transfer.empty_loops = 6 - 3;
-            transfer.data_loops = 2 - 2;
-            // le
-            transfer.buf = [0, crate::clocks::LE_HIGH];
         }
         self.last_empties = 0;
     }

@@ -78,7 +78,7 @@ impl Command {
         Self { cmd, regs }
     }
 
-    fn new_confirm() -> Self {
+    const fn new_confirm() -> Self {
         Self {
             cmd: 14,
             regs: [[0; 3]; 9],
@@ -165,6 +165,16 @@ async fn motor_input_sync(
         }
         last_sync_tick = now;
         cnt += 1;
+    }
+}
+
+const CONFIRM_CMD: Command = Command::new_confirm();
+
+fn init_leds(cmd_pio: &mut clocks::CmdClock, umini_cmds: &[(mbi5264_common::CMD, CmdParam)]) {
+    cmd_pio.sel_all_chip();
+    for &(cmd, param) in umini_cmds.iter() {
+        cmd_pio.refresh2(&CONFIRM_CMD);
+        cmd_pio.refresh2(&Command::new(cmd as u8, param));
     }
 }
 
@@ -266,28 +276,12 @@ async fn main(spawner: Spawner) {
         p.PIN_20,
     );
     let mut cmd_pio = clocks::CmdClock::new(p.PIO0, pins, data_ch);
-    let confirm_cmd = Command::new_confirm();
     let mut cnt: usize = 0;
     let umini_cmds = mbi5264_common::unimi_cmds();
-    let cmd_iter = umini_cmds.iter();
+    init_leds(&mut cmd_pio, &umini_cmds);
 
     cmd_pio.sel_all_chip();
     cmd_pio.sel_all_chip();
-    // for i in 0..10 {
-    // loop {
-    for &(cmd, param) in umini_cmds.iter() {
-        cmd_pio.refresh2(&confirm_cmd);
-        cmd_pio.refresh2(&Command::new(cmd as u8, param));
-    }
-    cmd_pio.sel_all_chip();
-    cmd_pio.sel_all_chip();
-    // for i in 0..10 {
-    // loop {
-    for &(cmd, param) in umini_cmds.iter() {
-        cmd_pio.refresh2(&confirm_cmd);
-        cmd_pio.refresh2(&Command::new(cmd as u8, param));
-    }
-    // }
 
     //
     // test_screen(&mut cmd_pio, &mut line, &mut led_pin).await;
@@ -395,6 +389,7 @@ async fn main(spawner: Spawner) {
         }
         cnt += 1;
         if cnt % IMG_UPDATE_INTREVAL == 0 {
+            init_leds(&mut cmd_pio, &umini_cmds);
             encoder.update_to_next_image();
         }
     }
@@ -464,21 +459,30 @@ async fn test_screen_line(
     //     // let b = if gray < 64 { gray + 30 } else { gray };
     //     coloum[i] = [gray, gray, gray, h as u8];
     // }
-    let mut parser = encoder::ColorParser::new(&mut buf);
-    let len = encoder::update_frame(&mut parser, &coloum);
+    // let mut parser = encoder::ColorParser::new(&mut buf);
+    // let len = encoder::update_frame(&mut parser, &coloum);
 
     let mut loop_idx = 0usize;
     loop {
         for i in 0..crate::IMG_HEIGHT {
             // let offset = i / 64;
             let offset = 0;
-            let h = (i + offset) % 32;
-            let h = if h > 15 { h - 16 } else { 15 - h };
+            // let h = (i + offset) % 32;
+            // let h = if h > 15 { h - 16 } else { 15 - h };
             // let h = h + 16 * 8 - 1;
-            let h = (loop_idx / 100 + h) % (16 * 9) + 16 * 1;
+            let base: usize = 16 * 1;
+            let max = 16 * 9 + base;
+            let h = (loop_idx / 1) % (16 * 9) + base;
             // let h = h + 16 * 1;
             // let h = h / 2;
-            coloum[i] = [255, 255, 255, h as u8];
+            let gray = (h * 2 % 256) as u8;
+            coloum[i] = if h < base + 16 {
+                [255, 0, 0, h as u8]
+            } else if h > max - 16 {
+                [0, 0, 255, h as u8]
+            } else {
+                [gray, gray, gray, h as u8]
+            };
         }
         buf = [0; 16384];
         let mut parser = encoder::ColorParser::new(&mut buf);
