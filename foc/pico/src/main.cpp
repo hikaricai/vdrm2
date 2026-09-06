@@ -16,11 +16,11 @@ BLDCDriver3PWM driver = BLDCDriver3PWM(6, 8, 10, 12);
 //StepperDriver4PWM driver = StepperDriver4PWM(9, 5, 10, 6,  8);
 
 // velocity set point variable
-float target_velocity = -6.18 * 1.9;
+float target_velocity = -6.18 * 2.5;
 // instantiate the commander
 Commander command = Commander(Serial);
 void doTarget(char* cmd) { command.scalar(&target_velocity, cmd); }
-uint32_t raw_angle_offset = 200;
+uint32_t raw_angle_offset = 0;
 void setOffset(char* cmd) {
   raw_angle_offset = atoi(cmd);
   Serial.print(F("raw_angle_offset: "));
@@ -55,7 +55,11 @@ void setup() {
   motor.sensor_direction = Direction::CW;
   // FIXME 启动后大概率旋转方向和速度不符合预期 需要重试
   // WARN 自动或者手动配置 硬件变动后必须修正
-  motor.zero_electric_angle = 1.15;
+  // motor.zero_electric_angle = 3.25;
+  // motor.zero_electric_angle = 3.76;
+  motor.zero_electric_angle = 3.85;
+  // motor.zero_electric_angle = 3.76;
+  // motor.zero_electric_angle = 2.62; //吵闹
 
   // contoller configuration
   // default parameters in defaults.h
@@ -145,6 +149,8 @@ void loop() {
       Serial.print(fps / 10);
       Serial.print(".");
       Serial.println(fps % 10);
+      Serial.print(F("zero_electric_angle:"));
+      Serial.println(motor.zero_electric_angle);
       last_ts_us = ts_us;
     }
   }
