@@ -284,10 +284,10 @@ async fn main(spawner: Spawner) {
     cmd_pio.sel_all_chip();
 
     //
-    test_screen(&mut cmd_pio, &mut line, &mut led_pin).await;
+    // test_screen(&mut cmd_pio, &mut line, &mut led_pin).await;
     // test_screen_line(&mut cmd_pio, &mut line, &mut led_pin).await;
     // must return to run test_screen
-    return;
+    // return;
 
     // rtt_target::rprintln!("first sync_signal");
     // let mut cmd_iter = core::iter::repeat(UMINI_CMDS.iter()).flatten();
@@ -403,20 +403,26 @@ async fn test_screen(
     led_pin: &mut gpio::Output<'static>,
 ) {
     let mut encoder = encoder::Encoder::new();
-    let mut dma_buf = encoder.encode_next(0).unwrap();
+    let mut dma_buf = encoder.encode_next(365).unwrap();
     let mut cnt = 0usize;
     let mut last = Instant::now();
+    let mut dup = 0usize;
     loop {
         line.start();
         cmd_pio.refresh_ptr(dma_buf.ptr, dma_buf.len);
-        match encoder.encode_next(dma_buf.img_angle) {
-            Some(buf) => dma_buf = buf,
-            None => {
-                dma_buf = encoder.encode_next(0).unwrap();
-            }
-        }
+        // if dup % 1000 == 0 {
+        //     match encoder.encode_next(dma_buf.img_angle) {
+        //         Some(buf) => dma_buf = buf,
+        //         None => {
+        //             dma_buf = encoder.encode_next(0).unwrap();
+        //         }
+        //     }
+        //     rtt_target::rprintln!("angle {}", dma_buf.img_angle);
+        // }
+        dup += 1;
         cmd_pio.wait().await;
         line.wait_stop().await;
+
         cnt += 1;
         if cnt & 0xFFF == 0 {
             // match encoder.encode_next(dma_buf.img_angle) {
@@ -461,9 +467,9 @@ async fn test_screen_line(
         [mbi5264_common::RGBH::default(); crate::IMG_HEIGHT];
     for i in 0..crate::IMG_HEIGHT {
         // let h = i % 16;
-        let h = (i % 64) * 2 + 1;
+        let h = (i % 64) * 1 + (i / 64) * 16;
         let gray = (32 + h) as u8;
-        coloum[i] = mbi5264_common::RGBH::with_rgbh([gray, gray, gray, h as u8 + 16 + 16]);
+        coloum[i] = mbi5264_common::RGBH::with_rgbh([gray, gray, gray, h as u8 + 16]);
     }
     fix_col_h_idx(&mut coloum);
     let mut parser = encoder::ColorParser::new(&mut buf);
@@ -471,15 +477,15 @@ async fn test_screen_line(
 
     let mut loop_idx = 0usize;
     loop {
-        for i in 0..crate::IMG_HEIGHT {
-            let h = ((i % 64) + loop_idx / 10) % 144;
-            let gray = (32 + h) as u8;
-            coloum[i] = mbi5264_common::RGBH::with_rgbh([gray, gray, gray, h as u8 + 16]);
-        }
-        fix_col_h_idx(&mut coloum);
-        buf = [0; 16384];
-        let mut parser = encoder::ColorParser::new(&mut buf);
-        let len = encoder::update_frame(&mut parser, &coloum);
+        // for i in 0..crate::IMG_HEIGHT {
+        //     let h = ((i % 64) + loop_idx / 10) % 144;
+        //     let gray = (32 + h) as u8;
+        //     coloum[i] = mbi5264_common::RGBH::with_rgbh([gray, gray, gray, h as u8 + 16]);
+        // }
+        // fix_col_h_idx(&mut coloum);
+        // buf = [0; 16384];
+        // let mut parser = encoder::ColorParser::new(&mut buf);
+        // let len = encoder::update_frame(&mut parser, &coloum);
 
         loop_idx += 1;
         line.start();

@@ -208,7 +208,7 @@ pub fn update_frame(
         bubble_rgbh(&mut pixels);
         let mut pixel_iter = pixels.iter();
         let last_pixel = pixel_iter.next().unwrap();
-        let mut last_solt = PixelSlot::new(last_pixel, 0);
+        let mut last_solt = PixelSlot::new(last_pixel, 0, None);
 
         let empty = if last_solt.h_mod > last_h_mod {
             15 + last_solt.h_mod - last_h_mod
@@ -225,22 +225,23 @@ pub fn update_frame(
                 } else {
                     // new chip_idx
                     let last_chip_idx = last_solt.h_div as u32;
+                    last_solt.clear_sel_lat();
                     parser.add_color(&last_solt.buf, last_chip_idx, last_solt.last_chip_idx);
-                    last_solt = PixelSlot::new(rgbh_meta, last_chip_idx + 1);
+                    last_solt = PixelSlot::new(rgbh_meta, last_chip_idx + 1, Some(&last_solt.buf));
                 }
                 continue;
             }
             // assume data is optimized
             // unreachable!();
 
+            last_solt.clear_sel_lat();
             #[allow(unreachable_code)]
             parser.add_color_end(
                 &last_solt.buf,
                 last_solt.h_div as u32,
                 last_solt.last_chip_idx,
             );
-
-            last_solt = PixelSlot::new(rgbh_meta, 0);
+            last_solt = PixelSlot::new(rgbh_meta, 0, Some(&last_solt.buf));
             let empty = rgbh_meta.h_mod - last_h_mod - 1;
             parser.add_empty_les(empty as u32);
             last_h_mod = rgbh_meta.h_mod;
@@ -282,8 +283,15 @@ struct PixelSlot {
 
 impl PixelSlot {
     #[inline]
-    fn new(rgbh_meta: &RGBMeta, last_chip_idx: u32) -> Self {
+    fn new(rgbh_meta: &RGBMeta, last_chip_idx: u32, last_buf: Option<&[u16; 8]>) -> Self {
         let mut buf = [0u16; 8];
+        // 继承sel_data
+        if let Some(last_buf) = last_buf {
+            for (b, last_b) in buf.iter_mut().zip(last_buf) {
+                *b = *last_b & 0b1000_1000_1000;
+            }
+        }
+
         let &RGBMeta {
             rgbh,
             region,
@@ -330,6 +338,12 @@ impl PixelSlot {
             // let sel_data = 1;
             let rgb = (r | (g << 1) | (b << 2) | (sel_data << 3)) as u16;
             *buf |= rgb << (4 * region);
+        }
+    }
+    #[inline]
+    fn clear_sel_lat(&mut self) {
+        for b in self.buf.iter_mut() {
+            *b &= !(1 << 14);
         }
     }
 }
