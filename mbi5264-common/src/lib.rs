@@ -2,8 +2,38 @@
 use bitfield_struct::bitfield;
 type MbiWave = u8;
 type Reg = u16;
+pub const SERIAL_CHIPS: u32 = 2;
+// pub type RGBH = [u8; 4];
 
-pub type RGBH = [u8; 4];
+#[bitfield(u32)]
+pub struct RGBH {
+    #[bits(7, default = 0x0)]
+    pub r: u8,
+    #[bits(7, default = 0x0)]
+    pub g: u8,
+    #[bits(7, default = 0x0)]
+    pub b: u8,
+    #[bits(3, default = 0x0)]
+    pub h_idx: u8,
+    #[bits(8, default = 0x0)]
+    pub h: u8,
+}
+
+impl RGBH {
+    pub fn rgb(&self) -> [u8; 3] {
+        [self.r() << 1, self.g() << 1, self.b() << 1]
+    }
+
+    pub fn with_rgbh(rgbh: [u8; 4]) -> Self {
+        let [r, g, b, h] = rgbh;
+        Self::new()
+            .with_r(r >> 1)
+            .with_g(g >> 1)
+            .with_b(b >> 1)
+            .with_h(h)
+    }
+}
+
 #[derive(Clone, Copy)]
 pub enum CmdParam {
     Comm(u16),
@@ -34,7 +64,7 @@ impl AngleImage {
     pub const fn new(angle: u32) -> Self {
         Self {
             angle,
-            coloum: [[0; 4]; IMG_HEIGHT],
+            coloum: [RGBH::new(); IMG_HEIGHT],
         }
     }
 }

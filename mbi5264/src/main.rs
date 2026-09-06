@@ -18,7 +18,7 @@ use static_cell::StaticCell;
 
 // use panic_probe as _;
 const IMG_HEIGHT: usize = mbi5264_common::IMG_HEIGHT;
-type RGBH = [u8; 4];
+// type RGBH = [u8; 4];
 type ImageBuffer = [mbi5264_common::AngleImage; mbi5264_common::IMG_HEIGHT];
 const TOTAL_ANGLES: u32 = consts::TOTAL_ANGLES as u32;
 const TOTAL_MIRRORS: u32 = 8;
@@ -284,10 +284,10 @@ async fn main(spawner: Spawner) {
     cmd_pio.sel_all_chip();
 
     //
-    // test_screen(&mut cmd_pio, &mut line, &mut led_pin).await;
+    test_screen(&mut cmd_pio, &mut line, &mut led_pin).await;
     // test_screen_line(&mut cmd_pio, &mut line, &mut led_pin).await;
     // must return to run test_screen
-    // return;
+    return;
 
     // rtt_target::rprintln!("first sync_signal");
     // let mut cmd_iter = core::iter::repeat(UMINI_CMDS.iter()).flatten();
@@ -435,6 +435,17 @@ async fn test_screen(
     }
 }
 
+fn fix_col_h_idx(rgbh_coloum: &mut [mbi5264_common::RGBH; crate::IMG_HEIGHT]) {
+    for i in 0..crate::IMG_HEIGHT {
+        // fix hdl_sel phase
+        // FIXME need next rgbh_coloum
+        let idx = if i % 64 == 63 { i - 63 } else { i + 1 };
+        let h = rgbh_coloum[idx].h();
+        let h_div = (h >> 4) & 0x0F;
+        let h_idx = h_div / mbi5264_common::SERIAL_CHIPS as u8;
+        rgbh_coloum[i].set_h_idx(h_idx);
+    }
+}
 // 3500 fps
 #[allow(unused)]
 async fn test_screen_line(
@@ -446,44 +457,26 @@ async fn test_screen_line(
     let mut last = Instant::now();
     let mut buf = [0; 16384];
 
-    let mut coloum: [crate::RGBH; crate::IMG_HEIGHT] = [[255, 255, 255, 0]; crate::IMG_HEIGHT];
-    // for i in 0..crate::IMG_HEIGHT {
-    //     // let h = i % 16;
-    //     let h = i % 32;
-    //     let h = if h > 15 { h - 16 } else { 15 - h };
-    //     let h = h + 16 * 1;
-    //     // let h = 103;
-    //     let line = i % 64;
-    //     let gray = line as u8 * 4 + 3;
-    //     let gray = 255;
-    //     // let b = if gray < 64 { gray + 30 } else { gray };
-    //     coloum[i] = [gray, gray, gray, h as u8];
-    // }
-    // let mut parser = encoder::ColorParser::new(&mut buf);
-    // let len = encoder::update_frame(&mut parser, &coloum);
+    let mut coloum: [mbi5264_common::RGBH; crate::IMG_HEIGHT] =
+        [mbi5264_common::RGBH::default(); crate::IMG_HEIGHT];
+    for i in 0..crate::IMG_HEIGHT {
+        // let h = i % 16;
+        let h = (i % 64) * 2 + 1;
+        let gray = (32 + h) as u8;
+        coloum[i] = mbi5264_common::RGBH::with_rgbh([gray, gray, gray, h as u8 + 16 + 16]);
+    }
+    fix_col_h_idx(&mut coloum);
+    let mut parser = encoder::ColorParser::new(&mut buf);
+    let len = encoder::update_frame(&mut parser, &coloum);
 
     let mut loop_idx = 0usize;
     loop {
         for i in 0..crate::IMG_HEIGHT {
-            // let offset = i / 64;
-            let offset = 0;
-            // let h = (i + offset) % 32;
-            // let h = if h > 15 { h - 16 } else { 15 - h };
-            // let h = h + 16 * 8 - 1;
-            let base: usize = 16 * 1;
-            let max = 16 * 9 + base;
-            let h = (loop_idx / 1) % (16 * 9) + base;
-            // let h = h + 16 * 1;
-            // let h = h / 2;
-            let gray = (h * 2 % 256) as u8;
-            coloum[i] = if h < base + 16 {
-                [255, 0, 0, h as u8]
-            } else if h > max - 16 {
-                [0, 0, 255, h as u8]
-            } else {
-                [gray, gray, gray, h as u8]
-            };
+            let h = ((i % 64) + loop_idx / 10) % 144;
+            let gray = (32 + h) as u8;
+            coloum[i] = mbi5264_common::RGBH::with_rgbh([gray, gray, gray, h as u8 + 16]);
         }
+        fix_col_h_idx(&mut coloum);
         buf = [0; 16384];
         let mut parser = encoder::ColorParser::new(&mut buf);
         let len = encoder::update_frame(&mut parser, &coloum);

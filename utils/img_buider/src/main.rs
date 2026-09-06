@@ -1,4 +1,7 @@
+use std::collections::{BTreeMap, BTreeSet};
+
 use clap::Parser;
+use mbi5264_common::IMG_HEIGHT;
 
 #[derive(Debug, Parser)]
 #[command(name = "img_buider")]
@@ -58,7 +61,7 @@ fn parse_angle_line(
     }
     for (c, p) in img.coloum.iter_mut().zip(pixels) {
         if let Some(p) = p {
-            *c = p;
+            *c = mbi5264_common::RGBH::with_rgbh(p);
         }
     }
     // optimize fps
@@ -67,18 +70,18 @@ fn parse_angle_line(
         let region1 = i + 64;
         let region2 = i + 128;
         let regions = [region0, region1, region2];
-        let mut non_empty_h = 0u8;
+        let mut non_empty_h = 143u8;
         for region in regions {
             let p = img.coloum[region];
-            let h = p[3];
-            if p[..3] != [0, 0, 0] {
+            let h = p.h();
+            if p.rgb() != [0, 0, 0] {
                 non_empty_h = h;
             }
         }
         for region in regions {
             let p = &mut img.coloum[region];
-            if p[..3] == [0, 0, 0] {
-                p[3] = non_empty_h;
+            if p.rgb() == [0, 0, 0] {
+                p.set_h(non_empty_h);
             }
         }
     }
@@ -134,13 +137,44 @@ fn main() {
             };
             for rgbh in img.coloum.iter_mut() {
                 // fix hight for 5x circuit
-                rgbh[3] = rgbh[3] + 16;
+                rgbh.set_h(rgbh.h() + 16);
             }
             angle_list.push(img);
         }
     }
 
-    for (idx, angle_list) in angle_lists.into_iter().enumerate() {
+    for (idx, mut angle_list) in angle_lists.into_iter().enumerate() {
+        let mut h_idx_map: BTreeMap<u8, usize> = BTreeMap::new();
+        let mut h_set = BTreeSet::new();
+        let angle_list_cl: Vec<_> = angle_list
+            .iter()
+            .skip(1)
+            .chain(angle_list.first())
+            .cloned()
+            .collect();
+
+        for (angle_img, next_img) in angle_list.iter_mut().zip(angle_list_cl) {
+            for i in 0..angle_img.coloum.len() {
+                let h = if i % 64 == 63 {
+                    let idx = i - 63;
+                    next_img.coloum[idx].h()
+                } else {
+                    let idx = i + 1;
+                    angle_img.coloum[idx].h()
+                };
+                let h_div = h / 16;
+                let h_idx = h_div / mbi5264_common::SERIAL_CHIPS as u8;
+                *h_idx_map.entry(h_idx).or_default() += 1usize;
+                h_set.insert(h);
+                angle_img.coloum[i].set_h_idx(h_idx);
+            }
+        }
+
+        if idx == 1 {
+            println!("h_idx_map {h_idx_map:?}");
+            println!("h_set {h_set:?}");
+        }
+
         let mut init_angle = (vdrm_alg::TOTAL_ANGLES / 4) - vdrm_alg::W_PIXELS / 2;
         let offset = vdrm_alg::W_PIXELS / 4;
         init_angle -= offset;
@@ -161,10 +195,10 @@ fn main() {
 
         for angle_img in angle_list {
             for (line, p) in angle_img.coloum.iter().enumerate() {
-                if p[0..3] == [0; 3] {
+                if p.rgb() == [0; 3] {
                     continue;
                 }
-                let col = p[3];
+                let col = p.h();
                 img[line][col as usize] = true;
             }
         }

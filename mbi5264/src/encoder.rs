@@ -1,5 +1,7 @@
+use mbi5264_common::SERIAL_CHIPS;
+
 const INDEX_MOD: usize = 1;
-const SERIAL_CHIPS: u32 = 2;
+
 const LAST_CHIP_IDX: u32 = SERIAL_CHIPS - 1;
 pub struct DmaBuf {
     pub img_angle: u32,
@@ -161,24 +163,22 @@ impl Encoder {
 }
 
 struct RGBMeta {
-    rgbh: [u8; 4],
+    rgbh: mbi5264_common::RGBH,
     h_div: u8,
-    h_idx: u8,
     h_mod: u8,
     region: u16,
 }
 
 impl RGBMeta {
     #[inline]
-    fn new(rgbh: [u8; 4], region: u16, h_idx: u8) -> Self {
-        let h = rgbh[3];
+    fn new(rgbh: mbi5264_common::RGBH, region: u16) -> Self {
+        let h = rgbh.h();
         let h_div = (h >> 4) & 0x0F;
         let h_div = h_div % SERIAL_CHIPS as u8;
         let h_mod = h & 0x0F;
         Self {
             rgbh,
             h_div,
-            h_idx,
             h_mod,
             region,
         }
@@ -187,16 +187,8 @@ impl RGBMeta {
 
 pub fn update_frame(
     parser: &mut ColorParser,
-    rgbh_coloum: &[crate::RGBH; crate::IMG_HEIGHT],
+    rgbh_coloum: &[mbi5264_common::RGBH; crate::IMG_HEIGHT],
 ) -> u32 {
-    let mut h_idx_list: [u8; crate::IMG_HEIGHT] = [0; crate::IMG_HEIGHT];
-    for i in 0..crate::IMG_HEIGHT {
-        let idx = if i % 64 == 63 { i - 63 } else { i + 1 };
-        let h = rgbh_coloum[idx][3];
-        let h_div = (h >> 4) & 0x0F;
-        let h_idx = h_div / SERIAL_CHIPS as u8;
-        h_idx_list[i] = h_idx;
-    }
     let region0 = &rgbh_coloum[0..64];
     let region1 = &rgbh_coloum[64..128];
     let region2 = &rgbh_coloum[128..];
@@ -209,9 +201,9 @@ pub fn update_frame(
     for line in 0..64usize {
         // rtt_target::rprintln!("line {}", line);
         // TODO optimize speed
-        let p0 = RGBMeta::new(region0[line], 0, h_idx_list[line]);
-        let p1 = RGBMeta::new(region1[line], 1, h_idx_list[line + 64]);
-        let p2 = RGBMeta::new(region2[line], 2, h_idx_list[line + 64 * 2]);
+        let p0 = RGBMeta::new(region0[line], 0);
+        let p1 = RGBMeta::new(region1[line], 1);
+        let p2 = RGBMeta::new(region2[line], 2);
         let mut pixels = [p0, p1, p2];
         bubble_rgbh(&mut pixels);
         let mut pixel_iter = pixels.iter();
@@ -296,14 +288,15 @@ impl PixelSlot {
             rgbh,
             region,
             h_div,
-            h_idx,
             h_mod,
         } = rgbh_meta;
-        let [r, g, b, _h] = rgbh;
+        let [r, g, b] = rgbh.rgb();
         for (i, buf) in (0..8).rev().zip(buf.iter_mut()) {
             let r = (r >> i) & 1;
             let g = (g >> i) & 1;
             let b = (b >> i) & 1;
+            let h_idx = rgbh.h_idx();
+
             let sel_data = (h_idx >> (i / 2)) & 1;
             // let sel_data = 1;
             // let sel_data = (0) >> (i / 4) & 1;
@@ -326,12 +319,14 @@ impl PixelSlot {
     fn update(&mut self, rgbh_meta: &RGBMeta) {
         // return;
         let region = rgbh_meta.region;
-        let [r, g, b, _] = rgbh_meta.rgbh;
+        let [r, g, b] = rgbh_meta.rgbh.rgb();
         for (i, buf) in (0..8).rev().zip(self.buf.iter_mut()) {
             let r = (r >> i) & 1;
             let g = (g >> i) & 1;
             let b = (b >> i) & 1;
-            let sel_data = (rgbh_meta.h_idx >> (i / 2)) & 1;
+            let h_idx = rgbh_meta.rgbh.h_idx();
+
+            let sel_data = (h_idx >> (i / 2)) & 1;
             // let sel_data = 1;
             let rgb = (r | (g << 1) | (b << 2) | (sel_data << 3)) as u16;
             *buf |= rgb << (4 * region);
