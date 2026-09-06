@@ -65,8 +65,8 @@ void setup() {
   // default parameters in defaults.h
 
   // velocity PI controller parameters
-  motor.PID_velocity.P = 0.15f;
-  motor.PID_velocity.I = 0.01;
+  motor.PID_velocity.P = 0.4f;
+  motor.PID_velocity.I = 0.02;
   motor.PID_velocity.D = 0;
   // motor.PID_velocity.D = 0;
 
