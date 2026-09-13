@@ -20,7 +20,13 @@ float target_velocity = -6.18 * 2.5;
 // instantiate the commander
 Commander command = Commander(Serial);
 void doTarget(char* cmd) { command.scalar(&target_velocity, cmd); }
-uint32_t raw_angle_offset = 0;
+uint32_t raw_angle_offset = 230;
+void setZeroElectric(char* cmd) {
+  motor.zero_electric_angle = atof(cmd);
+  Serial.print(F("motor.zero_electric_angle: "));
+  Serial.println(motor.zero_electric_angle);
+}
+
 void setOffset(char* cmd) {
   raw_angle_offset = atoi(cmd);
   Serial.print(F("raw_angle_offset: "));
@@ -57,16 +63,16 @@ void setup() {
   // WARN 自动或者手动配置 硬件变动后必须修正
   // motor.zero_electric_angle = 3.25;
   // motor.zero_electric_angle = 3.76;
-  motor.zero_electric_angle = 3.85;
+  // motor.zero_electric_angle = 3.85;
   // motor.zero_electric_angle = 3.76;
-  // motor.zero_electric_angle = 2.62; //吵闹
+  motor.zero_electric_angle = 1.0;
 
   // contoller configuration
   // default parameters in defaults.h
 
   // velocity PI controller parameters
-  motor.PID_velocity.P = 0.4f;
-  motor.PID_velocity.I = 0.02;
+  motor.PID_velocity.P = 0.15f;
+  motor.PID_velocity.I = 0.01;
   motor.PID_velocity.D = 0;
   // motor.PID_velocity.D = 0;
 
@@ -95,6 +101,7 @@ void setup() {
   // add target command T
   command.add('T', doTarget, "target velocity");
   command.add('o', setOffset, "raw_angle_offset");
+  command.add('z', setZeroElectric, "zero electric angle");
 
   Serial.println(F("Motor ready."));
   Serial.println(F("Set the target velocity using serial terminal:"));
