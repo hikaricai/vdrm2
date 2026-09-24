@@ -208,7 +208,8 @@ async fn main(spawner: Spawner) {
         .sys_pll
         .as_mut()
         .unwrap();
-    // sys_pll.fbdiv = 140;
+    // sys_pll.fbdiv = 125;
+    // sys_pll.fbdiv = 130;
     // overclock
     // sys_pll.post_div1 = 4;
     sys_pll.post_div1 = 6;
@@ -283,15 +284,14 @@ async fn main(spawner: Spawner) {
     cmd_pio.sel_all_chip();
     cmd_pio.sel_all_chip();
 
-    //
-    // test_screen(&mut cmd_pio, &mut line, &mut led_pin).await;
-    test_screen_line(&mut cmd_pio, &mut line, &mut led_pin).await;
+    let mut dbg_pin = gpio::Output::new(p.PIN_26, gpio::Level::Low);
+    test_screen(&mut cmd_pio, &mut line, &mut led_pin, &mut dbg_pin).await;
+    // test_screen_line(&mut cmd_pio, &mut line, &mut led_pin).await;
     // must return to run test_screen
     return;
 
     // rtt_target::rprintln!("first sync_signal");
     // let mut cmd_iter = core::iter::repeat(UMINI_CMDS.iter()).flatten();
-    let mut dbg_pin = gpio::Output::new(p.PIN_24, gpio::Level::Low);
     // encode_sinal.signal(0);
     let mut encoder = encoder::Encoder::new();
     let mut dma_buf = encoder.encode_next(0).unwrap();
@@ -401,6 +401,7 @@ async fn test_screen(
     cmd_pio: &mut clocks::CmdClock,
     line: &mut clocks::LineClockHdl,
     led_pin: &mut gpio::Output<'static>,
+    dbg_pin: &mut gpio::Output<'static>,
 ) {
     let mut encoder = encoder::Encoder::new();
     let mut dma_buf = encoder.encode_next(0).unwrap();
@@ -411,12 +412,15 @@ async fn test_screen(
         line.start();
         cmd_pio.refresh_ptr(dma_buf.ptr, dma_buf.len);
         // if dup % 1000 == 0 {
+        // 遇到性能问题了
+        dbg_pin.set_high();
         match encoder.encode_next(dma_buf.img_angle) {
             Some(buf) => dma_buf = buf,
             None => {
                 dma_buf = encoder.encode_next(0).unwrap();
             }
         }
+        dbg_pin.set_low();
         // rtt_target::rprintln!("angle {}", dma_buf.img_angle);
         // }
         dup += 1;
@@ -469,9 +473,9 @@ async fn test_screen_line(
         // let h = i % 16;
         let h = (i % 64) * 1 + (i / 64) * 16;
         let gray = (32 + h) as u8;
-        let h = 17u8; // 4200 fps
-        let h = 1u8; // 3955 fps
-        let gray = 255u8;
+        // let h = 17u8; // 4200 fps
+        // let h = 1u8; // 3955 fps
+        // let gray = 255u8;
         coloum[i] = mbi5264_common::RGBH::with_rgbh([gray, gray, gray, h as u8 + 16]);
     }
     fix_col_h_idx(&mut coloum);

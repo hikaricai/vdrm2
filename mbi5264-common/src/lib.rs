@@ -3,8 +3,34 @@ use bitfield_struct::bitfield;
 type MbiWave = u8;
 type Reg = u16;
 pub const SERIAL_CHIPS: u32 = 2;
-// pub type RGBH = [u8; 4];
 
+// pub type RGBH = [u8; 4];
+// line let h = 17u8;
+// 1 210
+// 2 226
+// 3 274
+// 4 289
+// 5 321
+// 9 447
+//
+// line mixed;
+// 1 208
+// 2 270
+// 3 330
+// 4 371
+// 5 410
+// 9 497
+//
+// line mixed; add_empty_les opt;
+// 1 181
+// 2 241
+// 3 301
+// 4 344
+// 5 388
+// 9 469
+//
+// img1
+// 2 241
 #[bitfield(u32)]
 pub struct RGBH {
     #[bits(7, default = 0x0)]
