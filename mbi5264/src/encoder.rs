@@ -95,6 +95,7 @@ impl EncoderCtx {
         self.max_img_angle = img.last().unwrap().angle;
     }
 
+    #[inline(always)]
     fn next_img_line(&mut self, angle: u32) -> Option<&mbi5264_common::AngleImage> {
         if angle < self.last_angle {
             self.line_idx = self.idx_mod;
@@ -144,6 +145,10 @@ impl Encoder {
     pub fn init_angle(&self) -> u32 {
         self.ctx.init_angle
     }
+    // Keep the complete hot path in SRAM. cortex-m-rt copies .data.* from
+    // flash to RAM before main, and the callees below are forced inline.
+    #[link_section = ".data.ram_code"]
+    #[inline(never)]
     pub fn encode_next(&mut self, angle: u32) -> Option<DmaBuf> {
         let angle_line = self.ctx.next_img_line(angle)?;
         self.buf_idx += 1;
@@ -170,7 +175,7 @@ struct RGBMeta {
 }
 
 impl RGBMeta {
-    #[inline]
+    #[inline(always)]
     fn new(rgbh: mbi5264_common::RGBH, region: u16) -> Self {
         let h = rgbh.h();
         let h_div = (h >> 4) & 0x0F;
@@ -185,6 +190,7 @@ impl RGBMeta {
     }
 }
 
+#[inline(always)]
 pub fn update_frame(
     parser: &mut ColorParser,
     rgbh_coloum: &[mbi5264_common::RGBH; crate::IMG_HEIGHT],
@@ -261,7 +267,7 @@ pub fn update_frame(
     parser.encode()
 }
 
-#[inline]
+#[inline(always)]
 fn bubble_rgbh(slice: &mut [RGBMeta]) {
     let len = slice.len();
     for i in 0..len {
@@ -276,20 +282,56 @@ fn bubble_rgbh(slice: &mut [RGBMeta]) {
 }
 
 struct PixelSlot {
-    buf: [u16; 8],
+    buf: [u32; 4],
     h_div: u8,
     h_mod: u8,
     last_chip_idx: u32,
 }
 
+const SEL_PAIR: u32 = 0x0008_0008;
+const SEL_LAT_PAIR: u32 = 0x4000_4000;
+const SEL_DATA_MASK_PAIR: u32 = 0x0888_0888;
+
+const fn make_nibble_planes() -> [[u32; 2]; 16] {
+    let mut planes = [[0; 2]; 16];
+    let mut nibble = 0;
+    while nibble < planes.len() {
+        planes[nibble][0] = ((nibble as u32 >> 3) & 1) | (((nibble as u32 >> 2) & 1) << 16);
+        planes[nibble][1] = ((nibble as u32 >> 1) & 1) | ((nibble as u32 & 1) << 16);
+        nibble += 1;
+    }
+    planes
+}
+
+#[link_section = ".data.ram_code"]
+static NIBBLE_PLANES: [[u32; 2]; 16] = make_nibble_planes();
+
+#[inline(always)]
+fn pixel_planes(rgbh: mbi5264_common::RGBH) -> [u32; 4] {
+    let [r, g, b] = rgbh.rgb();
+    let r_hi = NIBBLE_PLANES[(r >> 4) as usize];
+    let g_hi = NIBBLE_PLANES[(g >> 4) as usize];
+    let b_hi = NIBBLE_PLANES[(b >> 4) as usize];
+    let r_lo = NIBBLE_PLANES[(r & 0x0f) as usize];
+    let g_lo = NIBBLE_PLANES[(g & 0x0f) as usize];
+    let b_lo = NIBBLE_PLANES[(b & 0x0f) as usize];
+    let h_idx = rgbh.h_idx() as u32;
+
+    [
+        r_hi[0] | (g_hi[0] << 1) | (b_hi[0] << 2),
+        r_hi[1] | (g_hi[1] << 1) | (b_hi[1] << 2) | (((h_idx >> 2) & 1) * SEL_PAIR),
+        r_lo[0] | (g_lo[0] << 1) | (b_lo[0] << 2) | (((h_idx >> 1) & 1) * SEL_PAIR),
+        r_lo[1] | (g_lo[1] << 1) | (b_lo[1] << 2) | ((h_idx & 1) * SEL_PAIR),
+    ]
+}
+
 impl PixelSlot {
-    #[inline]
-    fn new(rgbh_meta: &RGBMeta, last_chip_idx: u32, last_buf: Option<&[u16; 8]>) -> Self {
-        let mut buf = [0u16; 8];
-        // 继承sel_data
+    #[inline(always)]
+    fn new(rgbh_meta: &RGBMeta, last_chip_idx: u32, last_buf: Option<&[u32; 4]>) -> Self {
+        let mut buf = [0u32; 4];
         if let Some(last_buf) = last_buf {
             for (b, last_b) in buf.iter_mut().zip(last_buf) {
-                *b = *last_b & 0b1000_1000_1000;
+                *b = *last_b & SEL_DATA_MASK_PAIR;
             }
         }
 
@@ -299,22 +341,10 @@ impl PixelSlot {
             h_div,
             h_mod,
         } = rgbh_meta;
-        let [r, g, b] = rgbh.rgb();
-        for (i, buf) in (0..8).rev().zip(buf.iter_mut()) {
-            let r = (r >> i) & 1;
-            let g = (g >> i) & 1;
-            let b = (b >> i) & 1;
-            let h_idx = rgbh.h_idx();
-
-            let sel_data = (h_idx >> (i / 2)) & 1;
-            // let sel_data = 1;
-            // let sel_data = (0) >> (i / 4) & 1;
-            let rgb = (r | (g << 1) | (b << 2) | (sel_data << 3)) as u16;
-            *buf |= rgb << (4 * region);
-            // let sel_clk = ((i as u16 + 1) / 2) & 1;
-            // *buf |= sel_clk << 13;
-            let sel_lat = 1;
-            *buf |= sel_lat << 14;
+        let planes = pixel_planes(rgbh);
+        let shift = 4 * region;
+        for (buf, plane) in buf.iter_mut().zip(planes) {
+            *buf |= (plane << shift) | SEL_LAT_PAIR;
         }
         Self {
             buf,
@@ -324,27 +354,18 @@ impl PixelSlot {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     fn update(&mut self, rgbh_meta: &RGBMeta) {
-        // return;
-        let region = rgbh_meta.region;
-        let [r, g, b] = rgbh_meta.rgbh.rgb();
-        for (i, buf) in (0..8).rev().zip(self.buf.iter_mut()) {
-            let r = (r >> i) & 1;
-            let g = (g >> i) & 1;
-            let b = (b >> i) & 1;
-            let h_idx = rgbh_meta.rgbh.h_idx();
-
-            let sel_data = (h_idx >> (i / 2)) & 1;
-            // let sel_data = 1;
-            let rgb = (r | (g << 1) | (b << 2) | (sel_data << 3)) as u16;
-            *buf |= rgb << (4 * region);
+        let planes = pixel_planes(rgbh_meta.rgbh);
+        let shift = 4 * rgbh_meta.region;
+        for (buf, plane) in self.buf.iter_mut().zip(planes) {
+            *buf |= plane << shift;
         }
     }
-    #[inline]
+    #[inline(always)]
     fn clear_sel_lat(&mut self) {
         for b in self.buf.iter_mut() {
-            *b &= !(1 << 14);
+            *b &= !SEL_LAT_PAIR;
         }
     }
 }
@@ -353,7 +374,7 @@ impl PixelSlot {
 struct ColorTranser {
     empty_loops: u32,
     data_loops: u32,
-    buf: [u16; 8],
+    buf: [u32; 4],
 }
 
 #[repr(C)]
@@ -367,46 +388,75 @@ struct ColorTranserTail {
 // 对于每个pixel 先发8bit empty 再补8bit data 但是mbi5264是16bit msb 此时的8bit无法点亮屏幕
 // 最后le时会补8bit empty
 pub struct ColorParser<'a> {
-    pub loops: &'a mut u32,
-    pub buf: *mut u16,
-    pub buf_ori: *mut u16,
-    pub last_empties: u32,
+    loops: u32,
+    buf: *mut u16,
+    buf_ori: *mut u16,
+    last_empties: u32,
     pub new_line: bool,
+    _buf: core::marker::PhantomData<&'a mut [u16]>,
 }
 
 impl<'a> ColorParser<'a> {
+    #[inline(always)]
     pub fn new(buf: &'a mut [u16]) -> Self {
         let buf_ori = buf.as_mut_ptr();
         let buf = unsafe { buf.as_mut_ptr().add(2) };
-        let loops: &mut u32 = unsafe { core::mem::transmute(buf_ori) };
-        *loops = 0;
         Self {
-            loops,
+            loops: 0,
             buf,
             buf_ori,
             last_empties: 0,
             new_line: false,
+            _buf: core::marker::PhantomData,
         }
     }
 
+    #[inline(always)]
     pub fn encode(&mut self) -> u32 {
-        *self.loops -= 1;
-        let len = unsafe { self.buf.offset_from(self.buf_ori) } as u32 / 2;
-        len
+        unsafe {
+            self.buf_ori.cast::<u32>().write_unaligned(self.loops - 1);
+            self.buf.offset_from(self.buf_ori) as u32 / 2
+        }
     }
 
-    #[inline]
+    #[inline(always)]
     fn reduce_empty_loops(last_empties: u32, required_empty_loops: u32) -> u32 {
-        let mut empty_loops = if last_empties > required_empty_loops {
-            0u32
-        } else {
-            required_empty_loops - last_empties
-        };
-        if empty_loops >= 3 {
-            empty_loops -= 3;
-        }
-        empty_loops
+        required_empty_loops.saturating_sub(last_empties + 3)
     }
+
+    #[inline(always)]
+    unsafe fn push_tail(&mut self, empty_loops: u32, data_loops: u32, buf: [u16; 2]) {
+        self.buf.cast::<ColorTranserTail>().write(ColorTranserTail {
+            empty_loops,
+            data_loops,
+            buf,
+        });
+        self.buf = self
+            .buf
+            .add(core::mem::size_of::<ColorTranserTail>() / core::mem::size_of::<u16>());
+        self.loops += 1;
+    }
+
+    #[inline(always)]
+    unsafe fn push_color(&mut self, empty_loops: u32, data_loops: u32, buf: [u32; 4]) {
+        self.buf.cast::<ColorTranser>().write(ColorTranser {
+            empty_loops,
+            data_loops,
+            buf,
+        });
+        self.buf = self
+            .buf
+            .add(core::mem::size_of::<ColorTranser>() / core::mem::size_of::<u16>());
+        self.loops += 1;
+    }
+
+    #[inline(always)]
+    unsafe fn push_words(&mut self, words: [u32; 4]) {
+        self.buf.cast::<[u32; 4]>().write(words);
+        self.buf = self.buf.add(8);
+    }
+
+    #[inline(always)]
     pub fn add_empty_les(&mut self, empty_size: u32) {
         // 缩减latch的时钟 看起来只是让画面的行偏移了
         const EMPTY_LEN_U32_CYCLES: u32 = 3;
@@ -415,74 +465,49 @@ impl<'a> ColorParser<'a> {
         }
         let empty_loops: u32 = 16 * SERIAL_CHIPS;
         unsafe {
-            *self.loops += 1;
-
-            // empty with le
-            let meta: &mut ColorTranserTail = add_buf_ptr(&mut self.buf);
-            meta.empty_loops = Self::reduce_empty_loops(self.last_empties, empty_loops);
-            meta.data_loops = 2 - 2;
-            meta.buf = [0, crate::clocks::LE_HIGH];
-
-            // const SIZE: usize = 4;
-            // meta.data_loops += SIZE as u32 * (empty_size - 1);
-
-            // for _i in 1..empty_size {
-            //     let slice = add_buf_slice(&mut self.buf, SIZE);
-            //     slice.copy_from_slice(&[0; SIZE]);
-            //     slice[SIZE - 1] = crate::clocks::LE_HIGH;
-            // }
-
-            // many le
-            for _i in 1..empty_size {
-                *self.loops += 1;
-                let meta: &mut ColorTranserTail = add_buf_ptr(&mut self.buf);
-                meta.empty_loops = EMPTY_LEN_U32_CYCLES - 3;
-                meta.data_loops = 2 - 2;
-                meta.buf = [0, crate::clocks::LE_HIGH];
+            self.push_tail(
+                Self::reduce_empty_loops(self.last_empties, empty_loops),
+                0,
+                [0, crate::clocks::LE_HIGH],
+            );
+            for _ in 1..empty_size {
+                self.push_tail(EMPTY_LEN_U32_CYCLES - 3, 0, [0, crate::clocks::LE_HIGH]);
             }
         }
         self.last_empties = empty_loops;
     }
 
-    pub fn add_color(&mut self, buf: &[u16; 8], chip_index: u32, last_chip_idx: u32) {
+    #[inline(always)]
+    pub fn add_color(&mut self, buf: &[u32; 4], chip_index: u32, last_chip_idx: u32) {
         let le = chip_index == LAST_CHIP_IDX;
         let chip_inc_index = chip_index - last_chip_idx;
         let empty_loops = chip_inc_index * 16 + 8 * !self.new_line as u32;
         self.new_line = false;
         unsafe {
-            *self.loops += 1;
-
-            let transfer: &mut ColorTranser = add_buf_ptr(&mut self.buf);
-            // -1
-            transfer.empty_loops = Self::reduce_empty_loops(self.last_empties, empty_loops);
-            transfer.data_loops = 8 - 2;
-            transfer.buf = *buf;
+            let data_loops = if le { 14 } else { 6 };
+            self.push_color(
+                Self::reduce_empty_loops(self.last_empties, empty_loops),
+                data_loops,
+                *buf,
+            );
             if le {
-                transfer.data_loops += 8;
-                let le_buf: &mut [u16; 8] = add_buf_ptr(&mut self.buf);
-                *le_buf = [0; 8];
-                le_buf[7] = crate::clocks::LE_HIGH;
+                self.push_words([0, 0, 0, (crate::clocks::LE_HIGH as u32) << 16]);
             }
         }
         self.last_empties = 0;
     }
 
+    #[inline(always)]
     fn add_empty_le(&mut self, chip_inc_index: u32) {
         let empty_loops = chip_inc_index * 16 + 8;
         unsafe {
-            *self.loops += 1;
-            let tail: &mut ColorTranserTail = add_buf_ptr(&mut self.buf);
-            tail.empty_loops = empty_loops - 3 - 2;
-            tail.data_loops = 2 - 2;
-            // LE
-            tail.buf[0] = 0;
-            tail.buf[1] = crate::clocks::LE_HIGH;
+            self.push_tail(empty_loops - 5, 0, [0, crate::clocks::LE_HIGH]);
         }
         self.last_empties = empty_loops;
-        // self.last_empties = 0;
     }
 
-    fn add_color_end(&mut self, buf: &[u16; 8], chip_index: u32, last_chip_idx: u32) {
+    #[inline(always)]
+    fn add_color_end(&mut self, buf: &[u32; 4], chip_index: u32, last_chip_idx: u32) {
         let le = chip_index == LAST_CHIP_IDX;
         self.add_color(buf, chip_index, last_chip_idx);
         if !le {
@@ -490,42 +515,24 @@ impl<'a> ColorParser<'a> {
         }
     }
 
+    #[inline(always)]
     pub fn add_sync(&mut self, empty_loops: u32) {
         unsafe {
-            *self.loops += 1;
-            let tail: &mut ColorTranserTail = add_buf_ptr(&mut self.buf);
-            tail.empty_loops = empty_loops;
-            tail.data_loops = 2 - 2;
-            // LE
-            tail.buf[0] = crate::clocks::LE_HIGH;
-            tail.buf[1] = crate::clocks::LE_HIGH;
+            self.push_tail(
+                empty_loops,
+                0,
+                [crate::clocks::LE_HIGH, crate::clocks::LE_HIGH],
+            );
         }
     }
 
+    #[inline(always)]
     pub fn add_empty(&mut self, empty_loops: u32) {
         if empty_loops == 0 {
             return;
         }
         unsafe {
-            *self.loops += 1;
-            let tail: &mut ColorTranserTail = add_buf_ptr(&mut self.buf);
-            tail.empty_loops = empty_loops + 8 * 1 - 3;
-            tail.data_loops = 2 - 2;
-            // LE
-            tail.buf[0] = 0;
-            tail.buf[1] = 0;
+            self.push_tail(empty_loops + 5, 0, [0, 0]);
         }
     }
-}
-
-unsafe fn add_buf_ptr<B, T>(buf: &mut *mut B) -> &mut T {
-    let t: &mut T = core::mem::transmute(*buf);
-    *buf = buf.add(core::mem::size_of::<T>() / core::mem::size_of::<B>());
-    t
-}
-
-unsafe fn add_buf_slice<B>(buf: &mut *mut B, len: usize) -> &mut [B] {
-    let slice = core::slice::from_raw_parts_mut(*buf, len);
-    *buf = buf.add(len);
-    slice
 }
