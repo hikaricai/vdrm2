@@ -110,6 +110,7 @@ fn gen_threed_surface(input: &str, gamma: f32) -> vdrm_alg::PixelSurface {
             let g = brighten_gamma(g, gamma);
             let b = brighten_gamma(b, gamma);
             let h = rgb_img.get_pixel(px2, py).0[0];
+            // FIXME
             let h = (255 - h) / 2;
             let rgb = u32::from_ne_bytes([r, g, b, 0]);
             let x = 191 - x;

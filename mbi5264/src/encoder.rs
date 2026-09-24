@@ -196,7 +196,7 @@ pub fn update_frame(
     let mut last_h_mod = 15;
     // FIXME maybe gclk share same sram
     // will cause image brocken if too small
-    parser.add_empty(50);
+    parser.add_empty(10);
     // parser.add_empty(5000);
     for line in 0..64usize {
         // rtt_target::rprintln!("line {}", line);
@@ -217,6 +217,7 @@ pub fn update_frame(
         };
         last_h_mod = last_solt.h_mod;
         parser.add_empty_les(empty as u32);
+        parser.new_line = true;
 
         for rgbh_meta in pixel_iter {
             if rgbh_meta.h_mod == last_solt.h_mod {
@@ -370,6 +371,7 @@ pub struct ColorParser<'a> {
     pub buf: *mut u16,
     pub buf_ori: *mut u16,
     pub last_empties: u32,
+    pub new_line: bool,
 }
 
 impl<'a> ColorParser<'a> {
@@ -383,6 +385,7 @@ impl<'a> ColorParser<'a> {
             buf,
             buf_ori,
             last_empties: 0,
+            new_line: false,
         }
     }
 
@@ -444,7 +447,8 @@ impl<'a> ColorParser<'a> {
     pub fn add_color(&mut self, buf: &[u16; 8], chip_index: u32, last_chip_idx: u32) {
         let le = chip_index == LAST_CHIP_IDX;
         let chip_inc_index = chip_index - last_chip_idx;
-        let empty_loops = chip_inc_index * 16 + 8;
+        let empty_loops = chip_inc_index * 16 + 8 * !self.new_line as u32;
+        self.new_line = false;
         unsafe {
             *self.loops += 1;
 
@@ -464,17 +468,18 @@ impl<'a> ColorParser<'a> {
     }
 
     fn add_empty_le(&mut self, chip_inc_index: u32) {
-        let empty_loops = chip_inc_index * 16 + 8 - 2;
+        let empty_loops = chip_inc_index * 16 + 8;
         unsafe {
             *self.loops += 1;
             let tail: &mut ColorTranserTail = add_buf_ptr(&mut self.buf);
-            tail.empty_loops = empty_loops - 3;
+            tail.empty_loops = empty_loops - 3 - 2;
             tail.data_loops = 2 - 2;
             // LE
             tail.buf[0] = 0;
             tail.buf[1] = crate::clocks::LE_HIGH;
         }
-        self.last_empties = 0;
+        self.last_empties = empty_loops;
+        // self.last_empties = 0;
     }
 
     fn add_color_end(&mut self, buf: &[u16; 8], chip_index: u32, last_chip_idx: u32) {

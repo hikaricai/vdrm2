@@ -221,7 +221,7 @@ async fn main(spawner: Spawner) {
 
     let motor_sync_sinal = MOTOR_SYNC_SIGNAL.init(embassy_sync::signal::Signal::new());
     let motor_sync_sinal = &*motor_sync_sinal;
-    let is_mock = true;
+    let is_mock = false;
     let sync_signal = SyncSignal::new(Input::new(p.PIN_28, gpio::Pull::None), is_mock);
 
     let spawner1 = SW1_EXECUTOR.start(interrupt::SWI_IRQ_1);
@@ -285,9 +285,9 @@ async fn main(spawner: Spawner) {
 
     //
     // test_screen(&mut cmd_pio, &mut line, &mut led_pin).await;
-    // test_screen_line(&mut cmd_pio, &mut line, &mut led_pin).await;
+    test_screen_line(&mut cmd_pio, &mut line, &mut led_pin).await;
     // must return to run test_screen
-    // return;
+    return;
 
     // rtt_target::rprintln!("first sync_signal");
     // let mut cmd_iter = core::iter::repeat(UMINI_CMDS.iter()).flatten();
@@ -403,7 +403,7 @@ async fn test_screen(
     led_pin: &mut gpio::Output<'static>,
 ) {
     let mut encoder = encoder::Encoder::new();
-    let mut dma_buf = encoder.encode_next(365).unwrap();
+    let mut dma_buf = encoder.encode_next(0).unwrap();
     let mut cnt = 0usize;
     let mut last = Instant::now();
     let mut dup = 0usize;
@@ -411,13 +411,13 @@ async fn test_screen(
         line.start();
         cmd_pio.refresh_ptr(dma_buf.ptr, dma_buf.len);
         // if dup % 1000 == 0 {
-        //     match encoder.encode_next(dma_buf.img_angle) {
-        //         Some(buf) => dma_buf = buf,
-        //         None => {
-        //             dma_buf = encoder.encode_next(0).unwrap();
-        //         }
-        //     }
-        //     rtt_target::rprintln!("angle {}", dma_buf.img_angle);
+        match encoder.encode_next(dma_buf.img_angle) {
+            Some(buf) => dma_buf = buf,
+            None => {
+                dma_buf = encoder.encode_next(0).unwrap();
+            }
+        }
+        // rtt_target::rprintln!("angle {}", dma_buf.img_angle);
         // }
         dup += 1;
         cmd_pio.wait().await;
@@ -469,6 +469,9 @@ async fn test_screen_line(
         // let h = i % 16;
         let h = (i % 64) * 1 + (i / 64) * 16;
         let gray = (32 + h) as u8;
+        let h = 17u8; // 4200 fps
+        let h = 1u8; // 3955 fps
+        let gray = 255u8;
         coloum[i] = mbi5264_common::RGBH::with_rgbh([gray, gray, gray, h as u8 + 16]);
     }
     fix_col_h_idx(&mut coloum);
