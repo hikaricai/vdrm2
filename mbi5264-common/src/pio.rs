@@ -22,6 +22,21 @@ const TAIL_PATTERNS: [[u32; 3]; 7] = [
 ];
 const COLOR_EMPTY_LOOPS: [u32; 3] = [0, 5, 13];
 
+#[cfg_attr(target_os = "none", link_section = ".data.ram_code")]
+static DECODE_TAIL_WORD0: [u32; 7] = [0, 5, 8, 13, 15, 19, 29];
+#[cfg_attr(target_os = "none", link_section = ".data.ram_code")]
+static DECODE_TAIL_WORD2: [u32; 7] = [
+    (LE_HIGH as u32) << 16,
+    (LE_HIGH as u32) << 16,
+    LE_HIGH as u32 | (LE_HIGH as u32) << 16,
+    0,
+    0,
+    (LE_HIGH as u32) << 16,
+    (LE_HIGH as u32) << 16,
+];
+#[cfg_attr(target_os = "none", link_section = ".data.ram_code")]
+static DECODE_COLOR_EMPTY_LOOPS: [u32; 3] = COLOR_EMPTY_LOOPS;
+
 struct RGBMeta {
     rgbh: RGBH,
     h_div: u8,
@@ -535,4 +550,84 @@ pub fn decode_frame_program(program: &[u8], output: &mut [u32]) -> Option<usize>
 
     output[0] = loops.checked_sub(1)?.try_into().ok()?;
     Some(output_offset)
+}
+
+/// Expands a build-time validated frame program without per-command bounds checks.
+///
+/// # Safety
+///
+/// `program` must contain a valid complete PIO2 frame program. `output` must
+/// point to writable storage large enough for the frame's declared DMA word
+/// count, and it must not overlap `program`.
+#[inline(always)]
+pub unsafe fn decode_frame_program_unchecked(
+    program: *const u8,
+    program_len: usize,
+    output: *mut u32,
+) -> usize {
+    let input_end = program.add(program_len);
+    let mut input = program;
+    let mut out = output.add(1);
+    let mut loops = 0usize;
+
+    while input < input_end {
+        let mut bitmap = input.read();
+        input = input.add(1);
+
+        for _ in 0..8 {
+            if input == input_end {
+                break;
+            }
+
+            if bitmap & 1 == 0 {
+                let command = input.read() as usize;
+                input = input.add(1);
+                let repeat = (command & (TAIL_RUN_MAX - 1)) + 1;
+                let kind = command >> 5;
+                let word0 = *DECODE_TAIL_WORD0.get_unchecked(kind);
+                let word2 = *DECODE_TAIL_WORD2.get_unchecked(kind);
+
+                for _ in 0..repeat {
+                    out.write(word0);
+                    out.add(1).write(0);
+                    out.add(2).write(word2);
+                    out = out.add(3);
+                }
+                loops += repeat;
+            } else {
+                let color0 = input.cast::<u32>().read_unaligned();
+                let color1 = input.add(4).cast::<u32>().read_unaligned();
+                let color2 = input.add(8).cast::<u32>().read_unaligned();
+                let color3 = input.add(12).cast::<u32>().read_unaligned();
+                input = input.add(16);
+
+                let metadata = ((color0 >> 15) & 1)
+                    | (((color0 >> 31) & 1) << 1)
+                    | (((color1 >> 15) & 1) << 2);
+                let empty_loops = *DECODE_COLOR_EMPTY_LOOPS.get_unchecked((metadata >> 1) as usize);
+                let le = metadata & 1 != 0;
+
+                out.write(empty_loops);
+                out.add(1).write(if le { 14 } else { 6 });
+                out.add(2).write(color0 & PIO_DATA_MASK);
+                out.add(3).write(color1 & PIO_DATA_MASK);
+                out.add(4).write(color2 & PIO_DATA_MASK);
+                out.add(5).write(color3 & PIO_DATA_MASK);
+                out = out.add(6);
+                if le {
+                    out.write(0);
+                    out.add(1).write(0);
+                    out.add(2).write(0);
+                    out.add(3).write((LE_HIGH as u32) << 16);
+                    out = out.add(4);
+                }
+                loops += 1;
+            }
+
+            bitmap >>= 1;
+        }
+    }
+
+    output.write((loops - 1) as u32);
+    out.offset_from(output) as usize
 }

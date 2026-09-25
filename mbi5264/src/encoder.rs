@@ -182,7 +182,13 @@ impl Encoder {
         } else {
             &mut self.buf1
         };
-        let decoded = mbi5264_common::pio::decode_frame_program(program, &mut output[..dma_words])?;
+        let decoded = unsafe {
+            mbi5264_common::pio::decode_frame_program_unchecked(
+                program.as_ptr(),
+                program.len(),
+                output.as_mut_ptr(),
+            )
+        };
         if decoded != dma_words {
             return None;
         }

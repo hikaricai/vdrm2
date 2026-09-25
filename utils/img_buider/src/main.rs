@@ -280,7 +280,9 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::encode_pio_image;
-    use mbi5264_common::pio::{MAX_FRAME_WORDS, decode_frame_program, encode_frame};
+    use mbi5264_common::pio::{
+        MAX_FRAME_WORDS, decode_frame_program, decode_frame_program_unchecked, encode_frame,
+    };
     use mbi5264_common::preencoded::{FrameEntry, Header};
 
     #[test]
@@ -315,6 +317,16 @@ mod tests {
             let mut decoded = vec![0u32; entry.dma_words as usize];
             let decoded_words = decode_frame_program(&image[start..end], &mut decoded).unwrap();
             assert_eq!(decoded_words, decoded.len());
+            let mut decoded_unchecked = vec![0u32; entry.dma_words as usize];
+            let decoded_unchecked_words = unsafe {
+                decode_frame_program_unchecked(
+                    image[start..end].as_ptr(),
+                    end - start,
+                    decoded_unchecked.as_mut_ptr(),
+                )
+            };
+            assert_eq!(decoded_unchecked_words, decoded_unchecked.len());
+            assert_eq!(decoded_unchecked, decoded);
 
             let mut expected = [0u32; MAX_FRAME_WORDS];
             let expected_words = encode_frame(&frame.coloum, &mut expected);
