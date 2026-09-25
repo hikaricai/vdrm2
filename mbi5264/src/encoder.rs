@@ -132,6 +132,7 @@ pub struct Encoder {
 
 impl Encoder {
     pub fn new() -> Self {
+        init_channel_planes();
         Self {
             ctx: EncoderCtx::new(),
             buf_idx: 0,
@@ -167,6 +168,7 @@ impl Encoder {
     }
 }
 
+#[derive(Clone, Copy)]
 struct RGBMeta {
     rgbh: mbi5264_common::RGBH,
     h_div: u8,
@@ -210,48 +212,37 @@ pub fn update_frame(
         let p0 = RGBMeta::new(region0[line], 0);
         let p1 = RGBMeta::new(region1[line], 1);
         let p2 = RGBMeta::new(region2[line], 2);
-        let mut pixels = [p0, p1, p2];
-        bubble_rgbh(&mut pixels);
-        let mut pixel_iter = pixels.iter();
-        let last_pixel = pixel_iter.next().unwrap();
-        let mut last_solt = PixelSlot::new(last_pixel, 0, None);
+        debug_assert!(p0.h_mod == p1.h_mod && p1.h_mod == p2.h_mod);
 
-        let empty = if last_solt.h_mod > last_h_mod {
-            15 + last_solt.h_mod - last_h_mod
+        let empty = if p0.h_mod > last_h_mod {
+            15 + p0.h_mod - last_h_mod
         } else {
-            15 - (last_h_mod - last_solt.h_mod)
+            15 - (last_h_mod - p0.h_mod)
         };
-        last_h_mod = last_solt.h_mod;
+        last_h_mod = p0.h_mod;
         parser.add_empty_les(empty as u32);
         parser.new_line = true;
 
-        for rgbh_meta in pixel_iter {
-            if rgbh_meta.h_mod == last_solt.h_mod {
-                if rgbh_meta.h_div == last_solt.h_div {
-                    last_solt.update(&rgbh_meta);
-                } else {
-                    // new chip_idx
-                    let last_chip_idx = last_solt.h_div as u32;
-                    last_solt.clear_sel_lat();
-                    parser.add_color(&last_solt.buf, last_chip_idx, last_solt.last_chip_idx);
-                    last_solt = PixelSlot::new(rgbh_meta, last_chip_idx + 1, Some(&last_solt.buf));
-                }
-                continue;
-            }
-            // assume data is optimized
-            // unreachable!();
+        if p0.h_div == p1.h_div && p1.h_div == p2.h_div {
+            let buf = combine_three_pixels(p0.rgbh, p1.rgbh, p2.rgbh);
+            parser.add_color_end(&buf, p0.h_div as u32, 0);
+            continue;
+        }
 
-            last_solt.clear_sel_lat();
-            #[allow(unreachable_code)]
-            parser.add_color_end(
-                &last_solt.buf,
-                last_solt.h_div as u32,
-                last_solt.last_chip_idx,
-            );
-            last_solt = PixelSlot::new(rgbh_meta, 0, Some(&last_solt.buf));
-            let empty = rgbh_meta.h_mod - last_h_mod - 1;
-            parser.add_empty_les(empty as u32);
-            last_h_mod = rgbh_meta.h_mod;
+        let mut pixels = [p0, p1, p2];
+        sort_rgbh3_by_div(&mut pixels);
+        let mut pixel_iter = pixels.iter();
+        let last_pixel = pixel_iter.next().unwrap();
+        let mut last_solt = PixelSlot::new(last_pixel, 0, None);
+        for rgbh_meta in pixel_iter {
+            if rgbh_meta.h_div == last_solt.h_div {
+                last_solt.update(rgbh_meta);
+            } else {
+                let last_chip_idx = last_solt.h_div as u32;
+                last_solt.clear_sel_lat();
+                parser.add_color(&last_solt.buf, last_chip_idx, last_solt.last_chip_idx);
+                last_solt = PixelSlot::new(rgbh_meta, last_chip_idx + 1, Some(&last_solt.buf));
+            }
         }
 
         parser.add_color_end(
@@ -267,61 +258,91 @@ pub fn update_frame(
     parser.encode()
 }
 
+const SEL_LAT_PAIR: u32 = 0x4000_4000;
+const SEL_DATA_MASK_PAIR: u32 = 0x0888_0888;
+
 #[inline(always)]
-fn bubble_rgbh(slice: &mut [RGBMeta]) {
-    let len = slice.len();
-    for i in 0..len {
-        for j in 0..len - 1 - i {
-            let (l, r) = (&slice[j], &slice[j + 1]);
-            if (l.h_mod, l.h_div) > (r.h_mod, r.h_div) {
-                // Swap elements
-                slice.swap(j, j + 1);
-            }
-        }
+fn sort_rgbh3_by_div(pixels: &mut [RGBMeta; 3]) {
+    if pixels[0].h_div > pixels[1].h_div {
+        pixels.swap(0, 1);
+    }
+    if pixels[1].h_div > pixels[2].h_div {
+        pixels.swap(1, 2);
+    }
+    if pixels[0].h_div > pixels[1].h_div {
+        pixels.swap(0, 1);
     }
 }
 
 struct PixelSlot {
     buf: [u32; 4],
     h_div: u8,
-    h_mod: u8,
     last_chip_idx: u32,
 }
 
-const SEL_PAIR: u32 = 0x0008_0008;
-const SEL_LAT_PAIR: u32 = 0x4000_4000;
-const SEL_DATA_MASK_PAIR: u32 = 0x0888_0888;
-
-const fn make_nibble_planes() -> [[u32; 2]; 16] {
-    let mut planes = [[0; 2]; 16];
-    let mut nibble = 0;
-    while nibble < planes.len() {
-        planes[nibble][0] = ((nibble as u32 >> 3) & 1) | (((nibble as u32 >> 2) & 1) << 16);
-        planes[nibble][1] = ((nibble as u32 >> 1) & 1) | ((nibble as u32 & 1) << 16);
-        nibble += 1;
+const fn make_packed_planes() -> [u32; 136] {
+    let mut planes = [0; 136];
+    let mut channel = 0usize;
+    while channel < 128 {
+        let value = (channel as u32) << 1;
+        let mut bit = 0usize;
+        while bit < 8 {
+            planes[channel] |= ((value >> (7 - bit)) & 1) << (4 * bit);
+            bit += 1;
+        }
+        channel += 1;
+    }
+    let mut h_idx = 0usize;
+    while h_idx < 8 {
+        planes[128 + h_idx] = if h_idx & 4 != 0 { 0x0000_8800 } else { 0 }
+            | if h_idx & 2 != 0 { 0x0088_0000 } else { 0 }
+            | if h_idx & 1 != 0 { 0x8800_0000 } else { 0 };
+        h_idx += 1;
     }
     planes
 }
 
-#[link_section = ".data.ram_code"]
-static NIBBLE_PLANES: [[u32; 2]; 16] = make_nibble_planes();
+#[link_section = ".sram5.channel_planes"]
+static mut PACKED_PLANES: [u32; 136] = [0; 136];
+
+fn init_channel_planes() {
+    unsafe {
+        core::ptr::addr_of_mut!(PACKED_PLANES).write(make_packed_planes());
+    }
+}
 
 #[inline(always)]
 fn pixel_planes(rgbh: mbi5264_common::RGBH) -> [u32; 4] {
-    let [r, g, b] = rgbh.rgb();
-    let r_hi = NIBBLE_PLANES[(r >> 4) as usize];
-    let g_hi = NIBBLE_PLANES[(g >> 4) as usize];
-    let b_hi = NIBBLE_PLANES[(b >> 4) as usize];
-    let r_lo = NIBBLE_PLANES[(r & 0x0f) as usize];
-    let g_lo = NIBBLE_PLANES[(g & 0x0f) as usize];
-    let b_lo = NIBBLE_PLANES[(b & 0x0f) as usize];
-    let h_idx = rgbh.h_idx() as u32;
+    let table = core::ptr::addr_of!(PACKED_PLANES).cast::<u32>();
+    let packed = unsafe {
+        table.add(rgbh.r() as usize).read()
+            | (table.add(rgbh.g() as usize).read() << 1)
+            | (table.add(rgbh.b() as usize).read() << 2)
+            | table.add(128 + rgbh.h_idx() as usize).read()
+    };
 
     [
-        r_hi[0] | (g_hi[0] << 1) | (b_hi[0] << 2),
-        r_hi[1] | (g_hi[1] << 1) | (b_hi[1] << 2) | (((h_idx >> 2) & 1) * SEL_PAIR),
-        r_lo[0] | (g_lo[0] << 1) | (b_lo[0] << 2) | (((h_idx >> 1) & 1) * SEL_PAIR),
-        r_lo[1] | (g_lo[1] << 1) | (b_lo[1] << 2) | ((h_idx & 1) * SEL_PAIR),
+        (packed & 0x0f) | ((packed & 0xf0) << 12),
+        ((packed >> 8) & 0x0f) | ((packed & 0x0000_f000) << 4),
+        ((packed >> 16) & 0x0f) | ((packed & 0x00f0_0000) >> 4),
+        ((packed >> 24) & 0x0f) | ((packed & 0xf000_0000) >> 12),
+    ]
+}
+
+#[inline(always)]
+fn combine_three_pixels(
+    p0: mbi5264_common::RGBH,
+    p1: mbi5264_common::RGBH,
+    p2: mbi5264_common::RGBH,
+) -> [u32; 4] {
+    let p0 = pixel_planes(p0);
+    let p1 = pixel_planes(p1);
+    let p2 = pixel_planes(p2);
+    [
+        p0[0] | (p1[0] << 4) | (p2[0] << 8) | SEL_LAT_PAIR,
+        p0[1] | (p1[1] << 4) | (p2[1] << 8) | SEL_LAT_PAIR,
+        p0[2] | (p1[2] << 4) | (p2[2] << 8) | SEL_LAT_PAIR,
+        p0[3] | (p1[3] << 4) | (p2[3] << 8) | SEL_LAT_PAIR,
     ]
 }
 
@@ -330,26 +351,18 @@ impl PixelSlot {
     fn new(rgbh_meta: &RGBMeta, last_chip_idx: u32, last_buf: Option<&[u32; 4]>) -> Self {
         let mut buf = [0u32; 4];
         if let Some(last_buf) = last_buf {
-            for (b, last_b) in buf.iter_mut().zip(last_buf) {
-                *b = *last_b & SEL_DATA_MASK_PAIR;
+            for (word, previous) in buf.iter_mut().zip(last_buf) {
+                *word = *previous & SEL_DATA_MASK_PAIR;
             }
         }
-
-        let &RGBMeta {
-            rgbh,
-            region,
-            h_div,
-            h_mod,
-        } = rgbh_meta;
-        let planes = pixel_planes(rgbh);
-        let shift = 4 * region;
-        for (buf, plane) in buf.iter_mut().zip(planes) {
-            *buf |= (plane << shift) | SEL_LAT_PAIR;
+        let planes = pixel_planes(rgbh_meta.rgbh);
+        let shift = 4 * rgbh_meta.region;
+        for (word, plane) in buf.iter_mut().zip(planes) {
+            *word |= (plane << shift) | SEL_LAT_PAIR;
         }
         Self {
             buf,
-            h_div,
-            h_mod,
+            h_div: rgbh_meta.h_div,
             last_chip_idx,
         }
     }
@@ -358,14 +371,15 @@ impl PixelSlot {
     fn update(&mut self, rgbh_meta: &RGBMeta) {
         let planes = pixel_planes(rgbh_meta.rgbh);
         let shift = 4 * rgbh_meta.region;
-        for (buf, plane) in self.buf.iter_mut().zip(planes) {
-            *buf |= plane << shift;
+        for (word, plane) in self.buf.iter_mut().zip(planes) {
+            *word |= plane << shift;
         }
     }
+
     #[inline(always)]
     fn clear_sel_lat(&mut self) {
-        for b in self.buf.iter_mut() {
-            *b &= !SEL_LAT_PAIR;
+        for word in &mut self.buf {
+            *word &= !SEL_LAT_PAIR;
         }
     }
 }

@@ -71,5 +71,12 @@ SECTIONS {
 
 } INSERT AFTER .uninit;
 
+SECTIONS {
+    .sram5 (NOLOAD) : ALIGN(4)
+    {
+        *(.sram5 .sram5.*);
+    } > SRAM5
+} INSERT AFTER .uninit;
+
 PROVIDE(start_to_end = __end_block_addr - __start_block_addr);
 PROVIDE(end_to_start = __start_block_addr - __end_block_addr);

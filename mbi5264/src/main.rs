@@ -408,18 +408,27 @@ async fn test_screen(
     let mut cnt = 0usize;
     let mut last = Instant::now();
     let mut dup = 0usize;
+    let mut encode_ticks_total = 0u64;
+    let mut encode_ticks_min = u64::MAX;
+    let mut encode_ticks_max = 0u64;
     loop {
         line.start();
         cmd_pio.refresh_ptr(dma_buf.ptr, dma_buf.len);
         // if dup % 1000 == 0 {
         // 遇到性能问题了
         dbg_pin.set_high();
-        match encoder.encode_next(dma_buf.img_angle) {
+        let encode_start = Instant::now();
+        let encode_result = encoder.encode_next(dma_buf.img_angle);
+        match encode_result {
             Some(buf) => dma_buf = buf,
             None => {
                 dma_buf = encoder.encode_next(0).unwrap();
             }
         }
+        let encode_ticks = (Instant::now() - encode_start).as_ticks();
+        encode_ticks_total += encode_ticks;
+        encode_ticks_min = encode_ticks_min.min(encode_ticks);
+        encode_ticks_max = encode_ticks_max.max(encode_ticks);
         dbg_pin.set_low();
         // rtt_target::rprintln!("angle {}", dma_buf.img_angle);
         // }
@@ -440,6 +449,16 @@ async fn test_screen(
             last = now;
             let fps = 0xFFF * 1024 / ms;
             rtt_target::rprintln!("fps {}", fps);
+            rtt_target::rprintln!(
+                "encode_ticks avg={} min={} max={} samples={}",
+                encode_ticks_total / 0x1000,
+                encode_ticks_min,
+                encode_ticks_max,
+                0x1000
+            );
+            encode_ticks_total = 0;
+            encode_ticks_min = u64::MAX;
+            encode_ticks_max = 0;
             led_pin.toggle();
         }
     }
