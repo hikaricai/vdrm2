@@ -120,7 +120,9 @@ fn gen_threed_surface(input: &str, gamma: f32) -> vdrm_alg::PixelSurface {
 }
 
 fn encode_pio_image(init_angle: u32, frames: &[mbi5264_common::AngleImage]) -> Vec<u8> {
-    use mbi5264_common::pio::{MAX_FRAME_WORDS, encode_frame};
+    use mbi5264_common::pio::{
+        MAX_FRAME_PROGRAM_BYTES, MAX_FRAME_WORDS, encode_frame, encode_frame_program,
+    };
     use mbi5264_common::preencoded::{FRAME_ENTRY_SIZE, FrameEntry, HEADER_SIZE, Header};
 
     assert!(!frames.is_empty(), "image contains no PIO frames");
@@ -128,23 +130,22 @@ fn encode_pio_image(init_angle: u32, frames: &[mbi5264_common::AngleImage]) -> V
     let mut entries = Vec::with_capacity(frames.len());
     let mut payload = Vec::new();
     let mut frame_buf = [0u32; MAX_FRAME_WORDS];
+    let mut program_buf = [0u8; MAX_FRAME_PROGRAM_BYTES];
     let mut raw_size = 0usize;
     let mut max_frame_words = 0usize;
 
     for frame in frames {
         let dma_words = encode_frame(&frame.coloum, &mut frame_buf);
-        let raw =
-            unsafe { std::slice::from_raw_parts(frame_buf.as_ptr().cast::<u8>(), dma_words * 4) };
-        let compressed = lz4_flex::block::compress(raw);
+        let instruction_len = encode_frame_program(&frame_buf[..dma_words], &mut program_buf);
         let data_offset = payload_offset + payload.len();
         entries.push(FrameEntry {
             angle: frame.angle,
             data_offset: data_offset.try_into().unwrap(),
-            compressed_len: compressed.len().try_into().unwrap(),
+            instruction_len: instruction_len.try_into().unwrap(),
             dma_words: dma_words.try_into().unwrap(),
         });
-        payload.extend_from_slice(&compressed);
-        raw_size += raw.len();
+        payload.extend_from_slice(&program_buf[..instruction_len]);
+        raw_size += dma_words * 4;
         max_frame_words = max_frame_words.max(dma_words);
     }
 
@@ -166,13 +167,13 @@ fn encode_pio_image(init_angle: u32, frames: &[mbi5264_common::AngleImage]) -> V
     }
     assert!(
         output.len() <= mbi5264_common::preencoded::MAX_CACHED_IMAGE_BYTES,
-        "compressed image is {} bytes, MCU cache limit is {} bytes",
+        "PIO instruction image is {} bytes, MCU cache limit is {} bytes",
         output.len(),
         mbi5264_common::preencoded::MAX_CACHED_IMAGE_BYTES,
     );
 
     println!(
-        "pio frames {} raw {} bytes compressed {} bytes ({:.1}%) max_frame {} bytes",
+        "pio frames {} raw {} bytes program {} bytes ({:.1}%) max_frame {} bytes",
         frames.len(),
         raw_size,
         output.len(),
@@ -279,7 +280,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::encode_pio_image;
-    use mbi5264_common::pio::{MAX_FRAME_WORDS, encode_frame};
+    use mbi5264_common::pio::{MAX_FRAME_WORDS, decode_frame_program, encode_frame};
     use mbi5264_common::preencoded::{FrameEntry, Header};
 
     #[test]
@@ -310,18 +311,14 @@ mod tests {
             let entry = FrameEntry::parse(&image, index).unwrap();
             assert_eq!(entry.angle, frame.angle);
             let start = entry.data_offset as usize;
-            let end = start + entry.compressed_len as usize;
-            let mut decoded = vec![0; entry.dma_words as usize * 4];
-            let decoded_len =
-                lz4_flex::block::decompress_into(&image[start..end], &mut decoded).unwrap();
-            assert_eq!(decoded_len, decoded.len());
+            let end = start + entry.instruction_len as usize;
+            let mut decoded = vec![0u32; entry.dma_words as usize];
+            let decoded_words = decode_frame_program(&image[start..end], &mut decoded).unwrap();
+            assert_eq!(decoded_words, decoded.len());
 
             let mut expected = [0u32; MAX_FRAME_WORDS];
             let expected_words = encode_frame(&frame.coloum, &mut expected);
-            let expected = unsafe {
-                std::slice::from_raw_parts(expected.as_ptr().cast::<u8>(), expected_words * 4)
-            };
-            assert_eq!(decoded, expected);
+            assert_eq!(decoded, expected[..expected_words]);
         }
     }
 }

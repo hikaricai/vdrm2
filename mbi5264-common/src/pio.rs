@@ -2,12 +2,25 @@ use crate::{RGBH, SERIAL_CHIPS};
 
 /// Maximum number of 32-bit words accepted by the PIO DMA for one angle frame.
 pub const MAX_FRAME_WORDS: usize = 8192;
+pub const MAX_FRAME_PROGRAM_BYTES: usize = MAX_FRAME_WORDS * 4;
 pub const LE_HIGH: u16 = 1 << 12;
 
 const LAST_CHIP_IDX: u32 = SERIAL_CHIPS - 1;
 const SEL_PAIR: u32 = 0x0008_0008;
 const SEL_LAT_PAIR: u32 = 0x4000_4000;
 const SEL_DATA_MASK_PAIR: u32 = 0x0888_0888;
+const PIO_DATA_MASK: u32 = 0x7fff_7fff;
+const TAIL_RUN_MAX: usize = 32;
+const TAIL_PATTERNS: [[u32; 3]; 7] = [
+    [0, 0, (LE_HIGH as u32) << 16],
+    [5, 0, (LE_HIGH as u32) << 16],
+    [8, 0, LE_HIGH as u32 | (LE_HIGH as u32) << 16],
+    [13, 0, 0],
+    [15, 0, 0],
+    [19, 0, (LE_HIGH as u32) << 16],
+    [29, 0, (LE_HIGH as u32) << 16],
+];
+const COLOR_EMPTY_LOOPS: [u32; 3] = [0, 5, 13];
 
 struct RGBMeta {
     rgbh: RGBH,
@@ -349,4 +362,177 @@ pub fn encode_frame(rgbh_column: &[RGBH; crate::IMG_HEIGHT], output: &mut [u32])
     parser.add_sync(8);
     parser.add_empty(8);
     parser.encode()
+}
+
+struct ProgramWriter<'a> {
+    output: &'a mut [u8],
+    offset: usize,
+    bitmap_offset: usize,
+    command_slot: u8,
+}
+
+impl<'a> ProgramWriter<'a> {
+    fn new(output: &'a mut [u8]) -> Self {
+        Self {
+            output,
+            offset: 0,
+            bitmap_offset: 0,
+            command_slot: 0,
+        }
+    }
+
+    #[inline]
+    fn begin_command(&mut self, color: bool) {
+        if self.command_slot == 0 {
+            self.bitmap_offset = self.offset;
+            self.output[self.offset] = 0;
+            self.offset += 1;
+        }
+        if color {
+            self.output[self.bitmap_offset] |= 1 << self.command_slot;
+        }
+        self.command_slot = (self.command_slot + 1) & 7;
+    }
+
+    #[inline]
+    fn push_tail(&mut self, kind: usize, repeat: usize) {
+        assert!(kind < TAIL_PATTERNS.len());
+        assert!((1..=TAIL_RUN_MAX).contains(&repeat));
+        self.begin_command(false);
+        self.output[self.offset] = ((kind * TAIL_RUN_MAX) + repeat - 1) as u8;
+        self.offset += 1;
+    }
+
+    #[inline]
+    fn push_color(&mut self, empty_loops: u32, le: bool, words: &[u32]) {
+        let empty_kind = COLOR_EMPTY_LOOPS
+            .iter()
+            .position(|&value| value == empty_loops)
+            .expect("unsupported color empty loops");
+        let metadata = (empty_kind << 1) | le as usize;
+
+        self.begin_command(true);
+        for (index, &word) in words.iter().enumerate() {
+            assert_eq!(word & !PIO_DATA_MASK, 0);
+            let metadata_lo = ((metadata >> (index * 2)) & 1) as u32;
+            let metadata_hi = ((metadata >> (index * 2 + 1)) & 1) as u32;
+            let encoded = word | (metadata_lo << 15) | (metadata_hi << 31);
+            let end = self.offset + 4;
+            self.output[self.offset..end].copy_from_slice(&encoded.to_le_bytes());
+            self.offset = end;
+        }
+    }
+}
+
+/// Converts a DMA word stream into compact, PIO-specific expansion instructions.
+pub fn encode_frame_program(words: &[u32], output: &mut [u8]) -> usize {
+    assert!(!words.is_empty());
+    let loop_count = words[0] as usize + 1;
+    let mut writer = ProgramWriter::new(output);
+    let mut word_offset = 1usize;
+    let mut loops = 0usize;
+
+    while loops < loop_count {
+        let empty_loops = words[word_offset];
+        let data_loops = words[word_offset + 1];
+        if data_loops == 0 {
+            let tail = &words[word_offset..word_offset + 3];
+            let kind = TAIL_PATTERNS
+                .iter()
+                .position(|pattern| pattern == tail)
+                .expect("unsupported tail pattern");
+            let mut repeat = 1usize;
+            while loops + repeat < loop_count {
+                let next_offset = word_offset + repeat * 3;
+                if words.get(next_offset..next_offset + 3) != Some(tail) {
+                    break;
+                }
+                repeat += 1;
+            }
+
+            let mut remaining = repeat;
+            while remaining > 0 {
+                let chunk = remaining.min(TAIL_RUN_MAX);
+                writer.push_tail(kind, chunk);
+                remaining -= chunk;
+            }
+            word_offset += repeat * 3;
+            loops += repeat;
+            continue;
+        }
+
+        assert!(data_loops == 6 || data_loops == 14);
+        let le = data_loops == 14;
+        writer.push_color(empty_loops, le, &words[word_offset + 2..word_offset + 6]);
+        word_offset += if le { 10 } else { 6 };
+        loops += 1;
+    }
+
+    assert_eq!(word_offset, words.len());
+    writer.offset
+}
+
+/// Expands one compact frame program into the exact word stream consumed by PIO DMA.
+#[inline]
+pub fn decode_frame_program(program: &[u8], output: &mut [u32]) -> Option<usize> {
+    let mut input_offset = 0usize;
+    let mut output_offset = 1usize;
+    let mut loops = 0usize;
+
+    while input_offset < program.len() {
+        let bitmap = *program.get(input_offset)?;
+        input_offset += 1;
+        for command_slot in 0..8 {
+            if input_offset == program.len() {
+                break;
+            }
+
+            if bitmap & (1 << command_slot) == 0 {
+                let command = *program.get(input_offset)? as usize;
+                input_offset += 1;
+                let kind = command / TAIL_RUN_MAX;
+                let repeat = command % TAIL_RUN_MAX + 1;
+                let pattern = TAIL_PATTERNS.get(kind)?;
+                let end = output_offset.checked_add(repeat * pattern.len())?;
+                let target = output.get_mut(output_offset..end)?;
+                for chunk in target.chunks_exact_mut(pattern.len()) {
+                    chunk.copy_from_slice(pattern);
+                }
+                output_offset = end;
+                loops += repeat;
+                continue;
+            }
+
+            let end = input_offset.checked_add(16)?;
+            let payload = program.get(input_offset..end)?;
+            let mut color = [0u32; 4];
+            for (word, bytes) in color.iter_mut().zip(payload.chunks_exact(4)) {
+                *word = u32::from_le_bytes(bytes.try_into().ok()?);
+            }
+            input_offset = end;
+
+            let metadata = ((color[0] >> 15) & 1)
+                | (((color[0] >> 31) & 1) << 1)
+                | (((color[1] >> 15) & 1) << 2);
+            let empty_kind = (metadata >> 1) as usize;
+            let le = metadata & 1 != 0;
+            for word in &mut color {
+                *word &= PIO_DATA_MASK;
+            }
+
+            let color_words = if le { 10 } else { 6 };
+            let target = output.get_mut(output_offset..output_offset + color_words)?;
+            target[0] = *COLOR_EMPTY_LOOPS.get(empty_kind)?;
+            target[1] = if le { 14 } else { 6 };
+            target[2..6].copy_from_slice(&color);
+            if le {
+                target[6..10].copy_from_slice(&[0, 0, 0, (LE_HIGH as u32) << 16]);
+            }
+            output_offset += color_words;
+            loops += 1;
+        }
+    }
+
+    output[0] = loops.checked_sub(1)?.try_into().ok()?;
+    Some(output_offset)
 }

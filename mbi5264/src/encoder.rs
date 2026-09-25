@@ -80,7 +80,7 @@ impl EncoderCtx {
         let last_frame =
             FrameEntry::parse(metadata, frame_count - 1).expect("invalid PIO frame table");
         let image_len = align4(
-            last_frame.data_offset as usize + last_frame.compressed_len as usize,
+            last_frame.data_offset as usize + last_frame.instruction_len as usize,
         );
         assert!(image_len <= MAX_CACHED_IMAGE_BYTES);
 
@@ -104,7 +104,7 @@ impl EncoderCtx {
         self.max_img_angle = last_frame.angle;
 
         rtt_target::rprintln!(
-            "image {} frames {} compressed {} max_frame {}",
+            "image {} frames {} program {} max_frame {}",
             image_idx,
             frame_count,
             image_len,
@@ -163,13 +163,14 @@ impl Encoder {
         self.ctx.init_angle
     }
 
+    #[link_section = ".data.ram_code"]
     #[inline(never)]
     pub fn encode_next(&mut self, angle: u32) -> Option<DmaBuf> {
         let frame = self.ctx.next_frame(angle)?;
         let image = cached_image(self.ctx.image_len);
         let start = frame.data_offset as usize;
-        let end = start.checked_add(frame.compressed_len as usize)?;
-        let compressed = image.get(start..end)?;
+        let end = start.checked_add(frame.instruction_len as usize)?;
+        let program = image.get(start..end)?;
         let dma_words = frame.dma_words as usize;
         if dma_words > MAX_FRAME_WORDS {
             return None;
@@ -181,11 +182,8 @@ impl Encoder {
         } else {
             &mut self.buf1
         };
-        let output = unsafe {
-            core::slice::from_raw_parts_mut(output.as_mut_ptr().cast::<u8>(), dma_words * 4)
-        };
-        let decoded = lz4_flex::block::decompress_into(compressed, output).ok()?;
-        if decoded != output.len() {
+        let decoded = mbi5264_common::pio::decode_frame_program(program, &mut output[..dma_words])?;
+        if decoded != dma_words {
             return None;
         }
 

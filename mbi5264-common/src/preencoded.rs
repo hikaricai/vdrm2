@@ -1,9 +1,9 @@
-//! Little-endian, independently compressed PIO frame format.
+//! Little-endian PIO instruction image format.
 //!
 //! Header: magic, init angle, frame count, maximum decoded frame words.
-//! Frame table: angle, payload offset, compressed bytes, decoded DMA words.
+//! Frame table: angle, program offset, instruction bytes, decoded DMA words.
 
-pub const MAGIC: [u8; 4] = *b"PIO1";
+pub const MAGIC: [u8; 4] = *b"PIO2";
 pub const HEADER_SIZE: usize = 16;
 pub const FRAME_ENTRY_SIZE: usize = 16;
 pub const MAX_CACHED_IMAGE_BYTES: usize = 192 * 1024;
@@ -19,7 +19,7 @@ pub struct Header {
 pub struct FrameEntry {
     pub angle: u32,
     pub data_offset: u32,
-    pub compressed_len: u32,
+    pub instruction_len: u32,
     pub dma_words: u32,
 }
 
@@ -58,7 +58,7 @@ impl FrameEntry {
         Some(Self {
             angle: read_u32(data, offset)?,
             data_offset: read_u32(data, offset + 4)?,
-            compressed_len: read_u32(data, offset + 8)?,
+            instruction_len: read_u32(data, offset + 8)?,
             dma_words: read_u32(data, offset + 12)?,
         })
     }
@@ -67,7 +67,7 @@ impl FrameEntry {
         let mut output = [0; FRAME_ENTRY_SIZE];
         output[..4].copy_from_slice(&self.angle.to_le_bytes());
         output[4..8].copy_from_slice(&self.data_offset.to_le_bytes());
-        output[8..12].copy_from_slice(&self.compressed_len.to_le_bytes());
+        output[8..12].copy_from_slice(&self.instruction_len.to_le_bytes());
         output[12..16].copy_from_slice(&self.dma_words.to_le_bytes());
         output
     }

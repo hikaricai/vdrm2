@@ -414,7 +414,7 @@ async fn test_screen(
         // if dup % 1000 == 0 {
         // 遇到性能问题了
         dbg_pin.set_high();
-        match encoder.encode_next(dma_buf.img_angle) {
+        match encoder.encode_next(dma_buf.img_angle + 1) {
             Some(buf) => dma_buf = buf,
             None => {
                 dma_buf = encoder.encode_next(0).unwrap();
