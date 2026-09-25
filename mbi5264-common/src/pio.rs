@@ -12,7 +12,7 @@ const SEL_DATA_MASK_PAIR: u32 = 0x0888_0888;
 const PIO_DATA_MASK: u32 = 0x7fff_7fff;
 const TAIL_RUN_MAX: usize = 32;
 const DICTIONARY_OPCODE_BASE: usize = 0x80;
-const TAIL_PATTERNS: [[u32; 3]; 7] = [
+const EMPTY_PATTERNS: [[u32; 3]; 7] = [
     [0, 0, (LE_HIGH as u32) << 16],
     [5, 0, (LE_HIGH as u32) << 16],
     [8, 0, LE_HIGH as u32 | (LE_HIGH as u32) << 16],
@@ -26,9 +26,9 @@ const COLOR_EMPTY_LOOPS: [u32; 3] = [0, 5, 13];
 pub type ColorInstruction = [u32; 4];
 
 #[cfg_attr(target_os = "none", link_section = ".data.ram_code")]
-static DECODE_TAIL_WORD0: [u32; 7] = [0, 5, 8, 13, 15, 19, 29];
+static DECODE_EMPTY_LOOPS: [u32; 7] = [0, 5, 8, 13, 15, 19, 29];
 #[cfg_attr(target_os = "none", link_section = ".data.ram_code")]
-static DECODE_TAIL_WORD2: [u32; 7] = [
+static DECODE_EMPTY_DATA: [u32; 7] = [
     (LE_HIGH as u32) << 16,
     (LE_HIGH as u32) << 16,
     LE_HIGH as u32 | (LE_HIGH as u32) << 16,
@@ -162,17 +162,17 @@ impl PixelSlot {
 struct ColorTransfer {
     empty_loops: u32,
     data_loops: u32,
-    buf: [u32; 4],
+    color: [u32; 4],
 }
 
 #[repr(C)]
-struct ColorTransferTail {
+struct EmptyTransfer {
     empty_loops: u32,
     data_loops: u32,
-    buf: [u16; 2],
+    pins: [u16; 2],
 }
 
-struct ColorParser {
+struct DmaWriter {
     loops: u32,
     buf: *mut u16,
     buf_origin: *mut u16,
@@ -181,7 +181,7 @@ struct ColorParser {
     new_line: bool,
 }
 
-impl ColorParser {
+impl DmaWriter {
     #[inline(always)]
     fn new(buf: &mut [u32]) -> Self {
         let buf_origin = buf.as_mut_ptr().cast::<u16>();
@@ -222,35 +222,31 @@ impl ColorParser {
     }
 
     #[inline(always)]
-    fn push_tail(&mut self, empty_loops: u32, data_loops: u32, buf: [u16; 2]) {
+    fn push_empty(&mut self, empty_loops: u32, pins: [u16; 2]) {
         unsafe {
-            self.reserve::<ColorTransferTail>()
-                .write(ColorTransferTail {
-                    empty_loops,
-                    data_loops,
-                    buf,
-                });
-        }
-        self.loops += 1;
-    }
-
-    #[inline(always)]
-    fn push_color(&mut self, empty_loops: u32, data_loops: u32, buf: [u32; 4]) {
-        unsafe {
-            self.reserve::<ColorTransfer>().write(ColorTransfer {
+            self.reserve::<EmptyTransfer>().write(EmptyTransfer {
                 empty_loops,
-                data_loops,
-                buf,
+                data_loops: 0,
+                pins,
             });
         }
         self.loops += 1;
     }
 
     #[inline(always)]
-    fn push_words(&mut self, words: [u32; 4]) {
+    fn push_color(&mut self, empty_loops: u32, le: bool, color: [u32; 4]) {
         unsafe {
-            self.reserve::<[u32; 4]>().write(words);
+            self.reserve::<ColorTransfer>().write(ColorTransfer {
+                empty_loops,
+                data_loops: if le { 14 } else { 6 },
+                color,
+            });
+            if le {
+                self.reserve::<[u32; 4]>()
+                    .write([0, 0, 0, (LE_HIGH as u32) << 16]);
+            }
         }
+        self.loops += 1;
     }
 
     #[inline(always)]
@@ -260,13 +256,12 @@ impl ColorParser {
             return;
         }
         let empty_loops = 16 * SERIAL_CHIPS;
-        self.push_tail(
+        self.push_empty(
             Self::reduce_empty_loops(self.last_empties, empty_loops),
-            0,
             [0, LE_HIGH],
         );
         for _ in 1..empty_size {
-            self.push_tail(EMPTY_LEN_U32_CYCLES - 3, 0, [0, LE_HIGH]);
+            self.push_empty(EMPTY_LEN_U32_CYCLES - 3, [0, LE_HIGH]);
         }
         self.last_empties = empty_loops;
     }
@@ -279,19 +274,16 @@ impl ColorParser {
         self.new_line = false;
         self.push_color(
             Self::reduce_empty_loops(self.last_empties, empty_loops),
-            if le { 14 } else { 6 },
+            le,
             *buf,
         );
-        if le {
-            self.push_words([0, 0, 0, (LE_HIGH as u32) << 16]);
-        }
         self.last_empties = 0;
     }
 
     #[inline(always)]
     fn add_empty_le(&mut self, chip_inc_index: u32) {
         let empty_loops = chip_inc_index * 16 + 8;
-        self.push_tail(empty_loops - 5, 0, [0, LE_HIGH]);
+        self.push_empty(empty_loops - 5, [0, LE_HIGH]);
         self.last_empties = empty_loops;
     }
 
@@ -306,13 +298,13 @@ impl ColorParser {
 
     #[inline(always)]
     fn add_sync(&mut self, empty_loops: u32) {
-        self.push_tail(empty_loops, 0, [LE_HIGH, LE_HIGH]);
+        self.push_empty(empty_loops, [LE_HIGH, LE_HIGH]);
     }
 
     #[inline(always)]
     fn add_empty(&mut self, empty_loops: u32) {
         if empty_loops > 0 {
-            self.push_tail(empty_loops + 5, 0, [0, 0]);
+            self.push_empty(empty_loops + 5, [0, 0]);
         }
     }
 }
@@ -322,10 +314,10 @@ pub fn encode_frame(rgbh_column: &[RGBH; crate::IMG_HEIGHT], output: &mut [u32])
     let region0 = &rgbh_column[0..64];
     let region1 = &rgbh_column[64..128];
     let region2 = &rgbh_column[128..];
-    let mut parser = ColorParser::new(output);
+    let mut writer = DmaWriter::new(output);
     let mut last_h_mod = 15;
 
-    parser.add_empty(10);
+    writer.add_empty(10);
     for line in 0..64 {
         let mut pixels = [
             RGBMeta::new(region0[line], 0),
@@ -343,8 +335,8 @@ pub fn encode_frame(rgbh_column: &[RGBH; crate::IMG_HEIGHT], output: &mut [u32])
             15 - (last_h_mod - last_slot.h_mod)
         };
         last_h_mod = last_slot.h_mod;
-        parser.add_empty_les(empty as u32);
-        parser.new_line = true;
+        writer.add_empty_les(empty as u32);
+        writer.new_line = true;
 
         for rgbh_meta in pixel_iter {
             if rgbh_meta.h_mod == last_slot.h_mod {
@@ -353,33 +345,33 @@ pub fn encode_frame(rgbh_column: &[RGBH; crate::IMG_HEIGHT], output: &mut [u32])
                 } else {
                     let last_chip_idx = last_slot.h_div as u32;
                     last_slot.clear_sel_lat();
-                    parser.add_color(&last_slot.buf, last_chip_idx, last_slot.last_chip_idx);
+                    writer.add_color(&last_slot.buf, last_chip_idx, last_slot.last_chip_idx);
                     last_slot = PixelSlot::new(rgbh_meta, last_chip_idx + 1, Some(&last_slot.buf));
                 }
                 continue;
             }
 
             last_slot.clear_sel_lat();
-            parser.add_color_end(
+            writer.add_color_end(
                 &last_slot.buf,
                 last_slot.h_div as u32,
                 last_slot.last_chip_idx,
             );
             last_slot = PixelSlot::new(rgbh_meta, 0, Some(&last_slot.buf));
-            parser.add_empty_les((rgbh_meta.h_mod - last_h_mod - 1) as u32);
+            writer.add_empty_les((rgbh_meta.h_mod - last_h_mod - 1) as u32);
             last_h_mod = rgbh_meta.h_mod;
         }
 
-        parser.add_color_end(
+        writer.add_color_end(
             &last_slot.buf,
             last_slot.h_div as u32,
             last_slot.last_chip_idx,
         );
     }
-    parser.add_empty_les(15 - last_h_mod as u32);
-    parser.add_sync(8);
-    parser.add_empty(8);
-    parser.encode()
+    writer.add_empty_les(15 - last_h_mod as u32);
+    writer.add_sync(8);
+    writer.add_empty(8);
+    writer.encode()
 }
 
 struct ProgramWriter<'a> {
@@ -416,8 +408,8 @@ impl<'a> ProgramWriter<'a> {
     }
 
     #[inline]
-    fn push_tail(&mut self, kind: usize, repeat: usize) {
-        assert!(kind < TAIL_PATTERNS.len());
+    fn push_empty(&mut self, kind: usize, repeat: usize) {
+        assert!(kind < EMPTY_PATTERNS.len());
         assert!((1..=TAIL_RUN_MAX).contains(&repeat));
         self.begin_command(false);
         self.output[self.offset] = ((kind * TAIL_RUN_MAX) + repeat - 1) as u8;
@@ -501,7 +493,7 @@ pub fn encode_frame_program(
         let data_loops = words[word_offset + 1];
         if data_loops == 0 {
             let tail = &words[word_offset..word_offset + 3];
-            let kind = TAIL_PATTERNS
+            let kind = EMPTY_PATTERNS
                 .iter()
                 .position(|pattern| pattern == tail)
                 .expect("unsupported tail pattern");
@@ -517,7 +509,7 @@ pub fn encode_frame_program(
             let mut remaining = repeat;
             while remaining > 0 {
                 let chunk = remaining.min(TAIL_RUN_MAX);
-                writer.push_tail(kind, chunk);
+                writer.push_empty(kind, chunk);
                 remaining -= chunk;
             }
             word_offset += repeat * 3;
@@ -560,7 +552,7 @@ pub fn decode_frame_program(
                 input_offset += 1;
                 let kind = command / TAIL_RUN_MAX;
                 let repeat = command % TAIL_RUN_MAX + 1;
-                let pattern = TAIL_PATTERNS.get(kind)?;
+                let pattern = EMPTY_PATTERNS.get(kind)?;
                 let end = output_offset.checked_add(repeat * pattern.len())?;
                 let target = output.get_mut(output_offset..end)?;
                 for chunk in target.chunks_exact_mut(pattern.len()) {
@@ -646,13 +638,13 @@ pub unsafe fn decode_frame_program_unchecked(
                 input = input.add(1);
                 let repeat = (command & (TAIL_RUN_MAX - 1)) + 1;
                 let kind = command >> 5;
-                let word0 = *DECODE_TAIL_WORD0.get_unchecked(kind);
-                let word2 = *DECODE_TAIL_WORD2.get_unchecked(kind);
+                let empty_loops = *DECODE_EMPTY_LOOPS.get_unchecked(kind);
+                let data = *DECODE_EMPTY_DATA.get_unchecked(kind);
 
                 for _ in 0..repeat {
-                    out.write(word0);
+                    out.write(empty_loops);
                     out.add(1).write(0);
-                    out.add(2).write(word2);
+                    out.add(2).write(data);
                     out = out.add(3);
                 }
                 loops += repeat;

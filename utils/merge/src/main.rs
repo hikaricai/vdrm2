@@ -4,7 +4,7 @@ fn main() {
         println!("load {path}");
         let img = std::fs::read(&path).unwrap();
         let header = mbi5264_common::preencoded::Header::parse(&img)
-            .unwrap_or_else(|| panic!("{path} is not a PIO2 image"));
+            .unwrap_or_else(|| panic!("{path} is not a compatible PIO image"));
         assert!(header.frame_count > 0, "{path} contains no frames");
         imgs.push(img);
     }
