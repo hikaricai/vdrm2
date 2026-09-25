@@ -305,7 +305,7 @@ const fn make_packed_planes() -> [u32; 136] {
 #[link_section = ".sram5.channel_planes"]
 static mut PACKED_PLANES: [u32; 136] = [0; 136];
 
-fn init_channel_planes() {
+pub(crate) fn init_channel_planes() {
     unsafe {
         core::ptr::addr_of_mut!(PACKED_PLANES).write(make_packed_planes());
     }
@@ -496,11 +496,10 @@ impl<'a> ColorParser<'a> {
         let le = chip_index == LAST_CHIP_IDX;
         let chip_inc_index = chip_index - last_chip_idx;
         let empty_loops = chip_inc_index * 16 + 8 * !self.new_line as u32;
-        self.new_line = false;
         unsafe {
             let data_loops = if le { 14 } else { 6 };
             self.push_color(
-                Self::reduce_empty_loops(self.last_empties, empty_loops),
+                empty_loops,
                 data_loops,
                 *buf,
             );
@@ -508,7 +507,8 @@ impl<'a> ColorParser<'a> {
                 self.push_words([0, 0, 0, (crate::clocks::LE_HIGH as u32) << 16]);
             }
         }
-        self.last_empties = 0;
+        self.last_empties = 8;
+        self.new_line = false;
     }
 
     #[inline(always)]

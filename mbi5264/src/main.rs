@@ -209,7 +209,7 @@ async fn main(spawner: Spawner) {
         .as_mut()
         .unwrap();
     // sys_pll.fbdiv = 125;
-    // sys_pll.fbdiv = 130;
+    sys_pll.fbdiv = 130;
     // overclock
     // sys_pll.post_div1 = 4;
     sys_pll.post_div1 = 6;
@@ -482,6 +482,7 @@ async fn test_screen_line(
     line: &mut clocks::LineClockHdl,
     led_pin: &mut gpio::Output<'static>,
 ) {
+    encoder::init_channel_planes();
     let mut cnt = 0usize;
     let mut last = Instant::now();
     let mut buf = [0; 16384];
@@ -490,12 +491,13 @@ async fn test_screen_line(
         [mbi5264_common::RGBH::default(); crate::IMG_HEIGHT];
     for i in 0..crate::IMG_HEIGHT {
         // let h = i % 16;
-        let h = (i % 64) * 1 + (i / 64) * 16;
+        let h = ((i % 64) * 1 + (i / 64) * 16 + 16) as u8;
         let gray = (32 + h) as u8;
+        let gray = 255u8;
         // let h = 17u8; // 4200 fps
         // let h = 1u8; // 3955 fps
         // let gray = 255u8;
-        coloum[i] = mbi5264_common::RGBH::with_rgbh([gray, gray, gray, h as u8 + 16]);
+        coloum[i] = mbi5264_common::RGBH::with_rgbh([gray, gray, gray, h]);
     }
     fix_col_h_idx(&mut coloum);
     let mut parser = encoder::ColorParser::new(&mut buf);
