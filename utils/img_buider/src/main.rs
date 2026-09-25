@@ -1,7 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use clap::Parser;
-use mbi5264_common::IMG_HEIGHT;
 
 #[derive(Debug, Parser)]
 #[command(name = "img_buider")]
@@ -120,6 +119,69 @@ fn gen_threed_surface(input: &str, gamma: f32) -> vdrm_alg::PixelSurface {
     surface
 }
 
+fn encode_pio_image(init_angle: u32, frames: &[mbi5264_common::AngleImage]) -> Vec<u8> {
+    use mbi5264_common::pio::{MAX_FRAME_WORDS, encode_frame};
+    use mbi5264_common::preencoded::{FRAME_ENTRY_SIZE, FrameEntry, HEADER_SIZE, Header};
+
+    assert!(!frames.is_empty(), "image contains no PIO frames");
+    let payload_offset = HEADER_SIZE + FRAME_ENTRY_SIZE * frames.len();
+    let mut entries = Vec::with_capacity(frames.len());
+    let mut payload = Vec::new();
+    let mut frame_buf = [0u32; MAX_FRAME_WORDS];
+    let mut raw_size = 0usize;
+    let mut max_frame_words = 0usize;
+
+    for frame in frames {
+        let dma_words = encode_frame(&frame.coloum, &mut frame_buf);
+        let raw =
+            unsafe { std::slice::from_raw_parts(frame_buf.as_ptr().cast::<u8>(), dma_words * 4) };
+        let compressed = lz4_flex::block::compress(raw);
+        let data_offset = payload_offset + payload.len();
+        entries.push(FrameEntry {
+            angle: frame.angle,
+            data_offset: data_offset.try_into().unwrap(),
+            compressed_len: compressed.len().try_into().unwrap(),
+            dma_words: dma_words.try_into().unwrap(),
+        });
+        payload.extend_from_slice(&compressed);
+        raw_size += raw.len();
+        max_frame_words = max_frame_words.max(dma_words);
+    }
+
+    let mut output = Vec::with_capacity(payload_offset + payload.len() + 3);
+    output.extend_from_slice(
+        &Header {
+            init_angle,
+            frame_count: frames.len().try_into().unwrap(),
+            max_frame_words: max_frame_words.try_into().unwrap(),
+        }
+        .to_bytes(),
+    );
+    for entry in entries {
+        output.extend_from_slice(&entry.to_bytes());
+    }
+    output.extend_from_slice(&payload);
+    while output.len() % 4 != 0 {
+        output.push(0);
+    }
+    assert!(
+        output.len() <= mbi5264_common::preencoded::MAX_CACHED_IMAGE_BYTES,
+        "compressed image is {} bytes, MCU cache limit is {} bytes",
+        output.len(),
+        mbi5264_common::preencoded::MAX_CACHED_IMAGE_BYTES,
+    );
+
+    println!(
+        "pio frames {} raw {} bytes compressed {} bytes ({:.1}%) max_frame {} bytes",
+        frames.len(),
+        raw_size,
+        output.len(),
+        output.len() as f64 * 100.0 / raw_size as f64,
+        max_frame_words * 4,
+    );
+    output
+}
+
 fn main() {
     let args = Args::parse();
     let image_dir = args.out_dir;
@@ -182,13 +244,7 @@ fn main() {
         init_angle += offset * idx;
         let len = angle_list.len();
         let image_path = format!("{image_dir}/img{idx}_{len}.bin");
-        let img_size = len * std::mem::size_of::<mbi5264_common::AngleImage>();
-        let mut buf: Vec<u8> = vec![];
-        buf.extend_from_slice(&(init_angle as u32).to_le_bytes());
-        buf.extend_from_slice(&(len as u32).to_le_bytes());
-        let img_buf =
-            unsafe { std::slice::from_raw_parts(angle_list.as_ptr() as *const u8, img_size) };
-        buf.extend_from_slice(img_buf);
+        let buf = encode_pio_image(init_angle as u32, &angle_list);
         std::fs::write(image_path, buf).unwrap();
 
         let dbg_path = format!("{image_dir}/img{idx}_{len}.png");
@@ -217,5 +273,55 @@ fn main() {
         }
 
         dbg_buf.save(dbg_path).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::encode_pio_image;
+    use mbi5264_common::pio::{MAX_FRAME_WORDS, encode_frame};
+    use mbi5264_common::preencoded::{FrameEntry, Header};
+
+    #[test]
+    fn preencoded_frames_round_trip() {
+        let mut frames = [
+            mbi5264_common::AngleImage::new(100),
+            mbi5264_common::AngleImage::new(101),
+        ];
+        for (frame_idx, frame) in frames.iter_mut().enumerate() {
+            for (pixel_idx, pixel) in frame.coloum.iter_mut().enumerate() {
+                let value = (pixel_idx + frame_idx * 17) as u8;
+                *pixel = mbi5264_common::RGBH::with_rgbh([
+                    value,
+                    value.rotate_left(2),
+                    value.rotate_left(4),
+                    32 + (pixel_idx % 96) as u8,
+                ]);
+                pixel.set_h_idx((pixel_idx % 3) as u8);
+            }
+        }
+
+        let image = encode_pio_image(77, &frames);
+        let header = Header::parse(&image).unwrap();
+        assert_eq!(header.init_angle, 77);
+        assert_eq!(header.frame_count, frames.len() as u32);
+
+        for (index, frame) in frames.iter().enumerate() {
+            let entry = FrameEntry::parse(&image, index).unwrap();
+            assert_eq!(entry.angle, frame.angle);
+            let start = entry.data_offset as usize;
+            let end = start + entry.compressed_len as usize;
+            let mut decoded = vec![0; entry.dma_words as usize * 4];
+            let decoded_len =
+                lz4_flex::block::decompress_into(&image[start..end], &mut decoded).unwrap();
+            assert_eq!(decoded_len, decoded.len());
+
+            let mut expected = [0u32; MAX_FRAME_WORDS];
+            let expected_words = encode_frame(&frame.coloum, &mut expected);
+            let expected = unsafe {
+                std::slice::from_raw_parts(expected.as_ptr().cast::<u8>(), expected_words * 4)
+            };
+            assert_eq!(decoded, expected);
+        }
     }
 }

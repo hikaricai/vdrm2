@@ -2,9 +2,13 @@ fn main() {
     let mut imgs = vec![];
     for path in std::env::args().skip(1) {
         println!("load {path}");
-        let img = std::fs::read(path).unwrap();
+        let img = std::fs::read(&path).unwrap();
+        let header = mbi5264_common::preencoded::Header::parse(&img)
+            .unwrap_or_else(|| panic!("{path} is not a PIO1 image"));
+        assert!(header.frame_count > 0, "{path} contains no frames");
         imgs.push(img);
     }
+    assert!(!imgs.is_empty(), "at least one PIO1 image is required");
     let mut buf: Vec<u8> = vec![];
 
     let len = imgs.len() as u32;

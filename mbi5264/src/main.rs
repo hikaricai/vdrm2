@@ -465,7 +465,7 @@ async fn test_screen_line(
 ) {
     let mut cnt = 0usize;
     let mut last = Instant::now();
-    let mut buf = [0; 16384];
+    let mut buf = [0; mbi5264_common::pio::MAX_FRAME_WORDS];
 
     let mut coloum: [mbi5264_common::RGBH; crate::IMG_HEIGHT] =
         [mbi5264_common::RGBH::default(); crate::IMG_HEIGHT];
@@ -479,8 +479,7 @@ async fn test_screen_line(
         coloum[i] = mbi5264_common::RGBH::with_rgbh([gray, gray, gray, h as u8 + 16]);
     }
     fix_col_h_idx(&mut coloum);
-    let mut parser = encoder::ColorParser::new(&mut buf);
-    let len = encoder::update_frame(&mut parser, &coloum);
+    let len = mbi5264_common::pio::encode_frame(&coloum, &mut buf) as u32;
 
     let mut loop_idx = 0usize;
     loop {

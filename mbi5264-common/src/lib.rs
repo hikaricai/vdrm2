@@ -1,5 +1,9 @@
 #![no_std]
 use bitfield_struct::bitfield;
+
+pub mod pio;
+pub mod preencoded;
+
 type MbiWave = u8;
 type Reg = u16;
 pub const SERIAL_CHIPS: u32 = 2;

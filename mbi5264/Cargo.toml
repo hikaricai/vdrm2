@@ -40,11 +40,12 @@ static_cell = "2.1"
 portable-atomic = { version = "1.5", features = ["critical-section"] }
 qoi = { version = "0.4.1", default_features = false }
 byteorder = { version = "1.5.0", default-features = false }
+lz4_flex = { version = "0.14.0", default-features = false }
 rtt-target = "0.6.1"
 panic-rtt-target = "0.2.0"
 
 [build-dependencies]
-vdrm-alg = { path = "/Users/hikari/rust/vdrm/vdrm-alg/" }
+vdrm-alg = { path = "/Users/bytedance/rust/vdrm/vdrm-alg" }
 # vdrm-alg = { git = "https://github.com/hikaricai/vdrm.git", package = "vdrm-alg", branch = "master" }
 mbi5264-common = { path = "../mbi5264-common" }
 image = "0.25.0"
