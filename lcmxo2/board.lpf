@@ -1,0 +1,15 @@
+# HSEDA LCMXO2-2000HC V1.1, LCMXO2-2000HC-4TG100C.
+# Source: LCMXO2-2000HCV11sch.pdf, sheet 1.
+# LED anodes connect to 3.3 V through RN1 (1 kohm); cathodes connect to FPGA.
+LOCATE COMP "led[0]" SITE "58"; # LED1, PR11A, IO58
+LOCATE COMP "led[1]" SITE "60"; # LED2, PR10A, IO60
+LOCATE COMP "led[2]" SITE "61"; # LED3, PR9A,  IO61
+LOCATE COMP "led[3]" SITE "62"; # LED4, PR7B,  IO62
+
+IOBUF PORT "led[0]" IO_TYPE=LVCMOS33;
+IOBUF PORT "led[1]" IO_TYPE=LVCMOS33;
+IOBUF PORT "led[2]" IO_TYPE=LVCMOS33;
+IOBUF PORT "led[3]" IO_TYPE=LVCMOS33;
+
+# OSCH internal oscillator: no external clock pin.
+FREQUENCY NET "clk" 2.08 MHz;
