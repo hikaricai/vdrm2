@@ -1,10 +1,16 @@
 //! Little-endian PIO instruction image format.
 //!
 //! Header: magic, init angle, frame count, maximum decoded frame words.
+//! Color dictionary: 32 encoded color instructions.
 //! Frame table: angle, program offset, instruction bytes, decoded DMA words.
 
-pub const MAGIC: [u8; 4] = *b"PIO2";
+pub const MAGIC: [u8; 4] = *b"PIO3";
 pub const HEADER_SIZE: usize = 16;
+pub const COLOR_DICTIONARY_LEN: usize = 32;
+pub const COLOR_INSTRUCTION_SIZE: usize = 16;
+pub const COLOR_DICTIONARY_OFFSET: usize = HEADER_SIZE;
+pub const COLOR_DICTIONARY_SIZE: usize = COLOR_DICTIONARY_LEN * COLOR_INSTRUCTION_SIZE;
+pub const FRAME_TABLE_OFFSET: usize = COLOR_DICTIONARY_OFFSET + COLOR_DICTIONARY_SIZE;
 pub const FRAME_ENTRY_SIZE: usize = 16;
 pub const MAX_CACHED_IMAGE_BYTES: usize = 192 * 1024;
 
@@ -54,7 +60,7 @@ impl Header {
 
 impl FrameEntry {
     pub fn parse(data: &[u8], index: usize) -> Option<Self> {
-        let offset = HEADER_SIZE.checked_add(index.checked_mul(FRAME_ENTRY_SIZE)?)?;
+        let offset = FRAME_TABLE_OFFSET.checked_add(index.checked_mul(FRAME_ENTRY_SIZE)?)?;
         Some(Self {
             angle: read_u32(data, offset)?,
             data_offset: read_u32(data, offset + 4)?,

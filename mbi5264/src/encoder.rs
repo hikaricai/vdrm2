@@ -1,6 +1,7 @@
-use mbi5264_common::pio::MAX_FRAME_WORDS;
+use mbi5264_common::pio::{ColorInstruction, MAX_FRAME_WORDS};
 use mbi5264_common::preencoded::{
-    FrameEntry, Header, FRAME_ENTRY_SIZE, HEADER_SIZE, MAX_CACHED_IMAGE_BYTES,
+    FrameEntry, Header, COLOR_DICTIONARY_OFFSET, FRAME_ENTRY_SIZE, FRAME_TABLE_OFFSET, HEADER_SIZE,
+    MAX_CACHED_IMAGE_BYTES,
 };
 
 pub struct DmaBuf {
@@ -9,7 +10,10 @@ pub struct DmaBuf {
     pub len: u32,
 }
 
-static mut IMAGE_CACHE: [u8; MAX_CACHED_IMAGE_BYTES] = [0; MAX_CACHED_IMAGE_BYTES];
+#[repr(align(4))]
+struct AlignedImageCache([u8; MAX_CACHED_IMAGE_BYTES]);
+
+static mut IMAGE_CACHE: AlignedImageCache = AlignedImageCache([0; MAX_CACHED_IMAGE_BYTES]);
 
 #[inline]
 fn align4(value: usize) -> usize {
@@ -23,7 +27,7 @@ unsafe fn flash_slice(addr: usize, len: usize) -> &'static [u8] {
 
 #[inline]
 fn cached_image(len: usize) -> &'static [u8] {
-    unsafe { core::slice::from_raw_parts(core::ptr::addr_of!(IMAGE_CACHE).cast::<u8>(), len) }
+    unsafe { core::slice::from_raw_parts(core::ptr::addr_of!(IMAGE_CACHE.0).cast::<u8>(), len) }
 }
 
 struct EncoderCtx {
@@ -75,19 +79,18 @@ impl EncoderCtx {
         assert!(frame_count > 0);
         assert!(header.max_frame_words as usize <= MAX_FRAME_WORDS);
 
-        let table_len = HEADER_SIZE + frame_count * FRAME_ENTRY_SIZE;
+        let table_len = FRAME_TABLE_OFFSET + frame_count * FRAME_ENTRY_SIZE;
         let metadata = unsafe { flash_slice(image_addr, table_len) };
         let last_frame =
             FrameEntry::parse(metadata, frame_count - 1).expect("invalid PIO frame table");
-        let image_len = align4(
-            last_frame.data_offset as usize + last_frame.instruction_len as usize,
-        );
+        let image_len =
+            align4(last_frame.data_offset as usize + last_frame.instruction_len as usize);
         assert!(image_len <= MAX_CACHED_IMAGE_BYTES);
 
         unsafe {
             core::ptr::copy_nonoverlapping(
                 image_addr as *const u8,
-                core::ptr::addr_of_mut!(IMAGE_CACHE).cast::<u8>(),
+                core::ptr::addr_of_mut!(IMAGE_CACHE.0).cast::<u8>(),
                 image_len,
             );
         }
@@ -171,6 +174,12 @@ impl Encoder {
         let start = frame.data_offset as usize;
         let end = start.checked_add(frame.instruction_len as usize)?;
         let program = image.get(start..end)?;
+        let dictionary = unsafe {
+            image
+                .as_ptr()
+                .add(COLOR_DICTIONARY_OFFSET)
+                .cast::<ColorInstruction>()
+        };
         let dma_words = frame.dma_words as usize;
         if dma_words > MAX_FRAME_WORDS {
             return None;
@@ -186,6 +195,7 @@ impl Encoder {
             mbi5264_common::pio::decode_frame_program_unchecked(
                 program.as_ptr(),
                 program.len(),
+                dictionary,
                 output.as_mut_ptr(),
             )
         };

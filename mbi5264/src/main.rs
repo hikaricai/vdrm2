@@ -284,8 +284,7 @@ async fn main(spawner: Spawner) {
     cmd_pio.sel_all_chip();
     cmd_pio.sel_all_chip();
 
-    let mut dbg_pin = gpio::Output::new(p.PIN_26, gpio::Level::Low);
-    test_screen(&mut cmd_pio, &mut line, &mut led_pin, &mut dbg_pin).await;
+    test_screen(&mut cmd_pio, &mut line, &mut led_pin).await;
     // test_screen_line(&mut cmd_pio, &mut line, &mut led_pin).await;
     // must return to run test_screen
     return;
@@ -314,7 +313,6 @@ async fn main(spawner: Spawner) {
         DBG.store(dbg, core::sync::atomic::Ordering::Relaxed);
         loop {
             total_frames += 1;
-            dbg_pin.set_high();
             line.start();
             cmd_pio.refresh_ptr(dma_buf.ptr, dma_buf.len);
 
@@ -350,7 +348,6 @@ async fn main(spawner: Spawner) {
             if dbg {
                 // rtt_target::rprintln!("encode img {} show {}", img_angle, show_angle);
             }
-            dbg_pin.set_low();
 
             let now = Instant::now();
             let cur_angle = (now.as_ticks() - last_tick.as_ticks()) as u32 / ticks_per_angle;
@@ -401,22 +398,17 @@ async fn test_screen(
     cmd_pio: &mut clocks::CmdClock,
     line: &mut clocks::LineClockHdl,
     led_pin: &mut gpio::Output<'static>,
-    dbg_pin: &mut gpio::Output<'static>,
 ) {
     let mut encoder = encoder::Encoder::new();
     let mut dma_buf = encoder.encode_next(0).unwrap();
     let mut cnt = 0usize;
     let mut last = Instant::now();
-    let mut dup = 0usize;
     let mut encode_ticks_total = 0u64;
     let mut encode_ticks_min = u64::MAX;
     let mut encode_ticks_max = 0u64;
     loop {
         line.start();
         cmd_pio.refresh_ptr(dma_buf.ptr, dma_buf.len);
-        // if dup % 1000 == 0 {
-        // 遇到性能问题了
-        dbg_pin.set_high();
         let encode_start = Instant::now();
         let encode_result = encoder.encode_next(dma_buf.img_angle + 1);
         match encode_result {
@@ -429,10 +421,6 @@ async fn test_screen(
         encode_ticks_total += encode_ticks;
         encode_ticks_min = encode_ticks_min.min(encode_ticks);
         encode_ticks_max = encode_ticks_max.max(encode_ticks);
-        dbg_pin.set_low();
-        // rtt_target::rprintln!("angle {}", dma_buf.img_angle);
-        // }
-        dup += 1;
         cmd_pio.wait().await;
         line.wait_stop().await;
 

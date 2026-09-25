@@ -121,32 +121,55 @@ fn gen_threed_surface(input: &str, gamma: f32) -> vdrm_alg::PixelSurface {
 
 fn encode_pio_image(init_angle: u32, frames: &[mbi5264_common::AngleImage]) -> Vec<u8> {
     use mbi5264_common::pio::{
-        MAX_FRAME_PROGRAM_BYTES, MAX_FRAME_WORDS, encode_frame, encode_frame_program,
+        ColorInstruction, MAX_FRAME_PROGRAM_BYTES, MAX_FRAME_WORDS, encode_frame,
+        encode_frame_program, for_each_frame_color,
     };
-    use mbi5264_common::preencoded::{FRAME_ENTRY_SIZE, FrameEntry, HEADER_SIZE, Header};
+    use mbi5264_common::preencoded::{
+        COLOR_DICTIONARY_LEN, FRAME_ENTRY_SIZE, FRAME_TABLE_OFFSET, FrameEntry, Header,
+    };
 
     assert!(!frames.is_empty(), "image contains no PIO frames");
-    let payload_offset = HEADER_SIZE + FRAME_ENTRY_SIZE * frames.len();
+    let payload_offset = FRAME_TABLE_OFFSET + FRAME_ENTRY_SIZE * frames.len();
     let mut entries = Vec::with_capacity(frames.len());
     let mut payload = Vec::new();
     let mut frame_buf = [0u32; MAX_FRAME_WORDS];
     let mut program_buf = [0u8; MAX_FRAME_PROGRAM_BYTES];
+    let mut encoded_frames = Vec::with_capacity(frames.len());
+    let mut color_counts = BTreeMap::<ColorInstruction, usize>::new();
     let mut raw_size = 0usize;
     let mut max_frame_words = 0usize;
 
     for frame in frames {
         let dma_words = encode_frame(&frame.coloum, &mut frame_buf);
-        let instruction_len = encode_frame_program(&frame_buf[..dma_words], &mut program_buf);
-        let data_offset = payload_offset + payload.len();
-        entries.push(FrameEntry {
-            angle: frame.angle,
-            data_offset: data_offset.try_into().unwrap(),
-            instruction_len: instruction_len.try_into().unwrap(),
-            dma_words: dma_words.try_into().unwrap(),
+        for_each_frame_color(&frame_buf[..dma_words], |color| {
+            *color_counts.entry(color).or_default() += 1;
         });
-        payload.extend_from_slice(&program_buf[..instruction_len]);
+        encoded_frames.push((frame.angle, frame_buf[..dma_words].to_vec()));
         raw_size += dma_words * 4;
         max_frame_words = max_frame_words.max(dma_words);
+    }
+
+    let mut colors: Vec<_> = color_counts.into_iter().collect();
+    colors.sort_unstable_by(|(left_color, left_count), (right_color, right_count)| {
+        right_count
+            .cmp(left_count)
+            .then_with(|| left_color.cmp(right_color))
+    });
+    let mut dictionary = [[0u32; 4]; COLOR_DICTIONARY_LEN];
+    for (target, (color, _)) in dictionary.iter_mut().zip(colors) {
+        *target = color;
+    }
+
+    for (angle, words) in encoded_frames {
+        let instruction_len = encode_frame_program(&words, &dictionary, &mut program_buf);
+        let data_offset = payload_offset + payload.len();
+        entries.push(FrameEntry {
+            angle,
+            data_offset: data_offset.try_into().unwrap(),
+            instruction_len: instruction_len.try_into().unwrap(),
+            dma_words: words.len().try_into().unwrap(),
+        });
+        payload.extend_from_slice(&program_buf[..instruction_len]);
     }
 
     let mut output = Vec::with_capacity(payload_offset + payload.len() + 3);
@@ -158,6 +181,11 @@ fn encode_pio_image(init_angle: u32, frames: &[mbi5264_common::AngleImage]) -> V
         }
         .to_bytes(),
     );
+    for color in dictionary {
+        for word in color {
+            output.extend_from_slice(&word.to_le_bytes());
+        }
+    }
     for entry in entries {
         output.extend_from_slice(&entry.to_bytes());
     }
@@ -281,9 +309,24 @@ fn main() {
 mod tests {
     use super::encode_pio_image;
     use mbi5264_common::pio::{
-        MAX_FRAME_WORDS, decode_frame_program, decode_frame_program_unchecked, encode_frame,
+        ColorInstruction, MAX_FRAME_WORDS, decode_frame_program, decode_frame_program_unchecked,
+        encode_frame,
     };
-    use mbi5264_common::preencoded::{FrameEntry, Header};
+    use mbi5264_common::preencoded::{
+        COLOR_DICTIONARY_LEN, COLOR_DICTIONARY_OFFSET, COLOR_INSTRUCTION_SIZE, FrameEntry, Header,
+    };
+
+    fn parse_dictionary(image: &[u8]) -> [ColorInstruction; COLOR_DICTIONARY_LEN] {
+        let mut dictionary = [[0u32; 4]; COLOR_DICTIONARY_LEN];
+        for (color_index, color) in dictionary.iter_mut().enumerate() {
+            for (word_index, word) in color.iter_mut().enumerate() {
+                let offset =
+                    COLOR_DICTIONARY_OFFSET + color_index * COLOR_INSTRUCTION_SIZE + word_index * 4;
+                *word = u32::from_le_bytes(image[offset..offset + 4].try_into().unwrap());
+            }
+        }
+        dictionary
+    }
 
     #[test]
     fn preencoded_frames_round_trip() {
@@ -308,20 +351,42 @@ mod tests {
         let header = Header::parse(&image).unwrap();
         assert_eq!(header.init_angle, 77);
         assert_eq!(header.frame_count, frames.len() as u32);
+        let dictionary = parse_dictionary(&image);
+        let mut dictionary_references = 0usize;
 
         for (index, frame) in frames.iter().enumerate() {
             let entry = FrameEntry::parse(&image, index).unwrap();
             assert_eq!(entry.angle, frame.angle);
             let start = entry.data_offset as usize;
             let end = start + entry.instruction_len as usize;
+            let mut input = &image[start..end];
+            while !input.is_empty() {
+                let bitmap = input[0];
+                input = &input[1..];
+                for slot in 0..8 {
+                    if input.is_empty() {
+                        break;
+                    }
+                    if bitmap & (1 << slot) == 0 {
+                        input = &input[1..];
+                    } else if input[0] >= 0x80 {
+                        dictionary_references += 1;
+                        input = &input[1..];
+                    } else {
+                        input = &input[16..];
+                    }
+                }
+            }
             let mut decoded = vec![0u32; entry.dma_words as usize];
-            let decoded_words = decode_frame_program(&image[start..end], &mut decoded).unwrap();
+            let decoded_words =
+                decode_frame_program(&image[start..end], &dictionary, &mut decoded).unwrap();
             assert_eq!(decoded_words, decoded.len());
             let mut decoded_unchecked = vec![0u32; entry.dma_words as usize];
             let decoded_unchecked_words = unsafe {
                 decode_frame_program_unchecked(
                     image[start..end].as_ptr(),
                     end - start,
+                    dictionary.as_ptr(),
                     decoded_unchecked.as_mut_ptr(),
                 )
             };
@@ -332,5 +397,6 @@ mod tests {
             let expected_words = encode_frame(&frame.coloum, &mut expected);
             assert_eq!(decoded, expected[..expected_words]);
         }
+        assert!(dictionary_references > 0);
     }
 }

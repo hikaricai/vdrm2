@@ -11,6 +11,7 @@ const SEL_LAT_PAIR: u32 = 0x4000_4000;
 const SEL_DATA_MASK_PAIR: u32 = 0x0888_0888;
 const PIO_DATA_MASK: u32 = 0x7fff_7fff;
 const TAIL_RUN_MAX: usize = 32;
+const DICTIONARY_OPCODE_BASE: usize = 0x80;
 const TAIL_PATTERNS: [[u32; 3]; 7] = [
     [0, 0, (LE_HIGH as u32) << 16],
     [5, 0, (LE_HIGH as u32) << 16],
@@ -21,6 +22,8 @@ const TAIL_PATTERNS: [[u32; 3]; 7] = [
     [29, 0, (LE_HIGH as u32) << 16],
 ];
 const COLOR_EMPTY_LOOPS: [u32; 3] = [0, 5, 13];
+
+pub type ColorInstruction = [u32; 4];
 
 #[cfg_attr(target_os = "none", link_section = ".data.ram_code")]
 static DECODE_TAIL_WORD0: [u32; 7] = [0, 5, 8, 13, 15, 19, 29];
@@ -381,15 +384,18 @@ pub fn encode_frame(rgbh_column: &[RGBH; crate::IMG_HEIGHT], output: &mut [u32])
 
 struct ProgramWriter<'a> {
     output: &'a mut [u8],
+    dictionary: &'a [ColorInstruction],
     offset: usize,
     bitmap_offset: usize,
     command_slot: u8,
 }
 
 impl<'a> ProgramWriter<'a> {
-    fn new(output: &'a mut [u8]) -> Self {
+    fn new(output: &'a mut [u8], dictionary: &'a [ColorInstruction]) -> Self {
+        assert!(dictionary.len() <= crate::preencoded::COLOR_DICTIONARY_LEN);
         Self {
             output,
+            dictionary,
             offset: 0,
             bitmap_offset: 0,
             command_slot: 0,
@@ -420,30 +426,73 @@ impl<'a> ProgramWriter<'a> {
 
     #[inline]
     fn push_color(&mut self, empty_loops: u32, le: bool, words: &[u32]) {
-        let empty_kind = COLOR_EMPTY_LOOPS
-            .iter()
-            .position(|&value| value == empty_loops)
-            .expect("unsupported color empty loops");
-        let metadata = (empty_kind << 1) | le as usize;
+        let encoded = color_instruction(empty_loops, le, words);
+        if let Some(index) = self.dictionary.iter().position(|entry| *entry == encoded) {
+            self.begin_command(true);
+            self.output[self.offset] = (DICTIONARY_OPCODE_BASE + index) as u8;
+            self.offset += 1;
+            return;
+        }
 
         self.begin_command(true);
-        for (index, &word) in words.iter().enumerate() {
-            assert_eq!(word & !PIO_DATA_MASK, 0);
-            let metadata_lo = ((metadata >> (index * 2)) & 1) as u32;
-            let metadata_hi = ((metadata >> (index * 2 + 1)) & 1) as u32;
-            let encoded = word | (metadata_lo << 15) | (metadata_hi << 31);
+        for word in encoded {
             let end = self.offset + 4;
-            self.output[self.offset..end].copy_from_slice(&encoded.to_le_bytes());
+            self.output[self.offset..end].copy_from_slice(&word.to_le_bytes());
             self.offset = end;
         }
     }
 }
 
-/// Converts a DMA word stream into compact, PIO-specific expansion instructions.
-pub fn encode_frame_program(words: &[u32], output: &mut [u8]) -> usize {
+#[inline]
+fn color_instruction(empty_loops: u32, le: bool, words: &[u32]) -> ColorInstruction {
+    let empty_kind = COLOR_EMPTY_LOOPS
+        .iter()
+        .position(|&value| value == empty_loops)
+        .expect("unsupported color empty loops");
+    let metadata = (empty_kind << 1) | le as usize;
+    let mut encoded = [0u32; 4];
+    for (index, (&word, encoded_word)) in words.iter().zip(&mut encoded).enumerate() {
+        assert_eq!(word & !PIO_DATA_MASK, 0);
+        let metadata_lo = ((metadata >> (index * 2)) & 1) as u32;
+        let metadata_hi = ((metadata >> (index * 2 + 1)) & 1) as u32;
+        *encoded_word = word | (metadata_lo << 15) | (metadata_hi << 31);
+    }
+    assert_eq!(encoded[0] as u8 & DICTIONARY_OPCODE_BASE as u8, 0);
+    encoded
+}
+
+/// Visits every encoded color instruction in a DMA word stream.
+pub fn for_each_frame_color(mut words: &[u32], mut visit: impl FnMut(ColorInstruction)) {
     assert!(!words.is_empty());
     let loop_count = words[0] as usize + 1;
-    let mut writer = ProgramWriter::new(output);
+    words = &words[1..];
+    let mut loops = 0usize;
+
+    while loops < loop_count {
+        let empty_loops = words[0];
+        let data_loops = words[1];
+        if data_loops == 0 {
+            words = &words[3..];
+        } else {
+            assert!(data_loops == 6 || data_loops == 14);
+            let le = data_loops == 14;
+            visit(color_instruction(empty_loops, le, &words[2..6]));
+            words = &words[if le { 10 } else { 6 }..];
+        }
+        loops += 1;
+    }
+    assert!(words.is_empty());
+}
+
+/// Converts a DMA word stream into compact, PIO-specific expansion instructions.
+pub fn encode_frame_program(
+    words: &[u32],
+    dictionary: &[ColorInstruction],
+    output: &mut [u8],
+) -> usize {
+    assert!(!words.is_empty());
+    let loop_count = words[0] as usize + 1;
+    let mut writer = ProgramWriter::new(output, dictionary);
     let mut word_offset = 1usize;
     let mut loops = 0usize;
 
@@ -489,7 +538,11 @@ pub fn encode_frame_program(words: &[u32], output: &mut [u8]) -> usize {
 
 /// Expands one compact frame program into the exact word stream consumed by PIO DMA.
 #[inline]
-pub fn decode_frame_program(program: &[u8], output: &mut [u32]) -> Option<usize> {
+pub fn decode_frame_program(
+    program: &[u8],
+    dictionary: &[ColorInstruction],
+    output: &mut [u32],
+) -> Option<usize> {
     let mut input_offset = 0usize;
     let mut output_offset = 1usize;
     let mut loops = 0usize;
@@ -518,13 +571,20 @@ pub fn decode_frame_program(program: &[u8], output: &mut [u32]) -> Option<usize>
                 continue;
             }
 
-            let end = input_offset.checked_add(16)?;
-            let payload = program.get(input_offset..end)?;
-            let mut color = [0u32; 4];
-            for (word, bytes) in color.iter_mut().zip(payload.chunks_exact(4)) {
-                *word = u32::from_le_bytes(bytes.try_into().ok()?);
-            }
-            input_offset = end;
+            let first = *program.get(input_offset)? as usize;
+            let mut color = if first >= DICTIONARY_OPCODE_BASE {
+                input_offset += 1;
+                *dictionary.get(first - DICTIONARY_OPCODE_BASE)?
+            } else {
+                let end = input_offset.checked_add(16)?;
+                let payload = program.get(input_offset..end)?;
+                let mut color = [0u32; 4];
+                for (word, bytes) in color.iter_mut().zip(payload.chunks_exact(4)) {
+                    *word = u32::from_le_bytes(bytes.try_into().ok()?);
+                }
+                input_offset = end;
+                color
+            };
 
             let metadata = ((color[0] >> 15) & 1)
                 | (((color[0] >> 31) & 1) << 1)
@@ -556,13 +616,15 @@ pub fn decode_frame_program(program: &[u8], output: &mut [u32]) -> Option<usize>
 ///
 /// # Safety
 ///
-/// `program` must contain a valid complete PIO2 frame program. `output` must
-/// point to writable storage large enough for the frame's declared DMA word
-/// count, and it must not overlap `program`.
+/// `program` must contain a valid complete PIO3 frame program. `dictionary`
+/// must point to 32 aligned color instructions. `output` must point to writable
+/// storage large enough for the frame's declared DMA word count, and it must
+/// not overlap either input.
 #[inline(always)]
 pub unsafe fn decode_frame_program_unchecked(
     program: *const u8,
     program_len: usize,
+    dictionary: *const ColorInstruction,
     output: *mut u32,
 ) -> usize {
     let input_end = program.add(program_len);
@@ -595,32 +657,21 @@ pub unsafe fn decode_frame_program_unchecked(
                 }
                 loops += repeat;
             } else {
-                let color0 = input.cast::<u32>().read_unaligned();
-                let color1 = input.add(4).cast::<u32>().read_unaligned();
-                let color2 = input.add(8).cast::<u32>().read_unaligned();
-                let color3 = input.add(12).cast::<u32>().read_unaligned();
-                input = input.add(16);
-
-                let metadata = ((color0 >> 15) & 1)
-                    | (((color0 >> 31) & 1) << 1)
-                    | (((color1 >> 15) & 1) << 2);
-                let empty_loops = *DECODE_COLOR_EMPTY_LOOPS.get_unchecked((metadata >> 1) as usize);
-                let le = metadata & 1 != 0;
-
-                out.write(empty_loops);
-                out.add(1).write(if le { 14 } else { 6 });
-                out.add(2).write(color0 & PIO_DATA_MASK);
-                out.add(3).write(color1 & PIO_DATA_MASK);
-                out.add(4).write(color2 & PIO_DATA_MASK);
-                out.add(5).write(color3 & PIO_DATA_MASK);
-                out = out.add(6);
-                if le {
-                    out.write(0);
-                    out.add(1).write(0);
-                    out.add(2).write(0);
-                    out.add(3).write((LE_HIGH as u32) << 16);
-                    out = out.add(4);
-                }
+                let first = input.read() as usize;
+                let color = if first >= DICTIONARY_OPCODE_BASE {
+                    input = input.add(1);
+                    *dictionary.add(first - DICTIONARY_OPCODE_BASE)
+                } else {
+                    let color = [
+                        input.cast::<u32>().read_unaligned(),
+                        input.add(4).cast::<u32>().read_unaligned(),
+                        input.add(8).cast::<u32>().read_unaligned(),
+                        input.add(12).cast::<u32>().read_unaligned(),
+                    ];
+                    input = input.add(16);
+                    color
+                };
+                out = write_decoded_color(color, out);
                 loops += 1;
             }
 
@@ -630,4 +681,28 @@ pub unsafe fn decode_frame_program_unchecked(
 
     output.write((loops - 1) as u32);
     out.offset_from(output) as usize
+}
+
+#[inline(always)]
+unsafe fn write_decoded_color(color: ColorInstruction, mut out: *mut u32) -> *mut u32 {
+    let metadata =
+        ((color[0] >> 15) & 1) | (((color[0] >> 31) & 1) << 1) | (((color[1] >> 15) & 1) << 2);
+    let empty_loops = *DECODE_COLOR_EMPTY_LOOPS.get_unchecked((metadata >> 1) as usize);
+    let le = metadata & 1 != 0;
+
+    out.write(empty_loops);
+    out.add(1).write(if le { 14 } else { 6 });
+    out.add(2).write(color[0] & PIO_DATA_MASK);
+    out.add(3).write(color[1] & PIO_DATA_MASK);
+    out.add(4).write(color[2] & PIO_DATA_MASK);
+    out.add(5).write(color[3] & PIO_DATA_MASK);
+    out = out.add(6);
+    if le {
+        out.write(0);
+        out.add(1).write(0);
+        out.add(2).write(0);
+        out.add(3).write((LE_HIGH as u32) << 16);
+        out = out.add(4);
+    }
+    out
 }

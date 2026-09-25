@@ -6,7 +6,7 @@ use embassy_rp::peripherals::{DMA_CH0, PIO0, PIO1};
 use embassy_rp::pio::program::pio_asm;
 use embassy_rp::pio::{self, Pio, ShiftConfig, StateMachine};
 use embassy_rp::pwm::{self, Pwm, PwmBatch};
-use embassy_rp::{gpio, interrupt, pac, Peripheral, PeripheralRef, Peripherals};
+use embassy_rp::{gpio, interrupt, pac, Peripheral, PeripheralRef};
 use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, ThreadModeRawMutex};
 use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::signal::Signal;
@@ -89,8 +89,6 @@ impl Handler<PWM_IRQ_WRAP_0> for PwmInterruptHandler {
     #[link_section = ".data"]
     #[inline(never)]
     unsafe fn on_interrupt() {
-        let p = unsafe { Peripherals::steal() };
-        let mut dbg_pin = gpio::Output::new(p.PIN_19, gpio::Level::High);
         let line_clock = &LINE_CLOCK as *const Mutex<ThreadModeRawMutex, RefCell<Option<LineClock>>>
             as *mut Mutex<ThreadModeRawMutex, RefCell<Option<LineClock>>>;
 
@@ -100,7 +98,6 @@ impl Handler<PWM_IRQ_WRAP_0> for PwmInterruptHandler {
         let line = line.get_mut().as_mut().unwrap();
         line.handle_interupt();
         PWM_OFF_SIGNAL.signal(());
-        dbg_pin.set_low();
     }
 }
 
