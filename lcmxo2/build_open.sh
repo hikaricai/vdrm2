@@ -3,12 +3,13 @@ set -euo pipefail
 
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 export PATH="$PWD/toolchain/install/bin:$PATH"
+cd demo
 mkdir -p build-open/state
 export XDG_STATE_HOME="$PWD/build-open/state"
 
 for tool in yosys nextpnr-machxo2 ecppack; do
     if ! command -v "$tool" >/dev/null 2>&1; then
-        printf 'Missing tool: %s; see README.md\n' "$tool" >&2
+        printf 'Missing tool: %s; see lcmxo2/OPEN_TOOLCHAIN.md\n' "$tool" >&2
         exit 1
     fi
 done

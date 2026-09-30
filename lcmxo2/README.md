@@ -1,5 +1,8 @@
 # MachXO2 流水灯：编译与烧录操作手册
 
+新工程统一放在 [`project/<工程名>/`](project/README.md)，各自管理源码、约束和构建入口，
+共用 `toolchain/` 与 `programmer/`。本文描述保留在 `demo/` 的旧流水灯工程。
+
 适用开发板：HSEDA LCMXO2-2000HC V1.1，芯片 `LCMXO2-2000HC-4TG100C`。
 Mac 通过 RP2040/Pico（上游默认 DirtyJTAG V1.07）烧录 FPGA。
 已跑通开源工具链和内部 Flash 写入、回读校验，无需 Lattice Diamond。
@@ -44,10 +47,10 @@ GP20/21 不接线，不同时连接其他 JTAG 下载器。
 自动设置本地工具路径。成功后末尾打印：
 
 ```text
-Bitstream: /Users/bytedance/rust/vdrm2/lcmxo2/build-open/led_chaser.bit
+Bitstream: /Users/bytedance/rust/vdrm2/lcmxo2/demo/build-open/led_chaser.bit
 ```
 
-输出文件为 `lcmxo2/build-open/led_chaser.bit`。构建报错时先解决错误，
+输出文件为 `lcmxo2/demo/build-open/led_chaser.bit`。构建报错时先解决错误，
 不要拿目录里上一次留下的 `.bit` 当作本次结果烧录。
 
 ## 4. 检查 JTAG
@@ -75,7 +78,7 @@ index 0:
 ## 5. 写入 FPGA 内部 Flash 并校验
 
 ```sh
-openFPGALoader -c dirtyJtag --freq 100000 -f --verify lcmxo2/build-open/led_chaser.bit
+openFPGALoader -c dirtyJtag --freq 100000 -f --verify lcmxo2/demo/build-open/led_chaser.bit
 ```
 
 这会替换 FPGA 内部 Flash 中的程序。参数含义：
@@ -102,7 +105,7 @@ LED5 是电源灯，LED6 是串口指示灯，不参与流水灯。
 
 ## 修改程序后怎么操作
 
-修改 [led_chaser.v](led_chaser.v)，然后重新执行第 3～6 步。
+修改 [led_chaser.v](demo/led_chaser.v)，然后重新执行第 3～6 步。
 
 | 参数 | 默认值 | 用途 |
 | --- | --- | --- |
@@ -114,9 +117,9 @@ LED5 是电源灯，LED6 是串口指示灯，不参与流水灯。
 `STEP_CYCLES ≈ 间隔秒数 × 2080000`。
 例如 100 ms 为 `208000`，500 ms 为 `1040000`，1 秒为 `2080000`。
 实际间隔随内部振荡器误差变化。若修改振荡器频率，还需同步修改
-[board.lpf](board.lpf) 中的时钟约束。
+[board.lpf](demo/board.lpf) 中的时钟约束。
 
-管脚已依据 [原理图](LCMXO2-2000HCV11sch.pdf) 第 1 页配置：
+管脚已依据 [原理图](demo/LCMXO2-2000HCV11sch.pdf) 第 1 页配置：
 
 | 顶层信号 | 板上 LED | FPGA 封装脚号 | FPGA 管脚名 |
 | --- | --- | --- | --- |
@@ -147,13 +150,14 @@ LED 阳极经 RN1（1 kΩ）接 3.3 V，阴极接 FPGA；Bank 1 为 3.3 V，
 
 | 文件 | 用途 |
 | --- | --- |
-| `lcmxo2/led_chaser.v` | 流水灯源码 |
-| `lcmxo2/board.lpf` | 引脚和时钟约束 |
-| `lcmxo2/build_open.sh` | 编译脚本，只构建、不烧录 |
-| `lcmxo2/build-open/led_chaser.bit` | 待烧录 FPGA 码流 |
-| `lcmxo2/build-open/synthesis.log` | 综合日志 |
-| `lcmxo2/build-open/nextpnr.log` | 布局布线日志 |
-| `lcmxo2/build-open/program.log` | 本次已成功烧录的历史日志；上面的日常命令不会自动更新它 |
+| `lcmxo2/project/` | 后续新工程，每个工程独立子目录 |
+| `lcmxo2/demo/led_chaser.v` | 旧流水灯源码 |
+| `lcmxo2/demo/board.lpf` | 旧流水灯引脚和时钟约束 |
+| `lcmxo2/build_open.sh` | 旧流水灯编译脚本，只构建、不烧录 |
+| `lcmxo2/demo/build-open/led_chaser.bit` | 待烧录 FPGA 码流 |
+| `lcmxo2/demo/build-open/synthesis.log` | 综合日志 |
+| `lcmxo2/demo/build-open/nextpnr.log` | 布局布线日志 |
+| `lcmxo2/demo/build-open/program.log` | 本次已成功烧录的历史日志；上面的日常命令不会自动更新它 |
 | `lcmxo2/programmer/pico-dirtyJtag-V1.07.uf2` | Pico 下载器固件，刷到 Pico，不是刷到 FPGA |
 
 本次使用 Yosys 0.58、本地 nextpnr-machxo2 / Trellis、
@@ -168,5 +172,5 @@ openFPGALoader 1.0.0 和上游默认 DirtyJTAG V1.07，已完成：
 `bce6738d6aacf4ee21c9d0eacc43c5c742624744697626de3258b2da893be227`。
 修改设计或工具版本后大小和哈希可能改变。板上视觉效果及断电保持未单独记录实测结果。
 
-仓库保留了 `build_diamond.tcl` 作为备选，但尚未在 Diamond 中验证；
+本地保留了 `demo/build_diamond.tcl` 作为备选，但尚未在 Diamond 中验证；
 日常操作使用本文已验证的开源流程即可。

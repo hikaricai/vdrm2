@@ -16,11 +16,11 @@
 - openFPGALoader 1.0.0（Homebrew，成功烧录使用此版本）。
 - Apple Clang 17、CMake 4.0.3、Python 3.13.5、Boost 1.89、Eigen 5.0。
 
-源码、数据库、编译产物保存在 `lcmxo2/toolchain/`，由 Git 忽略；
-只复制 Git 仓库到另一台电脑不会带上这些工具。
-nextpnr 只启用 `2000` 器件，包含本板 `LCMXO2-2000HC-4TG100C`。
-上游默认启用的器件列表不含 2000，因此需要显式设置
-`-DMACHXO2_DEVICES=2000`。
+源码、数据库、编译产物保存在 `lcmxo2/toolchain/`，供 `project/` 下各工程共用；
+它们属于本地安装内容，换电脑时需重新准备。
+nextpnr 启用 `1200;2000`，分别用于新 MBI5264 板的
+`LCMXO2-1200HC-4TG144C` 和旧流水灯板的 `LCMXO2-2000HC-4TG100C`。
+器件列表参数必须加引号，避免分号被 shell 当作命令分隔符。
 
 ## 1. 安装系统依赖
 
@@ -68,7 +68,7 @@ cmake --install lcmxo2/toolchain/build-trellis
 
 ```sh
 cmake -S lcmxo2/toolchain/src/nextpnr -B lcmxo2/toolchain/build-nextpnr -G Ninja \
-  -DARCH=machxo2 -DMACHXO2_DEVICES=2000 \
+  -DARCH=machxo2 '-DMACHXO2_DEVICES=1200;2000' \
   -DTRELLIS_INSTALL_PREFIX="$PWD/lcmxo2/toolchain/install" \
   -DCMAKE_INSTALL_PREFIX="$PWD/lcmxo2/toolchain/install" \
   -DCMAKE_BUILD_TYPE=Release -DBUILD_PYTHON=OFF -DBUILD_GUI=OFF \
@@ -82,7 +82,7 @@ cmake --install lcmxo2/toolchain/build-nextpnr
 若内存不足，可将 `--parallel 8` 改为 `--parallel 2`。
 
 工具安装在项目目录，不需要手动修改系统 PATH；
-`build_open.sh` 会配置本次构建的 PATH。
+旧 `build_open.sh` 和新工程的 `build.sh` 会配置本次构建的 PATH。
 
 ## 5. 验证安装
 
@@ -92,7 +92,10 @@ openFPGALoader --version
 ./lcmxo2/build_open.sh
 ```
 
-构建成功并打印 `Bitstream: .../lcmxo2/build-open/led_chaser.bit` 后，
+此处使用 `demo/` 中的旧流水灯验证工具链。新工程放在
+[`lcmxo2/project/<工程名>/`](project/README.md)，使用各自的构建入口。
+
+构建成功并打印 `Bitstream: .../lcmxo2/demo/build-open/led_chaser.bit` 后，
 按 [操作手册](README.md) 检测 JTAG 和烧录。此处验证不需要连接硬件。
 
 常见安装问题：
@@ -100,7 +103,7 @@ openFPGALoader --version
 - 找不到 `nextpnr-machxo2` 或 `ecppack`：检查上述 `cmake --install` 是否成功，
   可执行文件应位于 `lcmxo2/toolchain/install/bin/`。
 - 找不到 `pytrellis`：核对两次 CMake 的 Python 路径一致，并确认先安装了 Trellis。
-- 提示不支持 2000 器件：核对 `-DARCH=machxo2 -DMACHXO2_DEVICES=2000`。
+- 提示不支持 1200 或 2000 器件：核对 `-DARCH=machxo2 '-DMACHXO2_DEVICES=1200;2000'`。
 - 移动项目后 CMake 报旧目录错误：CMake 缓存含绝对路径，使用新的构建目录重新配置，
   并将安装前缀指向新项目路径。
 
