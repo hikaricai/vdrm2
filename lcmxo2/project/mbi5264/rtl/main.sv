@@ -26,11 +26,11 @@ module led (
     logic latch_clock;
 
 `ifdef SYNTHESIS
-    // Explicit routable globals for the 1200 database: automatic DCC1
-    // placement fails dedicated routing; DCC0 and DCC2 route successfully.
-    (* BEL = "X12/Y6/DCC0" *)
+    // Routable globals in the MachXO2-2000 database; automatic DCC0
+    // placement fails dedicated routing for this design.
+    (* BEL = "X13/Y8/DCC2" *)
     DCCA main_clock_buffer (.CLKI(CLK), .CE(1'b1), .CLKO(main_clock));
-    (* BEL = "X12/Y6/DCC2" *)
+    (* BEL = "X13/Y8/DCC3" *)
     DCCA latch_clock_buffer (.CLKI(SEL_LAT), .CE(1'b1), .CLKO(latch_clock));
 `else
     assign main_clock = CLK;

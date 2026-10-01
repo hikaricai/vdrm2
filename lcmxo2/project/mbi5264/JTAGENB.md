@@ -2,9 +2,9 @@
 
 ## 已确认结论
 
-目标为 `LCMXO2-1200HC-4TG144C`。本地
-[封装迁移表](../MachXO2144-PinTQFPPackageMigrationFile.CSV) 的 **LCMXO2-1200**
-列确认：120 脚 `PT15C` 的复用功能是 `JTAGENB`。
+实板为 MachXO2-2000、TQFP144，当前构建目标为 `LCMXO2-2000HC-4TG144C`。本地
+[封装迁移表](../MachXO2144-PinTQFPPackageMigrationFile.CSV) 的 **LCMXO2-2000**
+列确认：120 脚 `PT20C` 的复用功能是 `JTAGENB`。
 官方编程指南明确支持用它切换 JTAG 与用户 IO。
 
 下表描述配置完成、进入 **user mode** 后的状态：
@@ -85,7 +85,7 @@ MachXO2 `.bit` Flash 路径固定使用 `featuresRow = 0`、`feabits = 0x460`；
   第 46 页 §7.2.8 还说明了关闭所有配置端口时的 `MUX_CONFIGURATION_PORTS` 设置，
   以及将 JTAGENB 硬接地可能导致无法再编程的后果。
 - [Lattice FAQ 2117：JTAGENB 是否可以直接接 VCC 或 GND](https://www.latticesemi.com/en/Support/AnswerDatabase/2/1/1/2117)。
-- [官方 MachXO2-1200 Pinout](https://www.latticesemi.com/view_document?document_id=39442)：
-  查 `Dual Function` 与 `TQFP144` 两列。
+- [官方 TQFP144 封装迁移表（本地副本）](../MachXO2144-PinTQFPPackageMigrationFile.CSV)：
+  查 `LCMXO2-2000` 组的 `Pin Number` 与 `Dual Function` 列。
 - [openFPGALoader v1.0.0 lattice.cpp](https://github.com/trabucayre/openFPGALoader/blob/v1.0.0/src/lattice.cpp)：
   `program_intFlash()` 与 `displayFeabits()`。

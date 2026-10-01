@@ -1,5 +1,6 @@
-# LCMXO2-1200HC-4TG144C.
-# Source: ../../LCMXO21200hc_SCH_Schematic3_2026-09-30.pdf, sheet 1.
+# LCMXO2-2000HC-4TG144C (actual board device).
+# Wiring source: ../LCMXO21200hc_SCH_Schematic3_2026-09-30.pdf, sheet 1.
+# Physical IO pins checked against the LCMXO2-2000 TQFP144 migration table.
 # Every SITE is a physical TQFP144 pin; array index 0 is schematic suffix 1.
 # 3.3 V MCU/display interface: all connected VCCIO banks must use 3.3 V.
 
