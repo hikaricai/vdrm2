@@ -23,10 +23,12 @@
 边沿之间保持，没有额外半周期流水线延迟。
 第九路直接组合输出。
 
-主工程使用相反边沿的两个交叉反馈寄存器和 XOR 实现双沿保持，
-去除了 `late_clk` 和时钟控制的输出选择器。
-**目前为普通 FF 实现，原生 DDR 要求尚未完成。**
-此前 ODDRXE 版本实现的是错误的上一沿样本输出，说明见 [时序修正](DDR.md)。
+双沿保持使用相反边沿的两个交叉反馈寄存器和 XOR，未使用原生 DDR：
+上升沿更新 `encoded_pos = decoded ^ encoded_neg`，
+下降沿更新 `encoded_neg = decoded ^ encoded_pos`，
+输出为 `encoded_pos ^ encoded_neg`。每个边沿只有一组寄存器更新，
+利用 `A ^ B ^ B = A` 输出当沿采样值；时钟暂停时保持。
+反馈路径必须满足相邻边沿间的建立保持时间，输出有 FF 和 XOR 的传播延迟。
 
 ## MCU 传输长度无需改变
 
@@ -58,8 +60,6 @@ RTL 使用 SystemVerilog：入口为 `rtl/main.sv`，子模块为
 `rtl/hc595.sv`、`rtl/decoder.sv`。使用 `logic`、`always_ff`、
 `typedef` 和内部二维数组组织三组 RGB 输出，保留原有顶层管脚名。
 综合脚本通过 Yosys `read_verilog -sv` 读取，仿真使用 `iverilog -g2012`。
-最初的 SystemVerilog 语法重构与原 Verilog RTL 通过了形式等价检查；
-当前双沿采样改变了旧版高半周期透明的功能，不适用该等价结论。
 
 从仓库根目录执行：
 
@@ -68,8 +68,8 @@ bash lcmxo2/project/mbi5264/build.sh
 ```
 
 输出 `lcmxo2/project/mbi5264/build-open/led.bit`。
-构建使用常规 nextpnr，生成 `led-current-edge.bit` 后复制为 `led.bit`，
-不再使用之前的 ODDRXE 后端补丁。只综合可运行 `synth.sh`。脚本不会访问硬件。
+构建使用常规 nextpnr，直接生成 `led.bit`。
+只综合可运行 `synth.sh`。脚本不会访问硬件。
 
 仿真使用 Icarus Verilog：
 
@@ -129,13 +129,6 @@ IO 使用 LVCMOS33，实际板卡对应 VCCIO 必须供 3.3 V。
 
 ## 构建验证记录
 
-以下记录属于原 1200 目标、双沿采样修改前的版本：已完成综合、布局布线和压缩码流生成，
-使用 98 个 FF、182 个组合单元，
-码流为 8,389 字节。内部 `main_clock` 时序检查通过 16.25 MHz 目标，
-路由后工具报告该时钟 Fmax 为 142.41 MHz。
-该数值不是板级可用频率承诺：外部 IO 延迟、CLK 与 SEL_LAT 的边沿间隔，
-以及 MCU/驱动芯片的建立保持时间仍需结合实际波形验证。
-没有对新板执行烧录。
 当前双沿当前值版本已按 `LCMXO2-2000HC-4TG144C` 重新完成综合、布局布线和
 压缩码流生成，RTL 仿真通过 41,187 次输出检查。码流反解确认器件 ID 为
 `0x012bb043`，`led.bit` 已更新为 2000 目标。

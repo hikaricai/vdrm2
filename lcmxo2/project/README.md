@@ -4,7 +4,7 @@
 管脚约束、构建入口和说明文档。旧流水灯保留在 `lcmxo2/demo/`。
 
 当前工程：[mbi5264](mbi5264/README.md)，三组 RGB × 九路独立选择，
-目标 `LCMXO2-1200HC-4TG144C`，包含 RTL、完整 LPF、构建脚本和仿真。
+目标 `LCMXO2-2000HC-4TG144C`，包含 RTL、完整 LPF、构建脚本和仿真。
 
 推荐布局：
 
@@ -26,8 +26,8 @@ lcmxo2/
 将中间文件、码流和 `XDG_STATE_HOME` 写入本工程的 `build-open/`。
 顶层模块、目标器件和 LPF 按各工程实际硬件配置，不能直接沿用旧板的管脚。
 
-当前 `lcmxo2/build_open.sh` 专用于 `demo/` 中的
-`LCMXO2-2000HC-4TG100C` 流水灯。现有本地 nextpnr 已启用 1200 和 2000 器件；
+当前工程使用 `lcmxo2/project/mbi5264/build.sh` 构建。
+现有本地 nextpnr 已启用 1200 和 2000 器件；
 其他容量需先确认后端支持并重新构建相应器件数据库。
 
 公共说明：[工具链安装](../OPEN_TOOLCHAIN.md)、

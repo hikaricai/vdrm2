@@ -18,8 +18,8 @@
 
 源码、数据库、编译产物保存在 `lcmxo2/toolchain/`，供 `project/` 下各工程共用；
 它们属于本地安装内容，换电脑时需重新准备。
-nextpnr 启用 `1200;2000`，分别用于新 MBI5264 板的
-`LCMXO2-1200HC-4TG144C` 和旧流水灯板的 `LCMXO2-2000HC-4TG100C`。
+nextpnr 启用 `1200;2000`；当前 MBI5264 板使用 `LCMXO2-2000HC-4TG144C`，
+旧流水灯板使用 `LCMXO2-2000HC-4TG100C`。
 器件列表参数必须加引号，避免分号被 shell 当作命令分隔符。
 
 ## 1. 安装系统依赖
@@ -82,21 +82,22 @@ cmake --install lcmxo2/toolchain/build-nextpnr
 若内存不足，可将 `--parallel 8` 改为 `--parallel 2`。
 
 工具安装在项目目录，不需要手动修改系统 PATH；
-旧 `build_open.sh` 和新工程的 `build.sh` 会配置本次构建的 PATH。
+各工程的 `build.sh` 会配置本次构建的 PATH。
 
 ## 5. 验证安装
 
 ```sh
 yosys -V
 openFPGALoader --version
-./lcmxo2/build_open.sh
+bash lcmxo2/project/mbi5264/build.sh
 ```
 
-此处使用 `demo/` 中的旧流水灯验证工具链。新工程放在
+此处使用当前 MBI5264 工程验证工具链。新工程放在
 [`lcmxo2/project/<工程名>/`](project/README.md)，使用各自的构建入口。
 
-构建成功并打印 `Bitstream: .../lcmxo2/demo/build-open/led_chaser.bit` 后，
-按 [操作手册](README.md) 检测 JTAG 和烧录。此处验证不需要连接硬件。
+构建成功后输出 `lcmxo2/project/mbi5264/build-open/led.bit`。
+上板前按 [工程说明](project/mbi5264/README.md) 核对引脚复用和烧录接线。
+此处验证不需要连接硬件。
 
 常见安装问题：
 
