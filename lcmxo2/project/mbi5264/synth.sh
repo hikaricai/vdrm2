@@ -7,6 +7,6 @@ mkdir -p build-open/state
 export XDG_STATE_HOME="$PWD/build-open/state"
 
 yosys -Q -T -l build-open/synthesis.log \
-    -p 'read_verilog -sv rtl/decoder.sv rtl/hc595.sv rtl/main.sv; synth_lattice -family xo2 -top led -json build-open/led.json; check -assert'
+    -p 'read_verilog -sv rtl/decoder.sv rtl/hc595.sv rtl/main.sv; synth_lattice -family xo2 -top led -json build-open/led.json; check -assert; write_verilog -noattr build-open/led-synth.v'
 
 printf '\nSynthesized core: %s/build-open/led.json\n' "$PWD"

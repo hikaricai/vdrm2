@@ -22,16 +22,8 @@ module led (
 );
     typedef logic [8:0] destinations_t;
     destinations_t routed [3][3]; // [bank][channel: R=0, G=1, B=2]
-    logic pos = 1'b0;
-    logic neg = 1'b0;
-
-    logic late_pos = 1'b0;
-    logic late_neg = 1'b0;
-
     logic main_clock;
     logic latch_clock;
-    logic late_clk;
-    assign late_clk = late_pos != late_neg;
 
 `ifdef SYNTHESIS
     // Explicit routable globals for the 1200 database: automatic DCC1
@@ -49,23 +41,6 @@ module led (
     assign {B2, G2, R2} = {routed[1][2], routed[1][1], routed[1][0]};
     assign {B3, G3, R3} = {routed[2][2], routed[2][1], routed[2][0]};
 
-    // Retain the original phase tracking and output hold behavior.
-    always_ff @(posedge main_clock)
-        if (late_pos == late_neg)
-            late_pos <= ~late_pos;
-
-    always_ff @(negedge main_clock)
-        if (late_pos != late_neg)
-            late_neg <= ~late_neg;
-
-    always_ff @(posedge late_clk)
-        if (pos == neg)
-            pos <= ~pos;
-
-    always_ff @(negedge late_clk)
-        if (pos != neg)
-            neg <= ~neg;
-
     for (genvar bank = 0; bank < 3; bank++) begin : banks
         logic [3:0] address;
         wire [2:0] rgb = {B[bank], G[bank], R[bank]};
@@ -76,20 +51,25 @@ module led (
 
         for (genvar channel = 0; channel < 3; channel++) begin : channels
             destinations_t decoded;
-            logic [7:0] held_neg = '0;
-            logic [7:0] held_pos = '0;
+            logic [7:0] encoded_neg = '0;
+            logic [7:0] encoded_pos = '0;
             decoder select_output (
                 .a(address), .v(rgb[channel]), .o(decoded)
             );
+            // Dual-edge hold: each edge publishes the CURRENT decoded value.
+            // Only one encoded register changes per edge, so no clock-driven
+            // output mux is required. This uses fabric FFs, not native DDR.
+            // posedge: (decoded ^ encoded_neg) ^ encoded_neg == decoded
+            // negedge: encoded_pos ^ (decoded ^ encoded_pos) == decoded
             always_ff @(posedge main_clock)
-                held_pos <= decoded[7:0];
+                encoded_pos <= decoded[7:0] ^ encoded_neg;
 
             always_ff @(negedge main_clock)
-                held_neg <= decoded[7:0];
+                encoded_neg <= decoded[7:0] ^ encoded_pos;
 
             assign routed[bank][channel] = {
                 decoded[8], // The last destination retains the legacy direct path.
-                (pos != neg) ? held_pos : held_neg
+                encoded_pos ^ encoded_neg
             };
         end
     end

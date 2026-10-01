@@ -1,7 +1,7 @@
 `timescale 1ns / 1ps
 
-// Current contract: destinations 0..7 capture on BOTH CLK edges and hold
-// between edges; destination 8 remains combinational. No T/2 pipeline delay.
+// Destinations 0..7 output the CURRENT edge's sample on BOTH CLK edges
+// and hold between edges; destination 8 remains combinational.
 // This is zero-delay RTL verification, not a physical glitch/timing proof.
 module tb_led;
     reg CLK = 0;
@@ -13,7 +13,6 @@ module tb_led;
     reg [7:0] expected_r [0:2], expected_g [0:2], expected_b [0:2];
     integer a, colors, checks = 0;
     integer rising_edges = 0, falling_edges = 0;
-    integer late_rising_edges = 0, late_falling_edges = 0;
     reg monitoring = 0;
     realtime last_clock_edge;
 
@@ -74,7 +73,8 @@ module tb_led;
             if (CLK === level)
                 $fatal(1, "testbench requested a clock edge without changing CLK");
             // Independent reference: use external data and the programmed address.
-            // Expect THIS edge's sample, not the previous edge's sample.
+            // The value sampled at THIS edge must be visible after the edge.
+            // No extra half-cycle pipeline stage is permitted.
             for (bank = 0; bank < 3; bank = bank + 1) begin
                 mask = select_mask(addresses[bank]);
                 expected_r[bank] = R[bank] ? mask[7:0] : 8'b0;
@@ -88,24 +88,11 @@ module tb_led;
             CLK = level;
             #1; // Observe after all nonblocking/delta-cycle updates settle.
             check_outputs(level ? "rising-edge sample" : "falling-edge sample");
-            if (dut.late_clk !== CLK || (dut.pos != dut.neg) !== CLK)
-                $fatal(1, "phase mismatch: CLK=%b late_clk=%b pos/neg=%b/%b",
-                       CLK, dut.late_clk, dut.pos, dut.neg);
-            if (late_rising_edges != rising_edges || late_falling_edges != falling_edges)
-                $fatal(1, "late_clk missed or added an edge");
         end
     endtask
 
     always @(CLK)
         last_clock_edge = $realtime;
-
-    always @(posedge dut.late_clk)
-        if (monitoring)
-            late_rising_edges = late_rising_edges + 1;
-
-    always @(negedge dut.late_clk)
-        if (monitoring)
-            late_falling_edges = late_falling_edges + 1;
 
     // Event-level checks catch glitches hidden by the #1 settled-value checks.
     // Every held output bit may change at most once at a CLK edge, and never
@@ -174,8 +161,6 @@ module tb_led;
         #2;
         monitoring = 1;
         check_outputs("power-up");
-        if (dut.late_clk !== 0 || (dut.pos != dut.neg) !== 0)
-            $fatal(1, "phase registers did not initialize low");
         set_colors(511);
         #5;
         check_outputs("before first clock edge");
@@ -212,7 +197,7 @@ module tb_led;
                 check_outputs("paused clock");
             end
         end
-        $display("PASS: %0d output checks; %0d rising / %0d falling samples; late_clk edges match",
+        $display("PASS: %0d output checks; %0d rising / %0d falling samples; current-edge output",
                  checks, rising_edges, falling_edges);
         $display("PASS: 16 addresses x 512 RGB patterns x 3 banks; both-phase hold, LAT isolation, direct destination 9");
         $display("PASS: no extra held-output transitions observed in zero-delay RTL; physical glitches are not modeled");
