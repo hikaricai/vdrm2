@@ -1,0 +1,25 @@
+[package]
+name = "esp32p4-hello-world"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+
+[[bin]]
+name = "esp32p4-hello-world"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+esp-hal = { version = "=1.2.2", features = ["esp32p4", "unstable"] }
+esp-println = { version = "0.18", default-features = false, features = ["esp32p4", "jtag-serial", "critical-section"] }
+esp-bootloader-esp-idf = { version = "0.6", features = ["esp32p4"] }
+
+[profile.dev]
+opt-level = "s"
+
+[profile.release]
+codegen-units = 1
+debug = 2
+lto = "fat"
+opt-level = "s"
