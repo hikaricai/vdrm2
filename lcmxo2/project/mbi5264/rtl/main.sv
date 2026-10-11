@@ -62,14 +62,14 @@ module led (
             // posedge: (decoded ^ encoded_neg) ^ encoded_neg == decoded
             // negedge: encoded_pos ^ (decoded ^ encoded_pos) == decoded
             always_ff @(posedge main_clock)
-                encoded_pos <= decoded[7:0] ^ encoded_neg;
+                encoded_pos <= decoded[8:1] ^ encoded_neg;
 
             always_ff @(negedge main_clock)
-                encoded_neg <= decoded[7:0] ^ encoded_pos;
+                encoded_neg <= decoded[8:1] ^ encoded_pos;
 
             assign routed[bank][channel] = {
-                decoded[8], // The last destination retains the legacy direct path.
-                encoded_pos ^ encoded_neg
+                encoded_pos ^ encoded_neg,
+                decoded[0] // The last destination retains the legacy direct path.
             };
         end
     end
