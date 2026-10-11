@@ -59,9 +59,6 @@ impl EncoderCtx {
             rtt_target::rprintln!("total imgs {}", len);
             let imgs_addr_list: &'static [u32] =
                 core::slice::from_raw_parts(crate::env::IMGS_LIST_ADDR as *const u32, len as usize);
-            for imgs_addr in imgs_addr_list {
-                rtt_target::rprintln!("imgs_addr {}", *imgs_addr);
-            }
             imgs_addr_list
         };
 
@@ -258,7 +255,8 @@ pub fn update_frame(
     parser.encode()
 }
 
-const SEL_LAT_PAIR: u32 = 0x4000_4000;
+// const SEL_LAT_PAIR: u32 = 0x4000_4000;
+const SEL_LAT_PAIR: u32 = 0;
 const SEL_DATA_MASK_PAIR: u32 = 0x0888_0888;
 
 #[inline(always)]
@@ -498,11 +496,7 @@ impl<'a> ColorParser<'a> {
         let empty_loops = chip_inc_index * 16 + 8 * !self.new_line as u32;
         unsafe {
             let data_loops = if le { 14 } else { 6 };
-            self.push_color(
-                empty_loops,
-                data_loops,
-                *buf,
-            );
+            self.push_color(empty_loops, data_loops, *buf);
             if le {
                 self.push_words([0, 0, 0, (crate::clocks::LE_HIGH as u32) << 16]);
             }

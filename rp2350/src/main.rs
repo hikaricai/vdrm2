@@ -285,8 +285,8 @@ async fn main(spawner: Spawner) {
     cmd_pio.sel_all_chip();
 
     let mut dbg_pin = gpio::Output::new(p.PIN_26, gpio::Level::Low);
-    test_screen(&mut cmd_pio, &mut line, &mut led_pin, &mut dbg_pin).await;
-    // test_screen_line(&mut cmd_pio, &mut line, &mut led_pin).await;
+    // test_screen(&mut cmd_pio, &mut line, &mut led_pin, &mut dbg_pin).await;
+    test_screen_line(&mut cmd_pio, &mut line, &mut led_pin).await;
     // must return to run test_screen
     return;
 
@@ -493,6 +493,7 @@ async fn test_screen_line(
         // let h = i % 16;
         let h = ((i % 64) * 1 + (i / 64) * 16 + 16) as u8;
         let gray = (32 + h) as u8;
+        let h = i as u8 % 16;
         let gray = 255u8;
         // let h = 17u8; // 4200 fps
         // let h = 1u8; // 3955 fps
@@ -522,6 +523,8 @@ async fn test_screen_line(
         line.wait_stop().await;
         cnt += 1;
         if cnt & 0xFFF == 0 {
+            let umini_cmds = mbi5264_common::unimi_cmds();
+            init_leds(cmd_pio, &umini_cmds);
             let now = Instant::now();
             let ms = (now - last).as_millis() as u32;
             last = now;
