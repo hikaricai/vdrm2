@@ -285,8 +285,8 @@ async fn main(spawner: Spawner) {
     cmd_pio.sel_all_chip();
 
     let mut dbg_pin = gpio::Output::new(p.PIN_26, gpio::Level::Low);
-    // test_screen(&mut cmd_pio, &mut line, &mut led_pin, &mut dbg_pin).await;
-    test_screen_line(&mut cmd_pio, &mut line, &mut led_pin).await;
+    test_screen(&mut cmd_pio, &mut line, &mut led_pin, &mut dbg_pin).await;
+    // test_screen_line(&mut cmd_pio, &mut line, &mut led_pin).await;
     // must return to run test_screen
     return;
 

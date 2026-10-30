@@ -2,7 +2,7 @@
 use bitfield_struct::bitfield;
 type MbiWave = u8;
 type Reg = u16;
-pub const SERIAL_CHIPS: u32 = 1;
+pub const SERIAL_CHIPS: u32 = 2;
 
 // pub type RGBH = [u8; 4];
 // line let h = 17u8;

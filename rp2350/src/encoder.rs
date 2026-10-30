@@ -255,8 +255,8 @@ pub fn update_frame(
     parser.encode()
 }
 
-// const SEL_LAT_PAIR: u32 = 0x4000_4000;
-const SEL_LAT_PAIR: u32 = 0;
+const SEL_LAT_PAIR: u32 = 0x4000_4000;
+// const SEL_LAT_PAIR: u32 = 0;
 const SEL_DATA_MASK_PAIR: u32 = 0x0888_0888;
 
 #[inline(always)]
