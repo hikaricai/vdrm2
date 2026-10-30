@@ -144,6 +144,10 @@ async fn motor_input_sync(
         sync_signal.wait_sync().await;
         let now = Instant::now();
         let elapsed = now - last_sync_tick;
+        if elapsed > Duration::from_millis(250) {
+            last_sync_tick = now;
+            continue;
+        }
         let ticks_per_angle = elapsed.as_ticks() as u32 * TOTAL_MIRRORS / TOTAL_ANGLES;
         motor_sync_sinal.signal(SyncState {
             last_tick: now,
@@ -285,10 +289,10 @@ async fn main(spawner: Spawner) {
     cmd_pio.sel_all_chip();
 
     let mut dbg_pin = gpio::Output::new(p.PIN_26, gpio::Level::Low);
-    test_screen(&mut cmd_pio, &mut line, &mut led_pin, &mut dbg_pin).await;
+    // test_screen(&mut cmd_pio, &mut line, &mut led_pin, &mut dbg_pin).await;
     // test_screen_line(&mut cmd_pio, &mut line, &mut led_pin).await;
     // must return to run test_screen
-    return;
+    // return;
 
     // rtt_target::rprintln!("first sync_signal");
     // let mut cmd_iter = core::iter::repeat(UMINI_CMDS.iter()).flatten();
@@ -314,7 +318,7 @@ async fn main(spawner: Spawner) {
         DBG.store(dbg, core::sync::atomic::Ordering::Relaxed);
         loop {
             total_frames += 1;
-            dbg_pin.set_high();
+            // dbg_pin.set_high();
             line.start();
             cmd_pio.refresh_ptr(dma_buf.ptr, dma_buf.len);
 
@@ -350,7 +354,7 @@ async fn main(spawner: Spawner) {
             if dbg {
                 // rtt_target::rprintln!("encode img {} show {}", img_angle, show_angle);
             }
-            dbg_pin.set_low();
+            // dbg_pin.set_low();
 
             let now = Instant::now();
             let cur_angle = (now.as_ticks() - last_tick.as_ticks()) as u32 / ticks_per_angle;
