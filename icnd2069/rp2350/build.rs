@@ -15,6 +15,13 @@ fn main() {
     println!("cargo:rerun-if-env-changed=ICND2069_SHORT_DATA");
     println!("cargo:rerun-if-env-changed=ICND2069_REPEAT_LATCH_GAP");
     println!("cargo:rerun-if-env-changed=ICND2069_TARGET_CHANNEL");
+    println!("cargo:rerun-if-env-changed=ICND2069_CONFIG_INTERVAL");
+    let interval: u32 = env::var("ICND2069_CONFIG_INTERVAL")
+        .unwrap_or_else(|_| "10000".into())
+        .parse()
+        .expect("ICND2069_CONFIG_INTERVAL must be an integer in 1..=4294967295");
+    assert!(interval > 0, "ICND2069_CONFIG_INTERVAL must be at least 1");
+    println!("cargo:rustc-env=ICND2069_CONFIG_INTERVAL={interval}");
     let target: usize = env::var("ICND2069_TARGET_CHANNEL")
         .unwrap_or_else(|_| "0".into())
         .parse()

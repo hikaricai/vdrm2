@@ -1,4 +1,4 @@
-//! ICND2069 16-scan image and full configuration using saved CLK timing.
+//! ICND2069 16-scan image and full configuration using fixed DCLK timing.
 //! Each halfword describes pins for one DCLK rising-edge transfer.
 //! Reference: dbg/nova_to_devboard_100m_2s.dsl and the startup summary.
 
@@ -165,6 +165,28 @@ pub const REGISTERS: &[(u8, u8)] = &[
     (0x23, 0x01),
 ];
 pub const CONFIG_WRITES: usize = REGISTERS.len() + 4;
+pub const CONFIG_INTERVAL: u32 = match option_env!("ICND2069_CONFIG_INTERVAL") {
+    Some(value) => {
+        let bytes = value.as_bytes();
+        assert!(!bytes.is_empty());
+        let mut n: u32 = 0;
+        let mut i = 0;
+        while i < bytes.len() {
+            assert!(bytes[i] >= b'0' && bytes[i] <= b'9');
+            n = n * 10 + (bytes[i] - b'0') as u32;
+            i += 1;
+        }
+        assert!(n > 0);
+        n
+    }
+    None => 10000,
+};
+// Keep VSYNC/EN_OP and their trailing PARK clock in a 17-word prefix.
+// Skip the full configuration on even word boundaries. The final skipped
+// clock is PARK at the beginning of the data gap, replaced by PARK at 33.
+pub const COMMON_PREFIX_WORDS: usize = 17;
+pub const CONFIG_END_WORDS: usize = (49 + CONFIG_WRITES * (8 + TRANSFER_DCLKS) + 1) / 2;
+pub const CONFIG_SKIP_DCLKS: usize = 2 * (CONFIG_END_WORDS - COMMON_PREFIX_WORDS);
 pub const DATA_ROW_DCLKS: usize = if SHORT_DATA {
     2 * (8 + TRANSFER_DCLKS) + (CHANNELS - 2) * (REPEAT_LATCH_GAP + 1)
 } else {
@@ -183,31 +205,17 @@ pub const DATA_END: usize =
 pub const FIRST_ROW: usize = DATA_END + 16;
 pub const FRAME_DCLKS: usize = (FIRST_ROW + scan_period() + 1) & !1;
 pub const FRAME_WORDS: usize = FRAME_DCLKS / 2;
+pub const NORMAL_FRAME_DCLKS: usize = FRAME_DCLKS - CONFIG_SKIP_DCLKS;
 pub const HEAD_WORDS: usize = DATA_END / 2;
 pub const TAIL_WORDS: usize = FRAME_WORDS - HEAD_WORDS;
-const CLOCK_DELAYS: &[u8; 208_094] = include_bytes!("nova_clock_delays.bin");
 pub const ROW_RUN_COUNT: usize = GROUPS * ROWS * 2 + 1;
 pub const VSYNC_FALL: usize = 8;
-// First complete frame of 100m_7s_1.dsl. Four (period-80) values per byte.
-const ROW_SCHEDULE: &[u8] = b"55655488855555555457548855555552155555565555522155555555551752215555555455555556555548855555555555174885555555545555555655555215555555555487221555555555155555565555545555555555522288555555555515555556555554555555555548872155555555548555555655555515555555522216855555555552215555565555554555555548855715555555554885555523555555455555552215571555555555221555548a5555552155555488555745555555548855555223555554885555522155574555555552215555488755552221555548855557215555554885555522175554885555552215555688555552221555548857555221555554885555572155956559565595655a956559565595655956575956559565595655956755956559565595655957655956559565595655975655956559565595655a956559565595655956575956559565595655956755956559565595655957655956559565595655975655956559565595655a956559565595655956575956559565595655956755956559565595655957655956559565595655975655956559565595655a956559565595655956575956559565595655956755956559565595655957655956559565595655975655956559565595655a956559565595655956575956559565595655956755956559565595655957655956559565595655975655956559565595655a956559565595655956575956559565595655956755956559565595655957655956559565595655975655956559565595655a956559565595655956575956559565595655956755956559565595655957655956559565595655975655956559565595655a95655956559565595654";
-pub const fn row_period(index: usize) -> usize {
-    let digit = ROW_SCHEDULE[index / 2];
-    let nibble = if digit <= b'9' {
-        digit - b'0'
-    } else {
-        digit - b'a' + 10
-    };
-    80 + ((nibble >> (if index % 2 == 0 { 2 } else { 0 })) & 3) as usize
+pub const fn row_period(_index: usize) -> usize {
+    ROW_DCLKS
 }
 
 const fn scan_period() -> usize {
-    let mut total = 0;
-    let mut i = 0;
-    while i < GROUPS * ROWS {
-        total += row_period(i);
-        i += 1;
-    }
-    total
+    GROUPS * ROWS * ROW_DCLKS
 }
 
 /// Black plus eight evenly spaced words from 511 to 8191, rounded to integers.
@@ -426,35 +434,23 @@ fn encode_wave(wave: &mut Waveform<'_>, frame: &Frame, rotating: Option<u16>) ->
     wave.hold(PARK, FRAME_DCLKS - wave.clocks);
 
     // Overlay independently running ROW on the serialized command/data bus.
-    // GROUPS complete sweeps x 16 rows; preserve local width/cadence.
+    // GROUPS complete sweeps x 16 rows with a fixed ROW_DCLKS cadence.
     let mut start = FIRST_ROW;
     for i in 0..GROUPS * ROWS {
         let period = row_period(i);
-        let width = if i == 0 { 12 } else { 4 };
         for t in start - 8..start + period - 8 {
             let mut row_pins = blank(t < start);
             row_pins |= select_bit(i % ROWS == 0 && t < start + 2);
             if (start - 4..start - 2).contains(&t) {
                 row_pins |= LCK;
             }
-            if (start..start + width).contains(&t) {
-                row_pins |= ROW;
-            }
+            // ROW is generated separately by SM1, not in SM0's pin word.
             let shift = (t & 1) * 16;
             let mask = ((BK | DIN | LCK | ROW) as u32) << shift;
             let word = wave.word_mut(t / 2);
             *word = (*word & !mask) | (row_pins as u32) << shift;
         }
         start += period;
-    }
-    // GP22/OE is now generated by SM1. Upper four bits become SM0's
-    // variable low-time count, preserving the measured word-boundary stalls.
-    for t in 0..FRAME_DCLKS {
-        let shift = (t & 1) * 16;
-        let mask = 0xf000u32 << shift;
-        let word = wave.word_mut(t / 2);
-        *word = (*word & !mask)
-            | ((CLOCK_DELAYS[t] as u32) << (12 + shift));
     }
     FRAME_WORDS
 }

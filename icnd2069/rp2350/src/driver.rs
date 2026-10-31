@@ -1,7 +1,7 @@
 use embassy_rp::{
     bind_interrupts,
     gpio::Level,
-    peripherals::{DMA_CH0, DMA_CH1, DMA_CH2, DMA_CH3, DMA_CH4, PIN_10, PIN_13, PIN_15, PIN_16, PIN_18, PIN_20, PIN_22, PIO0},
+    peripherals::{DMA_CH0, DMA_CH1, DMA_CH2, DMA_CH3, DMA_CH4, DMA_CH5, PIN_10, PIN_13, PIN_15, PIN_16, PIN_18, PIN_20, PIN_22, PIO0},
     pio::{self, program::pio_asm, Common, Pio, ShiftConfig, StateMachine},
     Peripheral, PeripheralRef,
 };
@@ -11,6 +11,7 @@ use crate::protocol::{BK_ACTIVE_HIGH, DCLK_HZ, DIN_ONE_SELECTS};
 
 bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => pio::InterruptHandler<PIO0>;
+    DMA_IRQ_1 => crate::scheduler::Handler;
 });
 
 pub struct Pins {
@@ -34,6 +35,37 @@ pub struct Driver {
 }
 
 impl Driver {
+    pub fn start_scheduled(
+        &mut self,
+        heads: &'static [u32],
+        head_words: usize,
+        tail: &'static [u32],
+        row_runs: &'static [u32],
+        descriptors: &'static mut [u32; 24],
+        row_descriptors: &'static mut [u32; 16],
+        first_runs: &'static mut [u32; 2],
+        restart: &'static mut [u32; 2],
+        _control0: DMA_CH2,
+        _control1: DMA_CH3,
+        _rewind0: DMA_CH4,
+        _rewind1: DMA_CH5,
+    ) {
+        assert!(!self.started);
+        // These six channels are exclusively owned. The scheduler owns all
+        // mutable descriptors after this call; waveform samples stay immutable.
+        unsafe {
+            crate::scheduler::start(heads, head_words, tail, row_runs,
+                descriptors, row_descriptors, first_runs, restart);
+        }
+        self._common.apply_sm_batch(|b| {
+            b.restart(&mut self.sm);
+            b.restart(&mut self.row_sm);
+            b.set_enable(&mut self.row_sm, true);
+            b.set_enable(&mut self.sm, true);
+        });
+        self.started = true;
+    }
+
     /// Alternate a gray-specific input head and the shared scan tail. DMA2
     /// writes four AL3 registers on DMA0 per segment. The final tail chains to
     /// DMA4, which rewinds the descriptor list. DMA1/3 repeat one ROW table.
@@ -207,8 +239,8 @@ impl Driver {
         let din = common.make_pio_pin(pins.din);
         let row = common.make_pio_pin(pins.row);
 
-        // Twelve 150 MHz cycles per ordinary DCLK; captured extensions add
-        // a programmable number of low cycles. IRQ4 synchronizes SM1.
+        // Fixed twelve PIO cycles per DCLK: six high, six low.
+        // IRQ4 synchronizes SM1; no captured delay replay.
         let program = pio_asm!(
             ".side_set 1",
             ".wrap_target",
@@ -217,10 +249,8 @@ impl Driver {
             "pull ifempty block side 0",
             "irq 4 side 0",
             "out pins, 12 side 0",
-            "out y, 4 side 0",
-            "delay:",
-            "jmp y-- delay side 0",
-            "nop side 0",
+            "out null, 4 side 0",
+            "nop side 0 [1]",
             ".wrap",
         );
         let loaded = common.load_program(&program.program);

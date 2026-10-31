@@ -3,6 +3,7 @@
 
 mod driver;
 mod protocol;
+mod scheduler;
 include!(concat!(env!("OUT_DIR"), "/pattern_config.rs"));
 
 use embassy_executor::Spawner;
@@ -23,10 +24,10 @@ static TAIL: ConstStaticCell<[u32; protocol::TAIL_WORDS]> =
     ConstStaticCell::new([0; protocol::TAIL_WORDS]);
 static ROW_RUNS: ConstStaticCell<[u32; protocol::ROW_RUN_COUNT]> =
     ConstStaticCell::new([0; protocol::ROW_RUN_COUNT]);
-static DESCRIPTORS: ConstStaticCell<[u32; CYCLE_FRAMES * 2 * 4]> =
-    ConstStaticCell::new([0; CYCLE_FRAMES * 2 * 4]);
+static DESCRIPTORS: ConstStaticCell<[u32; 24]> = ConstStaticCell::new([0; 24]);
+static ROW_DESCRIPTORS: ConstStaticCell<[u32; 16]> = ConstStaticCell::new([0; 16]);
+static FIRST_RUNS: ConstStaticCell<[u32; 2]> = ConstStaticCell::new([0; 2]);
 static RESTART: ConstStaticCell<[u32; 2]> = ConstStaticCell::new([0; 2]);
-const FULL_CONFIG_EVERY_FRAME: bool = true;
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
@@ -79,17 +80,20 @@ async fn main(_spawner: Spawner) {
         protocol::DATA_ROW_DCLKS,
     );
     rtt_target::rprintln!(
-        "pattern={}, static gray={}, sweep={}, cycle={} frames, full_config={} ({} writes)",
-        PATTERN_NAME, GRAY, GRAY_SWEEP, CYCLE_FRAMES, FULL_CONFIG_EVERY_FRAME,
+        "pattern={}, static gray={}, sweep={}, cycle={} frames, config interval={} ({} writes)",
+        PATTERN_NAME, GRAY, GRAY_SWEEP, CYCLE_FRAMES, protocol::CONFIG_INTERVAL,
         protocol::CONFIG_WRITES,
     );
+    rtt_target::rprintln!("normal frame={} clocks, first frame has full configuration",
+        protocol::NORMAL_FRAME_DCLKS);
     Timer::after_millis(100).await;
-    driver.start_segments(
+    driver.start_scheduled(
         heads, protocol::HEAD_WORDS, tail, row_runs, DESCRIPTORS.take(),
-        RESTART.take(), p.DMA_CH2, p.DMA_CH3, p.DMA_CH4,
+        ROW_DESCRIPTORS.take(), FIRST_RUNS.take(), RESTART.take(),
+        p.DMA_CH2, p.DMA_CH3, p.DMA_CH4, p.DMA_CH5,
     );
     loop {
-        // Only heartbeat work on the CPU; hardware changes gray every frame.
+        // DMA_IRQ_1 prepares the inactive descriptor bank each frame.
         Timer::after_secs(1).await;
         led.toggle();
     }

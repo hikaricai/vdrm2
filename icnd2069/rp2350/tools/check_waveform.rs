@@ -77,9 +77,9 @@ fn main() {
         assert_eq!(sample(&words,t)&BK!=0,!BK_ACTIVE_HIGH);
     }
     assert!((FRAME_DCLKS-8..FRAME_DCLKS).all(|t|sample(&words,t)&0xfff==PARK));
-    let extra:usize=(0..FRAME_DCLKS).map(|t|(sample(&words,t)>>12) as usize).sum();
-    println!("frame DCLK={}, core cycles={}, ideal period={} us",
-        FRAME_DCLKS, 12*FRAME_DCLKS+extra, (12*FRAME_DCLKS+extra) as f64/150.0);
+    assert!((0..FRAME_DCLKS).all(|t| sample(&words,t) >> 12 == 0));
+    println!("frame DCLK={}, fixed DCLK={} Hz, ideal period={} us",
+        FRAME_DCLKS, DCLK_HZ, FRAME_DCLKS as f64 * 1_000_000.0 / DCLK_HZ as f64);
     assert_eq!(runs.last().unwrap() & 1,0);
     assert!((rows.last().unwrap()+4..FRAME_DCLKS)
         .all(|t|sample(&words,t)&(LCK|DIN)==0));
