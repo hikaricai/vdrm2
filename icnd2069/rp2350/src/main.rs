@@ -16,8 +16,8 @@ static FRAME: ConstStaticCell<[u32; protocol::FRAME_WORDS]> =
     ConstStaticCell::new([0; protocol::FRAME_WORDS]);
 static ROW_RUNS: ConstStaticCell<[u32; protocol::ROW_RUN_COUNT]> =
     ConstStaticCell::new([0; protocol::ROW_RUN_COUNT]);
-// Keep both the requested full-write mode and exact NOVA rotation available.
-const FULL_CONFIG_EVERY_FRAME: bool = false;
+// Each frame sends the complete register batch once, then all 16x16 gray words.
+const FULL_CONFIG_EVERY_FRAME: bool = true;
 const SOFT_RESET_ON_START: bool = false; // Tested separately; did not restore OUT1.
 
 #[embassy_executor::main]
@@ -76,13 +76,14 @@ async fn main(_spawner: Spawner) {
         );
     }
     rtt_target::rprintln!(
-        "WR_CFG/frame={}, soft_reset={}; exact captured ROW schedule",
+        "WR_CFG/frame={}, soft_reset={}; {} scans, saved local ROW cadence",
         if FULL_CONFIG_EVERY_FRAME {
             protocol::CONFIG_WRITES
         } else {
             5
         },
-        SOFT_RESET_ON_START
+        SOFT_RESET_ON_START,
+        protocol::ROWS
     );
 
     let mut frames = 0u32;

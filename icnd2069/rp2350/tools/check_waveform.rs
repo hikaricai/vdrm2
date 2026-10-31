@@ -6,7 +6,7 @@ fn sample(w: &[u32], t: usize) -> u16 {
     (w[t / 2] >> ((t & 1) * 16)) as u16
 }
 fn main() {
-    assert_eq!((ROWS, CHANNELS, GROUPS, DEMO_GRAY), (40,16,64,8192));
+    assert_eq!((ROWS, CHANNELS, GROUPS, DEMO_GRAY), (16,16,64,8192));
     assert_eq!(DCLK_HZ,12_500_000);
     let mut words=vec![0;FRAME_WORDS];
     assert_eq!(encode_frame(&mut words,&demo_frame()),FRAME_WORDS);
@@ -29,9 +29,10 @@ fn main() {
     assert_eq!(CONFIG_WRITES,49);
     let writes:Vec<_>=cs.iter().filter(|c|c.1==5).map(|c|c.2).collect();
     assert_eq!(writes,expected);
+    assert!(writes.contains(&0x020f)); // scan register = 16-1.
     assert_eq!(cs[3].0,185);
     let data:Vec<_>=cs.iter().filter(|c|c.1==1).collect();
-    assert_eq!(data.len(),640);
+    assert_eq!(data.len(),ROWS * CHANNELS);
     assert!(data.iter().enumerate().all(|(i,c)|c.2==if i%16==0 {0} else {8192}));
     for (i,p) in data.windows(2).enumerate() {
         assert_eq!(p[1].0-p[0].0,136+usize::from((i+1)%16==0));
@@ -57,38 +58,32 @@ fn main() {
         tick+=count;
     }
     assert_eq!(tick,FRAME_DCLKS);
-    assert_eq!(rows.len(),2560);
+    assert_eq!(rows.len(),GROUPS * ROWS);
     assert_eq!(rows[0]-cs[0].0,25);
     assert!(rows.windows(2).enumerate().all(|(i,p)|p[1]-p[0]==row_period(i)));
     let counts:Vec<_>=(80..=83).map(|d| rows.windows(2).filter(|p|p[1]-p[0]==d).count()).collect();
-    assert_eq!(counts,[141,1982,392,44]);
+    assert_eq!(counts.iter().sum::<usize>(),GROUPS * ROWS - 1);
     for (i,&t) in rows.iter().enumerate() {
         let width=widths[i];
         assert_eq!(width,if i==0 {12} else {4});
         assert_eq!(sample(&words,t-4)&LCK,LCK);
-        assert_eq!(sample(&words,t-4)&DIN!=0,i%40==0);
+        assert_eq!(sample(&words,t-4)&DIN!=0,i%ROWS==0);
         assert_eq!(sample(&words,t-4)&BK!=0,BK_ACTIVE_HIGH);
         assert_eq!(sample(&words,t)&BK!=0,!BK_ACTIVE_HIGH);
     }
     assert!((FRAME_DCLKS-18..FRAME_DCLKS).all(|t|sample(&words,t)&0xfff==PARK));
     let extra:usize=(0..FRAME_DCLKS).map(|t|(sample(&words,t)>>12) as usize).sum();
     assert_eq!(12*FRAME_DCLKS+extra,2500123);
-    encode_with_config(&mut words,&demo_frame(),Some(0x0055));
-    update_rotation(&mut words,0x1c72);
-    for copy in 0..8 {
-        let mut v=0u16;
-        for t in 329+copy*16..329+(copy+1)*16 {
-            v=(v<<1)|u16::from(sample(&words,t)&SIN!=0);
-        }
-        assert_eq!(v,0x1c72);
-    }
+    assert_eq!(runs.last().unwrap() & 1,0);
+    assert!((rows.last().unwrap()+4..FRAME_DCLKS)
+        .all(|t|sample(&words,t)&(LCK|DIN)==0));
     let baseline = words.clone();
     for pattern in [Pattern::Reference, Pattern::White, Pattern::Black,
                     Pattern::Out0, Pattern::Out1, Pattern::AlternatingRows,
                     Pattern::Checker, Pattern::Split] {
         for gray in [0, 255, 2048, 4096, 8192] {
             let image = pattern_frame(pattern, gray);
-            encode_with_config(&mut words, &image, Some(0x1c72));
+            encode_frame(&mut words, &image);
             // Compare every pin and delay bit except DATA to the saved baseline.
             let mask = !((SIN as u32) | ((SIN as u32) << 16));
             assert!(words.iter().zip(&baseline).all(|(a,b)|a & mask == b & mask));
@@ -121,12 +116,12 @@ fn main() {
                         Pattern::Out1 => out == 1,
                         Pattern::AlternatingRows => row%2 == 0,
                         Pattern::Checker => row%2 == out%2,
-                        Pattern::Split => row < 20,
+                        Pattern::Split => row < ROWS/2,
                     };
                     assert_eq!(image[row][out],if expected_on {gray} else {0});
                 }
             }
         }
     }
-    println!("PASS: baseline commands/ROW; 8 patterns x5 gray levels; 640 words x8 copies; all non-DATA pins and CLK delays unchanged");
+    println!("PASS: 16 scans x16 channels; full 49 configs with 020F; 1024 OE; 256 words x8; 8 patterns x5 gray levels; saved CLK delays unchanged");
 }

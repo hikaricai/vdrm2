@@ -1,14 +1,15 @@
-//! ICND2069 reference timing and image for direct NOVA/OUT1 comparison.
+//! ICND2069 16-scan image and full configuration using saved CLK timing.
 //! Each halfword describes pins for one DCLK rising-edge transfer.
 //! Reference: dbg/nova_to_devboard_100m_2s.dsl and the startup summary.
 
-pub const ROWS: usize = 40;
+pub const ROWS: usize = 16;
 pub const CHANNELS: usize = 16;
 pub const GROUPS: usize = 64;
 pub const DCLK_HZ: u32 = 12_500_000;
 pub const ROW_DCLKS: usize = 81;
 // Software input limit retained from the saved NOVA image. This is NOT a
-// calibrated PWM full scale: at 0.4V, this configuration saturates by gray 512.
+// calibrated PWM full scale. The previous 40-scan capture saturated by 512;
+// the new 16-scan/full-config mode must be measured independently.
 pub const MAX_GRAY_INPUT: u16 = 8192;
 pub const DEMO_GRAY: u16 = 8192;
 pub const CHAIN_COPIES: usize = 8;
@@ -98,8 +99,7 @@ pub const CONFIG_WRITES: usize = REGISTERS.len() + 4;
 pub const FRAME_DCLKS: usize = 208_094; // Reference frame including CLK extensions.
 pub const FRAME_WORDS: usize = FRAME_DCLKS / 2;
 const CLOCK_DELAYS: &[u8; FRAME_DCLKS] = include_bytes!("nova_clock_delays.bin");
-pub const ROW_RUN_COUNT: usize = 5121;
-const ROW_RUNS: &[u8; ROW_RUN_COUNT * 4] = include_bytes!("nova_row_runs.bin");
+pub const ROW_RUN_COUNT: usize = GROUPS * ROWS * 2 + 1;
 pub const VSYNC_FALL: usize = 8;
 pub const FIRST_ROW: usize = VSYNC_FALL + 25;
 // First complete frame of 100m_7s_1.dsl. Four (period-80) values per byte.
@@ -230,7 +230,7 @@ pub fn encode_with_config(words: &mut [u32], frame: &Frame, rotating: Option<u16
     wave.hold(PARK, FRAME_DCLKS - wave.clocks);
 
     // Overlay independently running ROW on the serialized command/data bus.
-    // 64 groups x 40 scans; reference local width/cadence and VSYNC phase.
+    // 64 groups x ROWS scans; preserve local width/cadence and VSYNC phase.
     let mut start = FIRST_ROW;
     for i in 0..GROUPS * ROWS {
         let period = row_period(i);
@@ -262,9 +262,24 @@ pub fn encode_with_config(words: &mut [u32], frame: &Frame, rotating: Option<u16
 }
 
 pub fn encode_row_runs(words: &mut [u32; ROW_RUN_COUNT]) {
-    for (word, data) in words.iter_mut().zip(ROW_RUNS.chunks_exact(4)) {
-        *word = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+    // SM1 counts the same DCLK IRQ events as SM0. Edge at clock t follows
+    // its IRQ, so the corresponding run boundary is t+1. Derive the pulse
+    // count from ROWS rather than replaying the old fixed 40-scan binary.
+    let mut position = 0;
+    let mut start = FIRST_ROW;
+    for i in 0..GROUPS * ROWS {
+        let rise = start + 1;
+        let width = if i == 0 { 12 } else { 4 };
+        let low_count = rise - position;
+        assert!(low_count > 0);
+        words[2 * i] = ((low_count - 1) as u32) << 1;
+        words[2 * i + 1] = (((width - 1) as u32) << 1) | 1;
+        position = rise + width;
+        start += row_period(i);
     }
+    assert!(position < FRAME_DCLKS);
+    // Preserve saved frame/CLK duration; OE is low after the last scan.
+    words[ROW_RUN_COUNT - 1] = ((FRAME_DCLKS - position - 1) as u32) << 1;
 }
 
 pub fn rotation_word(index: usize) -> u16 {
