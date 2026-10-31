@@ -9,6 +9,13 @@ fn main() {
     println!("cargo:rustc-link-arg-bins=-Tlink.x");
     println!("cargo:rerun-if-env-changed=ICND2069_PATTERN");
     println!("cargo:rerun-if-env-changed=ICND2069_GRAY");
+    println!("cargo:rerun-if-env-changed=ICND2069_CHAIN_COPIES");
+    let chain: usize = env::var("ICND2069_CHAIN_COPIES")
+        .unwrap_or_else(|_| "1".into())
+        .parse()
+        .expect("ICND2069_CHAIN_COPIES must be an integer in 1..=8");
+    assert!((1..=8).contains(&chain), "ICND2069_CHAIN_COPIES must be in 1..=8");
+    println!("cargo:rustc-env=ICND2069_CHAIN_COPIES={chain}");
     let pattern = env::var("ICND2069_PATTERN").unwrap_or_else(|_| "reference".into());
     let variant = match pattern.as_str() {
         "reference" => "Reference",

@@ -12,7 +12,16 @@ pub const ROW_DCLKS: usize = 81;
 // the new 16-scan/full-config mode must be measured independently.
 pub const MAX_GRAY_INPUT: u16 = 8192;
 pub const DEMO_GRAY: u16 = 8192;
-pub const CHAIN_COPIES: usize = 8;
+/// One identical word per cascaded ICND2069; build-time variable, default 1.
+pub const CHAIN_COPIES: usize = match option_env!("ICND2069_CHAIN_COPIES") {
+    Some(value) => {
+        let bytes = value.as_bytes();
+        assert!(bytes.len() == 1 && bytes[0] >= b'1' && bytes[0] <= b'8');
+        (bytes[0] - b'0') as usize
+    }
+    None => 1,
+};
+pub const TRANSFER_DCLKS: usize = 16 * CHAIN_COPIES;
 
 // Pin bits relative to GP10. GP15 is driven independently by side-set.
 pub const LE: u16 = 1;
@@ -208,7 +217,7 @@ pub fn encode_with_config(words: &mut [u32], frame: &Frame, rotating: Option<u16
     wave.command_at(5, VSYNC);
     wave.command_at(20, ENABLE);
     wave.command_at(34, PRE_ACT);
-    wave.shift(0x00aa, WR_CFG, 9); // first WR_CFG falls at 185.
+    wave.shift(0x00aa, WR_CFG, 9); // first WR_CFG falls at 57+TRANSFER_DCLKS.
     wave.shift(0x01aa, WR_CFG, 8);
     if let Some(value) = rotating {
         wave.shift(value, WR_CFG, 8);
@@ -301,10 +310,12 @@ pub fn startup_reset(words: &mut [u32]) {
 }
 
 pub fn update_rotation(words: &mut [u32], value: u16) {
-    // First transfer falls at 185; second at 321; third spans 329..457.
+    // First transfer starts at 57, with an 8-DCLK gap between transfers.
+    // Derive the third word's position for the configured chain length.
     // Only SIN changes. Preserve LE and the overlapping ROW controls.
-    for t in 329..457 {
-        let bit = 15 - (t - 329) % 16;
+    let start = 57 + 2 * (TRANSFER_DCLKS + 8);
+    for t in start..start + TRANSFER_DCLKS {
+        let bit = 15 - (t - start) % 16;
         let shift = (t & 1) * 16;
         let mask = (SIN as u32) << shift;
         words[t / 2] = (words[t / 2] & !mask) | (if value & (1 << bit) != 0 { mask } else { 0 });

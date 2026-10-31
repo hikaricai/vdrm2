@@ -61,7 +61,10 @@ async fn main(_spawner: Spawner) {
         frame_len * 4,
         protocol::CONFIG_WRITES
     );
-    rtt_target::rprintln!("pattern={}, gray={}, input_limit={}", PATTERN_NAME, GRAY, protocol::MAX_GRAY_INPUT);
+    rtt_target::rprintln!(
+        "pattern={}, gray={}, input_limit={}, ICND2069 chain={}",
+        PATTERN_NAME, GRAY, protocol::MAX_GRAY_INPUT, protocol::CHAIN_COPIES
+    );
     if SOFT_RESET_ON_START {
         protocol::startup_reset(frame);
         driver.send(&frame[..frame_len], row_runs).await;

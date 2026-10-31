@@ -6,10 +6,12 @@ fn sample(w: &[u32], t: usize) -> u16 {
     (w[t / 2] >> ((t & 1) * 16)) as u16
 }
 fn main() {
+    let white_only = std::env::args().any(|a| a == "--white-only");
     assert_eq!((ROWS, CHANNELS, GROUPS, DEMO_GRAY), (16,16,64,8192));
     assert_eq!(DCLK_HZ,12_500_000);
     let mut words=vec![0;FRAME_WORDS];
-    assert_eq!(encode_frame(&mut words,&demo_frame()),FRAME_WORDS);
+    let initial = if white_only { pattern_frame(Pattern::White,255) } else { demo_frame() };
+    assert_eq!(encode_frame(&mut words,&initial),FRAME_WORDS);
     let mut cs=Vec::new();
     let (mut width,mut shift)=(0,0u16);
     for t in 0..FRAME_DCLKS {
@@ -30,18 +32,19 @@ fn main() {
     let writes:Vec<_>=cs.iter().filter(|c|c.1==5).map(|c|c.2).collect();
     assert_eq!(writes,expected);
     assert!(writes.contains(&0x020f)); // scan register = 16-1.
-    assert_eq!(cs[3].0,185);
+    assert_eq!(cs[3].0,57 + TRANSFER_DCLKS);
     let data:Vec<_>=cs.iter().filter(|c|c.1==1).collect();
     assert_eq!(data.len(),ROWS * CHANNELS);
-    assert!(data.iter().enumerate().all(|(i,c)|c.2==if i%16==0 {0} else {8192}));
+    assert!(data.iter().enumerate().all(|(i,c)|c.2==
+        if white_only {255} else if i%16==0 {0} else {8192}));
     for (i,p) in data.windows(2).enumerate() {
-        assert_eq!(p[1].0-p[0].0,136+usize::from((i+1)%16==0));
+        assert_eq!(p[1].0-p[0].0,TRANSFER_DCLKS+8+usize::from((i+1)%16==0));
     }
     for &(fall,w,value) in &cs {
         if w!=1 && w!=5 {continue;}
-        for copy in 0..8 {
+        for copy in 0..CHAIN_COPIES {
             let mut v=0u16;
-            for t in fall-128+copy*16..fall-128+(copy+1)*16 {
+            for t in fall-TRANSFER_DCLKS+copy*16..fall-TRANSFER_DCLKS+(copy+1)*16 {
                 v=(v<<1)|u16::from(sample(&words,t)&SIN!=0);
             }
             assert_eq!(v,value);
@@ -81,7 +84,9 @@ fn main() {
     for pattern in [Pattern::Reference, Pattern::White, Pattern::Black,
                     Pattern::Out0, Pattern::Out1, Pattern::AlternatingRows,
                     Pattern::Checker, Pattern::Split] {
+        if white_only && !matches!(pattern,Pattern::White) { continue; }
         for gray in [0, 255, 2048, 4096, 8192] {
+            if white_only && gray != 255 { continue; }
             let image = pattern_frame(pattern, gray);
             encode_frame(&mut words, &image);
             // Compare every pin and delay bit except DATA to the saved baseline.
@@ -95,7 +100,7 @@ fn main() {
                     let mut value = 0;
                     for copy in 0..CHAIN_COPIES {
                         let mut v = 0;
-                        for k in t-128+copy*16..t-128+(copy+1)*16 {
+                        for k in t-TRANSFER_DCLKS+copy*16..t-TRANSFER_DCLKS+(copy+1)*16 {
                             v = (v<<1) | u16::from(sample(&words,k)&SIN != 0);
                         }
                         if copy == 0 { value = v; } else { assert_eq!(v,value); }
@@ -123,5 +128,6 @@ fn main() {
             }
         }
     }
-    println!("PASS: 16 scans x16 channels; full 49 configs with 020F; 1024 OE; 256 words x8; 8 patterns x5 gray levels; saved CLK delays unchanged");
+    println!("PASS: 16 scans x16 channels; full 49 configs with 020F; 1024 OE; 256 words x{}; saved CLK delays unchanged; white_only={}",
+             CHAIN_COPIES,white_only);
 }
