@@ -32,7 +32,7 @@ pub const DCLK_HZ: u32 = match option_env!("ICND2069_DCLK_MHZ") {
         b"45" => 45_000_000,
         _ => panic!("ICND2069_DCLK_MHZ must be 12.5, 25, 35, 40 or 45"),
     },
-    None => 35_000_000,
+    None => 12_500_000,
 };
 pub const PIO_CYCLES_PER_DCLK: u32 = match DCLK_HZ {
     45_000_000 | 40_000_000 | 35_000_000 => 4,
