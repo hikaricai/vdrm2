@@ -32,7 +32,18 @@ static RESTART: ConstStaticCell<[u32; 2]> = ConstStaticCell::new([0; 2]);
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
     rtt_target::rtt_init_print!(rtt_target::ChannelMode::NoBlockSkip, 2048);
-    let p = embassy_rp::init(Default::default());
+    let mut config = embassy_rp::config::Config::default();
+    if protocol::DCLK_HZ == 35_000_000 {
+        // 12 MHz crystal * 70 / 3 / 2 = 140 MHz, below the normal 150 MHz.
+        // Four PIO cycles at divider 1 give exact 35 MHz without fractional
+        // divider jitter. Other presets retain the existing 150 MHz clock.
+        config.clocks.xosc.as_mut().unwrap().sys_pll =
+            Some(embassy_rp::clocks::PllConfig {
+                refdiv: 1, fbdiv: 70, post_div1: 3, post_div2: 2,
+            });
+    }
+    let p = embassy_rp::init(config);
+    assert_eq!(embassy_rp::clocks::clk_sys_freq(), protocol::SYS_HZ);
     let mut led = Output::new(p.PIN_25, Level::Low);
     let mut driver = driver::Driver::new(
         p.PIO0,
@@ -86,6 +97,8 @@ async fn main(_spawner: Spawner) {
     );
     rtt_target::rprintln!("normal frame={} clocks, first frame has full configuration",
         protocol::NORMAL_FRAME_DCLKS);
+    rtt_target::rprintln!("system clock={} Hz, PIO cycles/DCLK={}",
+        protocol::SYS_HZ, protocol::PIO_CYCLES_PER_DCLK);
     Timer::after_millis(100).await;
     driver.start_scheduled(
         heads, protocol::HEAD_WORDS, tail, row_runs, DESCRIPTORS.take(),

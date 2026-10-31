@@ -22,7 +22,18 @@ pub const SCAN_REPEATS: usize = match option_env!("ICND2069_SCAN_REPEATS") {
     None => 1,
 };
 pub const GROUPS: usize = SCAN_REPEATS;
-pub const DCLK_HZ: u32 = 25_000_000;
+/// Build-time preset in MHz. Integer PIO dividers keep each DCLK uniform.
+pub const DCLK_HZ: u32 = match option_env!("ICND2069_DCLK_MHZ") {
+    Some(value) => match value.as_bytes() {
+        b"12.5" => 12_500_000,
+        b"25" => 25_000_000,
+        b"35" => 35_000_000,
+        _ => panic!("ICND2069_DCLK_MHZ must be 12.5, 25 or 35"),
+    },
+    None => 35_000_000,
+};
+pub const PIO_CYCLES_PER_DCLK: u32 = if DCLK_HZ == 35_000_000 { 4 } else { 6 };
+pub const SYS_HZ: u32 = if DCLK_HZ == 35_000_000 { 140_000_000 } else { 150_000_000 };
 pub const ROW_DCLKS: usize = 81;
 // Software input limit retained from the saved NOVA image. This is NOT a
 // calibrated PWM full scale. The previous 40-scan capture saturated by 512;

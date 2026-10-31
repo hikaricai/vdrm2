@@ -239,26 +239,40 @@ impl Driver {
         let din = common.make_pio_pin(pins.din);
         let row = common.make_pio_pin(pins.row);
 
-        // Fixed six PIO cycles per DCLK: three high, three low.
+        // 35 MHz: four cycles, high 2 / low 2. Pull during the high phase
+        // removes a separate NOP. Lower presets retain the six-cycle program.
         // IRQ4 synchronizes SM1; no captured delay replay.
-        let program = pio_asm!(
-            ".side_set 1",
-            ".wrap_target",
-            "clock:",
-            "nop side 1 [2]",
-            "pull ifempty block side 0",
-            "irq 4 side 0",
-            "out pins, 16 side 0",
-            ".wrap",
-        );
-        let loaded = common.load_program(&program.program);
+        let program = if crate::protocol::PIO_CYCLES_PER_DCLK == 4 {
+            pio_asm!(
+                ".side_set 1",
+                ".wrap_target",
+                "pull ifempty block side 1 [1]",
+                "irq 4 side 0",
+                "out pins, 16 side 0",
+                ".wrap",
+            ).program
+        } else {
+            pio_asm!(
+                ".side_set 1",
+                ".wrap_target",
+                "nop side 1 [2]",
+                "pull ifempty block side 0",
+                "irq 4 side 0",
+                "out pins, 16 side 0",
+                ".wrap",
+            ).program
+        };
+        let loaded = common.load_program(&program);
         let mut cfg = pio::Config::default();
         cfg.use_program(&loaded, &[&dclk]);
         // Convert the ratio, not 150 MHz itself (which exceeds U24F8's range).
         // OUT consumes the full 16-bit sample in one instruction; OUT_COUNT
         // remains 12, so padding bits do not drive GP22..25.
-        // At 150 MHz, LAT/SIN change 33.33 ns after rising, IRQ4 at 26.67 ns.
-        let divider = (embassy_rp::clocks::clk_sys_freq() as u64 * 256) / (6 * DCLK_HZ as u64);
+        // At 35 MHz, LAT/SIN change after 3 PIO cycles, IRQ4 after 2.
+        let denominator = crate::protocol::PIO_CYCLES_PER_DCLK as u64 * DCLK_HZ as u64;
+        let numerator = embassy_rp::clocks::clk_sys_freq() as u64;
+        assert_eq!(numerator % denominator, 0, "DCLK preset must have an integer divider");
+        let divider = numerator * 256 / denominator;
         assert!(divider >= 256, "PIO clock divider must be at least 1");
         cfg.clock_divider = U24F8::from_bits(divider as u32);
         cfg.fifo_join = pio::FifoJoin::TxOnly;

@@ -16,6 +16,13 @@ fn main() {
     println!("cargo:rerun-if-env-changed=ICND2069_REPEAT_LATCH_GAP");
     println!("cargo:rerun-if-env-changed=ICND2069_TARGET_CHANNEL");
     println!("cargo:rerun-if-env-changed=ICND2069_CONFIG_INTERVAL");
+    println!("cargo:rerun-if-env-changed=ICND2069_DCLK_MHZ");
+    let dclk = env::var("ICND2069_DCLK_MHZ").unwrap_or_else(|_| "35".into());
+    assert!(
+        matches!(dclk.as_str(), "12.5" | "25" | "35"),
+        "ICND2069_DCLK_MHZ must be 12.5, 25 or 35"
+    );
+    println!("cargo:rustc-env=ICND2069_DCLK_MHZ={dclk}");
     let interval: u32 = env::var("ICND2069_CONFIG_INTERVAL")
         .unwrap_or_else(|_| "10000".into())
         .parse()
