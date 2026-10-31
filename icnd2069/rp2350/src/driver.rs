@@ -239,27 +239,27 @@ impl Driver {
         let din = common.make_pio_pin(pins.din);
         let row = common.make_pio_pin(pins.row);
 
-        // Fixed twelve PIO cycles per DCLK: six high, six low.
+        // Fixed six PIO cycles per DCLK: three high, three low.
         // IRQ4 synchronizes SM1; no captured delay replay.
         let program = pio_asm!(
             ".side_set 1",
             ".wrap_target",
             "clock:",
-            "nop side 1 [5]",
+            "nop side 1 [2]",
             "pull ifempty block side 0",
             "irq 4 side 0",
-            "out pins, 12 side 0",
-            "out null, 4 side 0",
-            "nop side 0 [1]",
+            "out pins, 16 side 0",
             ".wrap",
         );
         let loaded = common.load_program(&program.program);
         let mut cfg = pio::Config::default();
         cfg.use_program(&loaded, &[&dclk]);
         // Convert the ratio, not 150 MHz itself (which exceeds U24F8's range).
-        // 12 PIO cycles/DCLK: high 6, low 6. At 150 MHz, LAT/SIN
-        // change 53.33 ns after rising; IRQ4 is asserted at 46.67 ns.
-        let divider = (embassy_rp::clocks::clk_sys_freq() as u64 * 256) / (12 * DCLK_HZ as u64);
+        // OUT consumes the full 16-bit sample in one instruction; OUT_COUNT
+        // remains 12, so padding bits do not drive GP22..25.
+        // At 150 MHz, LAT/SIN change 33.33 ns after rising, IRQ4 at 26.67 ns.
+        let divider = (embassy_rp::clocks::clk_sys_freq() as u64 * 256) / (6 * DCLK_HZ as u64);
+        assert!(divider >= 256, "PIO clock divider must be at least 1");
         cfg.clock_divider = U24F8::from_bits(divider as u32);
         cfg.fifo_join = pio::FifoJoin::TxOnly;
         cfg.shift_out = ShiftConfig {

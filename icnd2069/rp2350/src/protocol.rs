@@ -22,7 +22,7 @@ pub const SCAN_REPEATS: usize = match option_env!("ICND2069_SCAN_REPEATS") {
     None => 1,
 };
 pub const GROUPS: usize = SCAN_REPEATS;
-pub const DCLK_HZ: u32 = 12_500_000;
+pub const DCLK_HZ: u32 = 25_000_000;
 pub const ROW_DCLKS: usize = 81;
 // Software input limit retained from the saved NOVA image. This is NOT a
 // calibrated PWM full scale. The previous 40-scan capture saturated by 512;
