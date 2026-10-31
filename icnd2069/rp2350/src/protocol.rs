@@ -1,15 +1,15 @@
-//! ICND2069 reference timing, adapted to 16 scans and uniform gray 255.
+//! ICND2069 reference timing and image for direct NOVA/OUT1 comparison.
 //! Each halfword describes pins for one DCLK rising-edge transfer.
 //! Reference: dbg/nova_to_devboard_100m_2s.dsl and the startup summary.
 
-pub const ROWS: usize = 16;
+pub const ROWS: usize = 40;
 pub const CHANNELS: usize = 16;
 pub const GROUPS: usize = 64;
 pub const DCLK_HZ: u32 = 12_500_000;
 pub const ROW_DCLKS: usize = 81;
 pub const GRAY_K: u8 = 32;
 pub const GRAY_CAPACITY: u16 = (GROUPS * GRAY_K as usize * 4) as u16;
-pub const DEMO_GRAY: u16 = 255;
+pub const DEMO_GRAY: u16 = 8192;
 pub const CHAIN_COPIES: usize = 8;
 
 // Pin bits relative to GP10. GP15 is driven independently by side-set.
@@ -43,7 +43,7 @@ pub const WR_CFG: usize = 5;
 pub const ENABLE: usize = 11;
 pub const PRE_ACT: usize = 14;
 
-// Red/SIN values from the actual receiving-card captures. Only 02 changes.
+// Red/SIN values from all three 7-second NOVA reference captures.
 // 00/01 are access controls, sent outside this list to keep the whole batch
 // unlocked. The reference rotation includes them but they are not payload.
 pub const REGISTERS: &[(u8, u8)] = &[
@@ -94,10 +94,24 @@ pub const REGISTERS: &[(u8, u8)] = &[
     (0x23, 0x01),
 ];
 pub const CONFIG_WRITES: usize = REGISTERS.len() + 4;
-pub const FRAME_DCLKS: usize = 208_334; // ~60 Hz at 12.5 MHz.
+pub const FRAME_DCLKS: usize = 208_094; // Reference frame including CLK extensions.
 pub const FRAME_WORDS: usize = FRAME_DCLKS / 2;
+const CLOCK_DELAYS: &[u8; FRAME_DCLKS] = include_bytes!("nova_clock_delays.bin");
+pub const ROW_RUN_COUNT: usize = 5121;
+const ROW_RUNS: &[u8; ROW_RUN_COUNT * 4] = include_bytes!("nova_row_runs.bin");
 pub const VSYNC_FALL: usize = 8;
 pub const FIRST_ROW: usize = VSYNC_FALL + 25;
+// First complete frame of 100m_7s_1.dsl. Four (period-80) values per byte.
+const ROW_SCHEDULE: &[u8] = b"55655488855555555457548855555552155555565555522155555555551752215555555455555556555548855555555555174885555555545555555655555215555555555487221555555555155555565555545555555555522288555555555515555556555554555555555548872155555555548555555655555515555555522216855555555552215555565555554555555548855715555555554885555523555555455555552215571555555555221555548a5555552155555488555745555555548855555223555554885555522155574555555552215555488755552221555548855557215555554885555522175554885555552215555688555552221555548857555221555554885555572155956559565595655a956559565595655956575956559565595655956755956559565595655957655956559565595655975655956559565595655a956559565595655956575956559565595655956755956559565595655957655956559565595655975655956559565595655a956559565595655956575956559565595655956755956559565595655957655956559565595655975655956559565595655a956559565595655956575956559565595655956755956559565595655957655956559565595655975655956559565595655a956559565595655956575956559565595655956755956559565595655957655956559565595655975655956559565595655a956559565595655956575956559565595655956755956559565595655957655956559565595655975655956559565595655a956559565595655956575956559565595655956755956559565595655957655956559565595655975655956559565595655a95655956559565595654";
+pub fn row_period(index: usize) -> usize {
+    let digit = ROW_SCHEDULE[index / 2];
+    let nibble = if digit <= b'9' {
+        digit - b'0'
+    } else {
+        digit - b'a' + 10
+    };
+    80 + ((nibble >> (if index % 2 == 0 { 2 } else { 0 })) & 3) as usize
+}
 
 pub struct Waveform<'a> {
     words: &'a mut [u32],
@@ -145,10 +159,18 @@ impl<'a> Waveform<'a> {
 }
 pub type Frame = [[u16; CHANNELS]; ROWS];
 pub fn demo_frame() -> Frame {
-    [[DEMO_GRAY; CHANNELS]; ROWS]
+    let mut frame = [[DEMO_GRAY; CHANNELS]; ROWS];
+    for values in &mut frame {
+        values[15] = 0;
+    }
+    frame
 }
 
 pub fn encode_frame(words: &mut [u32], frame: &Frame) -> usize {
+    encode_with_config(words, frame, None)
+}
+
+pub fn encode_with_config(words: &mut [u32], frame: &Frame, rotating: Option<u16>) -> usize {
     assert_eq!(words.len(), FRAME_WORDS);
     let mut wave = Waveform::new(words);
     // Exact rising-edge coordinates from the reference: falls 8, 31, 48.
@@ -157,10 +179,14 @@ pub fn encode_frame(words: &mut [u32], frame: &Frame) -> usize {
     wave.command_at(34, PRE_ACT);
     wave.shift(0x00aa, WR_CFG, 9); // first WR_CFG falls at 185.
     wave.shift(0x01aa, WR_CFG, 8);
-    for &(address, value) in REGISTERS {
-        wave.shift((address as u16) << 8 | value as u16, WR_CFG, 8);
+    if let Some(value) = rotating {
+        wave.shift(value, WR_CFG, 8);
+    } else {
+        for &(address, value) in REGISTERS {
+            wave.shift((address as u16) << 8 | value as u16, WR_CFG, 8);
+        }
     }
-    wave.shift(0x0055, WR_CFG, 8);
+    wave.shift(0x0055, WR_CFG, if rotating.is_some() { 9 } else { 8 });
     wave.shift(0x0155, WR_CFG, 8);
     for (row, values) in frame.iter().enumerate() {
         for out in (0..CHANNELS).rev() {
@@ -173,11 +199,12 @@ pub fn encode_frame(words: &mut [u32], frame: &Frame) -> usize {
     wave.hold(PARK, FRAME_DCLKS - wave.clocks);
 
     // Overlay independently running ROW on the serialized command/data bus.
-    // 64 groups x 16 scans; reference local width/cadence and VSYNC phase.
+    // 64 groups x 40 scans; reference local width/cadence and VSYNC phase.
+    let mut start = FIRST_ROW;
     for i in 0..GROUPS * ROWS {
-        let start = FIRST_ROW + i * ROW_DCLKS;
+        let period = row_period(i);
         let width = if i == 0 { 12 } else { 4 };
-        for t in start - 8..start + ROW_DCLKS - 8 {
+        for t in start - 8..start + period - 8 {
             let mut row_pins = blank(t < start);
             row_pins |= select_bit(i % ROWS == 0 && t < start + 2);
             if (start - 4..start - 2).contains(&t) {
@@ -190,6 +217,50 @@ pub fn encode_frame(words: &mut [u32], frame: &Frame) -> usize {
             let mask = ((BK | DIN | LCK | ROW) as u32) << shift;
             words[t / 2] = (words[t / 2] & !mask) | (row_pins as u32) << shift;
         }
+        start += period;
+    }
+    // GP22/OE is now generated by SM1. Upper four bits become SM0's
+    // variable low-time count, preserving the measured word-boundary stalls.
+    for t in 0..FRAME_DCLKS {
+        let shift = (t & 1) * 16;
+        let mask = 0xf000u32 << shift;
+        words[t / 2] = (words[t / 2] & !mask)
+            | ((CLOCK_DELAYS[t] as u32) << (12 + shift));
     }
     FRAME_WORDS
+}
+
+pub fn encode_row_runs(words: &mut [u32; ROW_RUN_COUNT]) {
+    for (word, data) in words.iter_mut().zip(ROW_RUNS.chunks_exact(4)) {
+        *word = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+    }
+}
+
+pub fn rotation_word(index: usize) -> u16 {
+    match index % (REGISTERS.len() + 2) {
+        0 => 0x0055,
+        1 => 0x0155,
+        i => {
+            let (a, v) = REGISTERS[i - 2];
+            (a as u16) << 8 | v as u16
+        }
+    }
+}
+
+pub fn startup_reset(words: &mut [u32]) {
+    // Diagnostic only: extend the first LE pulse from 3 to 9 rising edges.
+    for t in 8..14 {
+        words[t / 2] |= (LE as u32) << ((t & 1) * 16);
+    }
+}
+
+pub fn update_rotation(words: &mut [u32], value: u16) {
+    // First transfer falls at 185; second at 321; third spans 329..457.
+    // Only SIN changes. Preserve LE and the overlapping ROW controls.
+    for t in 329..457 {
+        let bit = 15 - (t - 329) % 16;
+        let shift = (t & 1) * 16;
+        let mask = (SIN as u32) << shift;
+        words[t / 2] = (words[t / 2] & !mask) | (if value & (1 << bit) != 0 { mask } else { 0 });
+    }
 }
