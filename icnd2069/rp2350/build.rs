@@ -9,14 +9,43 @@ fn main() {
     println!("cargo:rustc-link-arg-bins=-Tlink.x");
     println!("cargo:rerun-if-env-changed=ICND2069_PATTERN");
     println!("cargo:rerun-if-env-changed=ICND2069_GRAY");
+    println!("cargo:rerun-if-env-changed=ICND2069_GRAY_MODE");
     println!("cargo:rerun-if-env-changed=ICND2069_CHAIN_COPIES");
+    println!("cargo:rerun-if-env-changed=ICND2069_SCAN_REPEATS");
+    println!("cargo:rerun-if-env-changed=ICND2069_SHORT_DATA");
+    println!("cargo:rerun-if-env-changed=ICND2069_REPEAT_LATCH_GAP");
+    println!("cargo:rerun-if-env-changed=ICND2069_TARGET_CHANNEL");
+    let target: usize = env::var("ICND2069_TARGET_CHANNEL")
+        .unwrap_or_else(|_| "0".into())
+        .parse()
+        .expect("ICND2069_TARGET_CHANNEL must be an integer in 0..=15");
+    assert!(target < 16, "ICND2069_TARGET_CHANNEL must be in 0..=15");
+    println!("cargo:rustc-env=ICND2069_TARGET_CHANNEL={target}");
+    let short_data = env::var("ICND2069_SHORT_DATA").unwrap_or_else(|_| "1".into());
+    assert!(short_data == "0" || short_data == "1", "ICND2069_SHORT_DATA must be 0 or 1");
+    println!("cargo:rustc-env=ICND2069_SHORT_DATA={short_data}");
+    let latch_gap: usize = env::var("ICND2069_REPEAT_LATCH_GAP")
+        .unwrap_or_else(|_| "1".into())
+        .parse()
+        .expect("ICND2069_REPEAT_LATCH_GAP must be an integer in 1..=64");
+    assert!((1..=64).contains(&latch_gap), "ICND2069_REPEAT_LATCH_GAP must be in 1..=64");
+    println!("cargo:rustc-env=ICND2069_REPEAT_LATCH_GAP={latch_gap}");
+    let repeats: usize = env::var("ICND2069_SCAN_REPEATS")
+        .unwrap_or_else(|_| "1".into())
+        .parse()
+        .expect("ICND2069_SCAN_REPEATS must be an integer in 1..=64");
+    assert!((1..=64).contains(&repeats), "ICND2069_SCAN_REPEATS must be in 1..=64");
+    println!("cargo:rustc-env=ICND2069_SCAN_REPEATS={repeats}");
     let chain: usize = env::var("ICND2069_CHAIN_COPIES")
         .unwrap_or_else(|_| "1".into())
         .parse()
         .expect("ICND2069_CHAIN_COPIES must be an integer in 1..=8");
     assert!((1..=8).contains(&chain), "ICND2069_CHAIN_COPIES must be in 1..=8");
     println!("cargo:rustc-env=ICND2069_CHAIN_COPIES={chain}");
-    let pattern = env::var("ICND2069_PATTERN").unwrap_or_else(|_| "reference".into());
+    let mode = env::var("ICND2069_GRAY_MODE").unwrap_or_else(|_| "sweep".into());
+    assert!(mode == "sweep" || mode == "static", "ICND2069_GRAY_MODE must be sweep/static");
+    let pattern = env::var("ICND2069_PATTERN").unwrap_or_else(|_| "white".into());
+    assert!(mode != "sweep" || pattern == "white", "sweep mode requires white pattern");
     let variant = match pattern.as_str() {
         "reference" => "Reference",
         "white" => "White",
@@ -38,7 +67,8 @@ fn main() {
         format!(
             "const PATTERN: protocol::Pattern = protocol::Pattern::{variant};\n\
              const PATTERN_NAME: &str = \"{pattern}\";\n\
-             const GRAY: u16 = {gray};\n"
+             const GRAY: u16 = {gray};\n\
+             const GRAY_SWEEP: bool = {};\n", mode == "sweep"
         ),
     ).unwrap();
 }

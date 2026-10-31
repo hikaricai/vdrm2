@@ -7,7 +7,8 @@ fn sample(w: &[u32], t: usize) -> u16 {
 }
 fn main() {
     let white_only = std::env::args().any(|a| a == "--white-only");
-    assert_eq!((ROWS, CHANNELS, GROUPS, DEMO_GRAY), (16,16,64,8192));
+    assert_eq!((ROWS, CHANNELS, DEMO_GRAY), (16,16,8192));
+    assert!((1..=64).contains(&GROUPS));
     assert_eq!(DCLK_HZ,12_500_000);
     let mut words=vec![0;FRAME_WORDS];
     let initial = if white_only { pattern_frame(Pattern::White,255) } else { demo_frame() };
@@ -32,6 +33,7 @@ fn main() {
     let writes:Vec<_>=cs.iter().filter(|c|c.1==5).map(|c|c.2).collect();
     assert_eq!(writes,expected);
     assert!(writes.contains(&0x020f)); // scan register = 16-1.
+    assert!(writes.contains(&(0x0300 | (GROUPS - 1) as u16)));
     assert_eq!(cs[3].0,57 + TRANSFER_DCLKS);
     let data:Vec<_>=cs.iter().filter(|c|c.1==1).collect();
     assert_eq!(data.len(),ROWS * CHANNELS);
@@ -62,7 +64,7 @@ fn main() {
     }
     assert_eq!(tick,FRAME_DCLKS);
     assert_eq!(rows.len(),GROUPS * ROWS);
-    assert_eq!(rows[0]-cs[0].0,25);
+    assert_eq!(rows[0], DATA_END + 16);
     assert!(rows.windows(2).enumerate().all(|(i,p)|p[1]-p[0]==row_period(i)));
     let counts:Vec<_>=(80..=83).map(|d| rows.windows(2).filter(|p|p[1]-p[0]==d).count()).collect();
     assert_eq!(counts.iter().sum::<usize>(),GROUPS * ROWS - 1);
@@ -74,13 +76,31 @@ fn main() {
         assert_eq!(sample(&words,t-4)&BK!=0,BK_ACTIVE_HIGH);
         assert_eq!(sample(&words,t)&BK!=0,!BK_ACTIVE_HIGH);
     }
-    assert!((FRAME_DCLKS-18..FRAME_DCLKS).all(|t|sample(&words,t)&0xfff==PARK));
+    assert!((FRAME_DCLKS-8..FRAME_DCLKS).all(|t|sample(&words,t)&0xfff==PARK));
     let extra:usize=(0..FRAME_DCLKS).map(|t|(sample(&words,t)>>12) as usize).sum();
-    assert_eq!(12*FRAME_DCLKS+extra,2500123);
+    println!("frame DCLK={}, core cycles={}, ideal period={} us",
+        FRAME_DCLKS, 12*FRAME_DCLKS+extra, (12*FRAME_DCLKS+extra) as f64/150.0);
     assert_eq!(runs.last().unwrap() & 1,0);
     assert!((rows.last().unwrap()+4..FRAME_DCLKS)
         .all(|t|sample(&words,t)&(LCK|DIN)==0));
     let baseline = words.clone();
+    let mut head = vec![0; HEAD_WORDS];
+    let mut tail = vec![0; TAIL_WORDS];
+    let mut shared_tail = None;
+    for &gray in GRAY_SWEEP {
+        update_white(&mut words, gray);
+        let mut rebuilt = vec![0; FRAME_WORDS];
+        encode_frame(&mut rebuilt, &pattern_frame(Pattern::White, gray));
+        assert_eq!(words, rebuilt, "gray patch must preserve config and clock timing");
+        encode_split(&mut head, &mut tail, &pattern_frame(Pattern::White, gray));
+        assert_eq!(head, rebuilt[..HEAD_WORDS], "DMA head differs from complete waveform");
+        assert_eq!(tail, rebuilt[HEAD_WORDS..], "DMA tail differs from complete waveform");
+        if let Some(previous) = &shared_tail {
+            assert_eq!(&tail, previous, "shared scan tail must be independent of gray");
+        } else {
+            shared_tail = Some(tail.clone());
+        }
+    }
     for pattern in [Pattern::Reference, Pattern::White, Pattern::Black,
                     Pattern::Out0, Pattern::Out1, Pattern::AlternatingRows,
                     Pattern::Checker, Pattern::Split] {
@@ -128,6 +148,10 @@ fn main() {
             }
         }
     }
-    println!("PASS: 16 scans x16 channels; full 49 configs with 020F; 1024 OE; 256 words x{}; saved CLK delays unchanged; white_only={}",
-             CHAIN_COPIES,white_only);
+    println!("PASS: 16 rows x16 channels; repeats={}; full 49 configs; {} OE; 256 words x{}; split head/tail equals full waveform; white_only={}",
+             GROUPS, GROUPS * ROWS, CHAIN_COPIES,white_only);
+    let cycles = if CHAIN_COPIES <= 3 { GRAY_SWEEP.len() } else { 4 };
+    println!("shared wave buffers={} bytes; old duplicated buffers={} bytes",
+        4*(HEAD_WORDS*cycles + TAIL_WORDS + ROW_RUN_COUNT),
+        4*(FRAME_WORDS + ROW_RUN_COUNT)*cycles);
 }

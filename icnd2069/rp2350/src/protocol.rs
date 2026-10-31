@@ -4,7 +4,24 @@
 
 pub const ROWS: usize = 16;
 pub const CHANNELS: usize = 16;
-pub const GROUPS: usize = 64;
+/// Number of complete 16-row sweeps per frame; build-time variable, default 1.
+pub const SCAN_REPEATS: usize = match option_env!("ICND2069_SCAN_REPEATS") {
+    Some(value) => {
+        let bytes = value.as_bytes();
+        assert!(!bytes.is_empty());
+        let mut n = 0;
+        let mut i = 0;
+        while i < bytes.len() {
+            assert!(bytes[i] >= b'0' && bytes[i] <= b'9');
+            n = n * 10 + (bytes[i] - b'0') as usize;
+            i += 1;
+        }
+        assert!(n >= 1 && n <= 64);
+        n
+    }
+    None => 1,
+};
+pub const GROUPS: usize = SCAN_REPEATS;
 pub const DCLK_HZ: u32 = 12_500_000;
 pub const ROW_DCLKS: usize = 81;
 // Software input limit retained from the saved NOVA image. This is NOT a
@@ -22,6 +39,49 @@ pub const CHAIN_COPIES: usize = match option_env!("ICND2069_CHAIN_COPIES") {
     None => 1,
 };
 pub const TRANSFER_DCLKS: usize = 16 * CHAIN_COPIES;
+/// Send only the selected physical channel and its following zero word.
+pub const SHORT_DATA: bool = match option_env!("ICND2069_SHORT_DATA") {
+    Some(value) => {
+        let bytes = value.as_bytes();
+        assert!(bytes.len() == 1 && (bytes[0] == b'0' || bytes[0] == b'1'));
+        bytes[0] == b'1'
+    }
+    None => true,
+};
+/// Physical OUT channel. Serial DATA_LATCH order remains OUT15 through OUT0.
+pub const TARGET_CHANNEL: usize = match option_env!("ICND2069_TARGET_CHANNEL") {
+    Some(value) => {
+        let bytes = value.as_bytes();
+        let mut n = 0;
+        let mut i = 0;
+        assert!(!bytes.is_empty());
+        while i < bytes.len() {
+            assert!(bytes[i] >= b'0' && bytes[i] <= b'9');
+            n = n * 10 + (bytes[i] - b'0') as usize;
+            i += 1;
+        }
+        assert!(n < CHANNELS);
+        n
+    }
+    None => 0,
+};
+/// Complete LAT-low DCLK cycles between repeated one-clock DATA_LATCH pulses.
+pub const REPEAT_LATCH_GAP: usize = match option_env!("ICND2069_REPEAT_LATCH_GAP") {
+    Some(value) => {
+        let bytes = value.as_bytes();
+        let mut n = 0;
+        let mut i = 0;
+        assert!(!bytes.is_empty());
+        while i < bytes.len() {
+            assert!(bytes[i] >= b'0' && bytes[i] <= b'9');
+            n = n * 10 + (bytes[i] - b'0') as usize;
+            i += 1;
+        }
+        assert!(n >= 1 && n <= 64);
+        n
+    }
+    None => 1,
+};
 
 // Pin bits relative to GP10. GP15 is driven independently by side-set.
 pub const LE: u16 = 1;
@@ -59,7 +119,7 @@ pub const PRE_ACT: usize = 14;
 // unlocked. The reference rotation includes them but they are not payload.
 pub const REGISTERS: &[(u8, u8)] = &[
     (0x02, (ROWS - 1) as u8),
-    (0x03, 0x3f),
+    (0x03, (GROUPS - 1) as u8),
     (0x04, 0x04),
     (0x05, 0x0a),
     (0x06, 0x01),
@@ -105,15 +165,32 @@ pub const REGISTERS: &[(u8, u8)] = &[
     (0x23, 0x01),
 ];
 pub const CONFIG_WRITES: usize = REGISTERS.len() + 4;
-pub const FRAME_DCLKS: usize = 208_094; // Reference frame including CLK extensions.
+pub const DATA_ROW_DCLKS: usize = if SHORT_DATA {
+    2 * (8 + TRANSFER_DCLKS) + (CHANNELS - 2) * (REPEAT_LATCH_GAP + 1)
+} else {
+    CHANNELS * (8 + TRANSFER_DCLKS)
+};
+// Configuration leaves arbitrary bits in the shift registers. Clear them
+// before the first latch. OUT0 also needs an unlatched clear at frame end.
+pub const DATA_PREFIX_DCLKS: usize = if SHORT_DATA { 8 + TRANSFER_DCLKS } else { 0 };
+pub const DATA_SUFFIX_DCLKS: usize =
+    if SHORT_DATA && TARGET_CHANNEL == 0 { 8 + TRANSFER_DCLKS } else { 0 };
+pub const DATA_END: usize =
+    49 + CONFIG_WRITES * (8 + TRANSFER_DCLKS)
+        + DATA_PREFIX_DCLKS + ROWS * DATA_ROW_DCLKS + ROWS - 1 + DATA_SUFFIX_DCLKS;
+// Load all data before the repeated display sweeps; next VSYNC follows the last
+// complete row window. Displayed data may lag the transmitted data by a frame.
+pub const FIRST_ROW: usize = DATA_END + 16;
+pub const FRAME_DCLKS: usize = (FIRST_ROW + scan_period() + 1) & !1;
 pub const FRAME_WORDS: usize = FRAME_DCLKS / 2;
-const CLOCK_DELAYS: &[u8; FRAME_DCLKS] = include_bytes!("nova_clock_delays.bin");
+pub const HEAD_WORDS: usize = DATA_END / 2;
+pub const TAIL_WORDS: usize = FRAME_WORDS - HEAD_WORDS;
+const CLOCK_DELAYS: &[u8; 208_094] = include_bytes!("nova_clock_delays.bin");
 pub const ROW_RUN_COUNT: usize = GROUPS * ROWS * 2 + 1;
 pub const VSYNC_FALL: usize = 8;
-pub const FIRST_ROW: usize = VSYNC_FALL + 25;
 // First complete frame of 100m_7s_1.dsl. Four (period-80) values per byte.
 const ROW_SCHEDULE: &[u8] = b"55655488855555555457548855555552155555565555522155555555551752215555555455555556555548855555555555174885555555545555555655555215555555555487221555555555155555565555545555555555522288555555555515555556555554555555555548872155555555548555555655555515555555522216855555555552215555565555554555555548855715555555554885555523555555455555552215571555555555221555548a5555552155555488555745555555548855555223555554885555522155574555555552215555488755552221555548855557215555554885555522175554885555552215555688555552221555548857555221555554885555572155956559565595655a956559565595655956575956559565595655956755956559565595655957655956559565595655975655956559565595655a956559565595655956575956559565595655956755956559565595655957655956559565595655975655956559565595655a956559565595655956575956559565595655956755956559565595655957655956559565595655975655956559565595655a956559565595655956575956559565595655956755956559565595655957655956559565595655975655956559565595655a956559565595655956575956559565595655956755956559565595655957655956559565595655975655956559565595655a956559565595655956575956559565595655956755956559565595655957655956559565595655975655956559565595655a956559565595655956575956559565595655956755956559565595655957655956559565595655975655956559565595655a95655956559565595654";
-pub fn row_period(index: usize) -> usize {
+pub const fn row_period(index: usize) -> usize {
     let digit = ROW_SCHEDULE[index / 2];
     let nibble = if digit <= b'9' {
         digit - b'0'
@@ -123,17 +200,81 @@ pub fn row_period(index: usize) -> usize {
     80 + ((nibble >> (if index % 2 == 0 { 2 } else { 0 })) & 3) as usize
 }
 
+const fn scan_period() -> usize {
+    let mut total = 0;
+    let mut i = 0;
+    while i < GROUPS * ROWS {
+        total += row_period(i);
+        i += 1;
+    }
+    total
+}
+
+/// Black plus eight evenly spaced words from 511 to 8191, rounded to integers.
+pub const GRAY_SWEEP: &[u16] = &[
+    0, 511, 1608, 2705, 3802, 4900, 5997, 7094, 8191,
+];
+
+/// Patch only the gray-data SIN bits in a buffer not currently used by DMA.
+pub fn update_white(words: &mut [u32], gray: u16) {
+    assert!(gray <= MAX_GRAY_INPUT);
+    if SHORT_DATA {
+        let before_target = if TARGET_CHANNEL == 0 {
+            8 + TRANSFER_DCLKS + (CHANNELS - 2) * (REPEAT_LATCH_GAP + 1)
+        } else {
+            (CHANNELS - 1 - TARGET_CHANNEL) * (REPEAT_LATCH_GAP + 1)
+        };
+        for row in 0..ROWS {
+            let start = 49 + CONFIG_WRITES * (8 + TRANSFER_DCLKS)
+                + DATA_PREFIX_DCLKS + row * (DATA_ROW_DCLKS + 1) + before_target + 8;
+            for t in start..start + TRANSFER_DCLKS {
+                let bit = 15 - (t - start) % 16;
+                let mask = (SIN as u32) << ((t & 1) * 16);
+                words[t / 2] = (words[t / 2] & !mask)
+                    | if gray & (1 << bit) != 0 { mask } else { 0 };
+            }
+        }
+        return;
+    }
+    let mut start = 49 + CONFIG_WRITES * (8 + TRANSFER_DCLKS);
+    for row in 0..ROWS {
+        for transfer in 0..CHANNELS {
+            start += 8 + usize::from(row != 0 && transfer == 0);
+            for t in start..start + TRANSFER_DCLKS {
+                let bit = 15 - (t - start) % 16;
+                let mask = (SIN as u32) << ((t & 1) * 16);
+                words[t / 2] = (words[t / 2] & !mask)
+                    | if gray & (1 << bit) != 0 { mask } else { 0 };
+            }
+            start += TRANSFER_DCLKS;
+        }
+    }
+    assert_eq!(start, DATA_END);
+}
+
 pub struct Waveform<'a> {
     words: &'a mut [u32],
+    tail: &'a mut [u32],
     clocks: usize,
 }
 impl<'a> Waveform<'a> {
     pub fn new(words: &'a mut [u32]) -> Self {
-        Self { words, clocks: 0 }
+        Self { words, tail: &mut [], clocks: 0 }
+    }
+    pub fn split(words: &'a mut [u32], tail: &'a mut [u32]) -> Self {
+        Self { words, tail, clocks: 0 }
+    }
+    fn word_mut(&mut self, index: usize) -> &mut u32 {
+        if index < self.words.len() {
+            &mut self.words[index]
+        } else {
+            &mut self.tail[index - self.words.len()]
+        }
     }
     pub fn sample(&mut self, pins: u16) {
-        let word = &mut self.words[self.clocks / 2];
-        if self.clocks & 1 == 0 {
+        let clock = self.clocks;
+        let word = self.word_mut(clock / 2);
+        if clock & 1 == 0 {
             *word = pins as u32;
         } else {
             *word |= (pins as u32) << 16;
@@ -168,6 +309,12 @@ impl<'a> Waveform<'a> {
     }
 }
 pub type Frame = [[u16; CHANNELS]; ROWS];
+
+/// Uniform gray throughout a frame; advance one gray level per frame.
+pub fn sweep_frame(frame_index: usize) -> Frame {
+    [[GRAY_SWEEP[frame_index % GRAY_SWEEP.len()]; CHANNELS]; ROWS]
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum Pattern {
     Reference,
@@ -213,6 +360,19 @@ pub fn encode_frame(words: &mut [u32], frame: &Frame) -> usize {
 pub fn encode_with_config(words: &mut [u32], frame: &Frame, rotating: Option<u16>) -> usize {
     assert_eq!(words.len(), FRAME_WORDS);
     let mut wave = Waveform::new(words);
+    encode_wave(&mut wave, frame, rotating)
+}
+
+/// Each gray has its own input head; all frames share an identical scan tail.
+/// Both slices must be initialized before DMA starts and then stay immutable.
+pub fn encode_split(head: &mut [u32], tail: &mut [u32], frame: &Frame) {
+    assert_eq!(DATA_END % 2, 0);
+    assert_eq!(head.len(), HEAD_WORDS);
+    assert_eq!(tail.len(), TAIL_WORDS);
+    encode_wave(&mut Waveform::split(head, tail), frame, None);
+}
+
+fn encode_wave(wave: &mut Waveform<'_>, frame: &Frame, rotating: Option<u16>) -> usize {
     // Exact rising-edge coordinates from the reference: falls 8, 31, 48.
     wave.command_at(5, VSYNC);
     wave.command_at(20, ENABLE);
@@ -228,18 +388,45 @@ pub fn encode_with_config(words: &mut [u32], frame: &Frame, rotating: Option<u16
     }
     wave.shift(0x0055, WR_CFG, if rotating.is_some() { 9 } else { 8 });
     wave.shift(0x0155, WR_CFG, 8);
+    if SHORT_DATA {
+        wave.shift(0, 0, 8);
+    }
     for (row, values) in frame.iter().enumerate() {
-        for out in (0..CHANNELS).rev() {
-            // Reference has an extra DCLK between logical data rows.
-            let gap = 8 + usize::from(row != 0 && out == CHANNELS - 1);
-            wave.shift(values[out], 1, gap);
+        if SHORT_DATA {
+            wave.hold(PARK, usize::from(row != 0));
+            for out in (0..CHANNELS).rev() {
+                if out == TARGET_CHANNEL {
+                    wave.shift(values[out], 1, 8);
+                } else if out + 1 == TARGET_CHANNEL
+                    || (TARGET_CHANNEL == 0 && out == CHANNELS - 1)
+                {
+                    // OUT0's next serial slot is next row's OUT15.
+                    wave.shift(0, 1, 8);
+                } else {
+                    // SIN stays zero, so the cleared register remains zero.
+                    wave.hold(PARK, REPEAT_LATCH_GAP);
+                    wave.hold(PARK | LE, 1);
+                }
+            }
+        } else {
+            for out in (0..CHANNELS).rev() {
+                // Reference has an extra DCLK between logical data rows.
+                let gap = 8 + usize::from(row != 0 && out == CHANNELS - 1);
+                wave.shift(values[out], 1, gap);
+            }
         }
     }
-    assert!(wave.clocks < FIRST_ROW + GROUPS * ROWS * ROW_DCLKS);
+    if SHORT_DATA && TARGET_CHANNEL == 0 {
+        // Clear the last row's target without consuming a 257th pixel.
+        wave.shift(0, 0, 8);
+    }
+    if rotating.is_none() {
+        assert_eq!(wave.clocks, DATA_END);
+    }
     wave.hold(PARK, FRAME_DCLKS - wave.clocks);
 
     // Overlay independently running ROW on the serialized command/data bus.
-    // 64 groups x ROWS scans; preserve local width/cadence and VSYNC phase.
+    // GROUPS complete sweeps x 16 rows; preserve local width/cadence.
     let mut start = FIRST_ROW;
     for i in 0..GROUPS * ROWS {
         let period = row_period(i);
@@ -255,7 +442,8 @@ pub fn encode_with_config(words: &mut [u32], frame: &Frame, rotating: Option<u16
             }
             let shift = (t & 1) * 16;
             let mask = ((BK | DIN | LCK | ROW) as u32) << shift;
-            words[t / 2] = (words[t / 2] & !mask) | (row_pins as u32) << shift;
+            let word = wave.word_mut(t / 2);
+            *word = (*word & !mask) | (row_pins as u32) << shift;
         }
         start += period;
     }
@@ -264,7 +452,8 @@ pub fn encode_with_config(words: &mut [u32], frame: &Frame, rotating: Option<u16
     for t in 0..FRAME_DCLKS {
         let shift = (t & 1) * 16;
         let mask = 0xf000u32 << shift;
-        words[t / 2] = (words[t / 2] & !mask)
+        let word = wave.word_mut(t / 2);
+        *word = (*word & !mask)
             | ((CLOCK_DELAYS[t] as u32) << (12 + shift));
     }
     FRAME_WORDS
@@ -287,7 +476,7 @@ pub fn encode_row_runs(words: &mut [u32; ROW_RUN_COUNT]) {
         start += row_period(i);
     }
     assert!(position < FRAME_DCLKS);
-    // Preserve saved frame/CLK duration; OE is low after the last scan.
+    // Finish the last row window, then immediately start the next frame.
     words[ROW_RUN_COUNT - 1] = ((FRAME_DCLKS - position - 1) as u32) << 1;
 }
 

@@ -7,18 +7,26 @@ include!(concat!(env!("OUT_DIR"), "/pattern_config.rs"));
 
 use embassy_executor::Spawner;
 use embassy_rp::gpio::{Level, Output};
-use embassy_time::{Instant, Timer};
+use embassy_time::Timer;
 use panic_rtt_target as _;
 use static_cell::ConstStaticCell;
 
-// Large waveforms live in BSS, never on the stack or in an executor task frame.
-static FRAME: ConstStaticCell<[u32; protocol::FRAME_WORDS]> =
-    ConstStaticCell::new([0; protocol::FRAME_WORDS]);
+// Only gray-specific input heads are duplicated. Every frame shares one
+// scan tail and one ROW table, so RAM no longer scales by repeats * grays.
+// Larger cascades use four representative levels to stay within 512 KiB.
+const CYCLE_FRAMES: usize = if !GRAY_SWEEP { 1 } else if protocol::CHAIN_COPIES <= 3 {
+    protocol::GRAY_SWEEP.len()
+} else { 4 };
+static HEADS: ConstStaticCell<[u32; protocol::HEAD_WORDS * CYCLE_FRAMES]> =
+    ConstStaticCell::new([0; protocol::HEAD_WORDS * CYCLE_FRAMES]);
+static TAIL: ConstStaticCell<[u32; protocol::TAIL_WORDS]> =
+    ConstStaticCell::new([0; protocol::TAIL_WORDS]);
 static ROW_RUNS: ConstStaticCell<[u32; protocol::ROW_RUN_COUNT]> =
     ConstStaticCell::new([0; protocol::ROW_RUN_COUNT]);
-// Each frame sends the complete register batch once, then all 16x16 gray words.
+static DESCRIPTORS: ConstStaticCell<[u32; CYCLE_FRAMES * 2 * 4]> =
+    ConstStaticCell::new([0; CYCLE_FRAMES * 2 * 4]);
+static RESTART: ConstStaticCell<[u32; 2]> = ConstStaticCell::new([0; 2]);
 const FULL_CONFIG_EVERY_FRAME: bool = true;
-const SOFT_RESET_ON_START: bool = false; // Tested separately; did not restore OUT1.
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
@@ -39,70 +47,50 @@ async fn main(_spawner: Spawner) {
             row: p.PIN_22,
         },
     );
-    Timer::after_millis(100).await;
-
-    let frame = FRAME.take();
+    let heads = HEADS.take();
+    let tail = TAIL.take();
     let row_runs = ROW_RUNS.take();
     protocol::encode_row_runs(row_runs);
-    let image = protocol::pattern_frame(PATTERN, GRAY);
-    let frame_len = protocol::encode_frame(frame, &image);
-    assert_eq!(frame_len, protocol::FRAME_WORDS);
-    assert!(GRAY <= protocol::MAX_GRAY_INPUT);
-    rtt_target::rprintln!(
-        "ICND2069: PIO0/SM0, DCLK={} Hz, {}x{}, {} groups, {} clocks/row",
-        protocol::DCLK_HZ,
-        protocol::CHANNELS,
-        protocol::ROWS,
-        protocol::GROUPS,
-        protocol::ROW_DCLKS
-    );
-    rtt_target::rprintln!(
-        "frame={} bytes; startup {} WR_CFG; reference PLL 04/05/06=04/0A/01",
-        frame_len * 4,
-        protocol::CONFIG_WRITES
-    );
-    rtt_target::rprintln!(
-        "pattern={}, gray={}, input_limit={}, ICND2069 chain={}",
-        PATTERN_NAME, GRAY, protocol::MAX_GRAY_INPUT, protocol::CHAIN_COPIES
-    );
-    if SOFT_RESET_ON_START {
-        protocol::startup_reset(frame);
-        driver.send(&frame[..frame_len], row_runs).await;
-        protocol::encode_frame(frame, &image);
-    }
-    if !FULL_CONFIG_EVERY_FRAME {
-        driver.send(&frame[..frame_len], row_runs).await;
-        protocol::encode_with_config(
-            frame,
+    for i in 0..CYCLE_FRAMES {
+        let image = if GRAY_SWEEP {
+            if CYCLE_FRAMES == protocol::GRAY_SWEEP.len() {
+                protocol::sweep_frame(i)
+            } else {
+                protocol::pattern_frame(protocol::Pattern::White, [0, 1, 127, 255][i])
+            }
+        } else {
+            protocol::pattern_frame(PATTERN, GRAY)
+        };
+        protocol::encode_split(
+            &mut heads[i * protocol::HEAD_WORDS..(i + 1) * protocol::HEAD_WORDS],
+            tail,
             &image,
-            Some(protocol::rotation_word(0)),
         );
     }
     rtt_target::rprintln!(
-        "WR_CFG/frame={}, soft_reset={}; {} scans, saved local ROW cadence",
-        if FULL_CONFIG_EVERY_FRAME {
-            protocol::CONFIG_WRITES
-        } else {
-            5
-        },
-        SOFT_RESET_ON_START,
-        protocol::ROWS
+        "ICND2069: chain={}, {}x{}, groups={}, DCLK={} Hz, frame={} clocks",
+        protocol::CHAIN_COPIES, protocol::CHANNELS, protocol::ROWS, protocol::GROUPS,
+        protocol::DCLK_HZ, protocol::FRAME_DCLKS,
     );
-
-    let mut frames = 0u32;
-    let mut last = Instant::now();
+    rtt_target::rprintln!("wave RAM={} bytes", heads.len() * 4 + tail.len() * 4 + row_runs.len() * 4);
+    rtt_target::rprintln!(
+        "short_data={}, target=OUT{}, repeated LAT-low gap={} clocks, row input={} clocks",
+        protocol::SHORT_DATA, protocol::TARGET_CHANNEL, protocol::REPEAT_LATCH_GAP,
+        protocol::DATA_ROW_DCLKS,
+    );
+    rtt_target::rprintln!(
+        "pattern={}, static gray={}, sweep={}, cycle={} frames, full_config={} ({} writes)",
+        PATTERN_NAME, GRAY, GRAY_SWEEP, CYCLE_FRAMES, FULL_CONFIG_EVERY_FRAME,
+        protocol::CONFIG_WRITES,
+    );
+    Timer::after_millis(100).await;
+    driver.start_segments(
+        heads, protocol::HEAD_WORDS, tail, row_runs, DESCRIPTORS.take(),
+        RESTART.take(), p.DMA_CH2, p.DMA_CH3, p.DMA_CH4,
+    );
     loop {
-        // Repeat the selected image. DCLK runs across DMA boundaries.
-        driver.send(&frame[..frame_len], row_runs).await;
-        frames = frames.wrapping_add(1);
-        if !FULL_CONFIG_EVERY_FRAME {
-            protocol::update_rotation(frame, protocol::rotation_word(frames as usize));
-        }
-        if frames % 60 == 0 {
-            let now = Instant::now();
-            rtt_target::rprintln!("60 frames / {} us", (now - last).as_micros());
-            last = now;
-            led.toggle();
-        }
+        // Only heartbeat work on the CPU; hardware changes gray every frame.
+        Timer::after_secs(1).await;
+        led.toggle();
     }
 }
