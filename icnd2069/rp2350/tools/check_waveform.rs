@@ -82,5 +82,51 @@ fn main() {
         }
         assert_eq!(v,0x1c72);
     }
-    println!("PASS: NOVA 40 scans; full and rotating configs; 640 gray words x8; exact reference ROW schedule; 12/4 width; frame tail PARK");
+    let baseline = words.clone();
+    for pattern in [Pattern::Reference, Pattern::White, Pattern::Black,
+                    Pattern::Out0, Pattern::Out1, Pattern::AlternatingRows,
+                    Pattern::Checker, Pattern::Split] {
+        for gray in [0, 255, 2048, 4096, 8192] {
+            let image = pattern_frame(pattern, gray);
+            encode_with_config(&mut words, &image, Some(0x1c72));
+            // Compare every pin and delay bit except DATA to the saved baseline.
+            let mask = !((SIN as u32) | ((SIN as u32) << 16));
+            assert!(words.iter().zip(&baseline).all(|(a,b)|a & mask == b & mask));
+            let mut decoded = Vec::new();
+            let mut le_width = 0;
+            for t in 0..FRAME_DCLKS {
+                if sample(&words,t)&LE != 0 { le_width += 1; continue; }
+                if le_width == 1 {
+                    let mut value = 0;
+                    for copy in 0..CHAIN_COPIES {
+                        let mut v = 0;
+                        for k in t-128+copy*16..t-128+(copy+1)*16 {
+                            v = (v<<1) | u16::from(sample(&words,k)&SIN != 0);
+                        }
+                        if copy == 0 { value = v; } else { assert_eq!(v,value); }
+                    }
+                    decoded.push(value);
+                }
+                le_width = 0;
+            }
+            let expected: Vec<u16> = image.iter().flat_map(|r|r.iter().rev().copied()).collect();
+            assert_eq!(decoded,expected,"{pattern:?} gray={gray}");
+            for row in 0..ROWS {
+                for out in 0..CHANNELS {
+                    let expected_on = match pattern {
+                        Pattern::Reference => out < 15,
+                        Pattern::White => true,
+                        Pattern::Black => false,
+                        Pattern::Out0 => out == 0,
+                        Pattern::Out1 => out == 1,
+                        Pattern::AlternatingRows => row%2 == 0,
+                        Pattern::Checker => row%2 == out%2,
+                        Pattern::Split => row < 20,
+                    };
+                    assert_eq!(image[row][out],if expected_on {gray} else {0});
+                }
+            }
+        }
+    }
+    println!("PASS: baseline commands/ROW; 8 patterns x5 gray levels; 640 words x8 copies; all non-DATA pins and CLK delays unchanged");
 }

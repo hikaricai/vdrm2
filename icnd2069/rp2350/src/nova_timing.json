@@ -1,0 +1,14 @@
+{
+  "source_cache": "/tmp/icnd2069-nova7-cache1",
+  "frame_index": 1,
+  "frame_clocks": 208094,
+  "row_pulses": 2560,
+  "extended_clock_counts": {
+    "0": 207405,
+    "3": 19,
+    "4": 541,
+    "6": 129
+  },
+  "frame_pio_cycles": 2500123,
+  "model_frame_us_at_150mhz": 16667.486666666668
+}

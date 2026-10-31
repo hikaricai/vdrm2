@@ -7,8 +7,9 @@ pub const CHANNELS: usize = 16;
 pub const GROUPS: usize = 64;
 pub const DCLK_HZ: u32 = 12_500_000;
 pub const ROW_DCLKS: usize = 81;
-pub const GRAY_K: u8 = 32;
-pub const GRAY_CAPACITY: u16 = (GROUPS * GRAY_K as usize * 4) as u16;
+// Software input limit retained from the saved NOVA image. This is NOT a
+// calibrated PWM full scale: at 0.4V, this configuration saturates by gray 512.
+pub const MAX_GRAY_INPUT: u16 = 8192;
 pub const DEMO_GRAY: u16 = 8192;
 pub const CHAIN_COPIES: usize = 8;
 
@@ -158,12 +159,42 @@ impl<'a> Waveform<'a> {
     }
 }
 pub type Frame = [[u16; CHANNELS]; ROWS];
-pub fn demo_frame() -> Frame {
-    let mut frame = [[DEMO_GRAY; CHANNELS]; ROWS];
-    for values in &mut frame {
-        values[15] = 0;
+#[derive(Clone, Copy, Debug)]
+pub enum Pattern {
+    Reference,
+    White,
+    Black,
+    Out0,
+    Out1,
+    AlternatingRows,
+    Checker,
+    Split,
+}
+
+/// Logical row/channel masks; only SIN data changes, never scan timing.
+pub fn pattern_frame(pattern: Pattern, gray: u16) -> Frame {
+    assert!(gray <= MAX_GRAY_INPUT);
+    let mut frame = [[0; CHANNELS]; ROWS];
+    for (row, values) in frame.iter_mut().enumerate() {
+        for (out, value) in values.iter_mut().enumerate() {
+            let on = match pattern {
+                Pattern::Reference => out != 15,
+                Pattern::White => true,
+                Pattern::Black => false,
+                Pattern::Out0 => out == 0,
+                Pattern::Out1 => out == 1,
+                Pattern::AlternatingRows => row % 2 == 0,
+                Pattern::Checker => (row + out) % 2 == 0,
+                Pattern::Split => row < ROWS / 2,
+            };
+            *value = if on { gray } else { 0 };
+        }
     }
     frame
+}
+
+pub fn demo_frame() -> Frame {
+    pattern_frame(Pattern::Reference, DEMO_GRAY)
 }
 
 pub fn encode_frame(words: &mut [u32], frame: &Frame) -> usize {

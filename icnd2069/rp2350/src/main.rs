@@ -3,6 +3,7 @@
 
 mod driver;
 mod protocol;
+include!(concat!(env!("OUT_DIR"), "/pattern_config.rs"));
 
 use embassy_executor::Spawner;
 use embassy_rp::gpio::{Level, Output};
@@ -43,9 +44,10 @@ async fn main(_spawner: Spawner) {
     let frame = FRAME.take();
     let row_runs = ROW_RUNS.take();
     protocol::encode_row_runs(row_runs);
-    let frame_len = protocol::encode_frame(frame, &protocol::demo_frame());
+    let image = protocol::pattern_frame(PATTERN, GRAY);
+    let frame_len = protocol::encode_frame(frame, &image);
     assert_eq!(frame_len, protocol::FRAME_WORDS);
-    assert!(protocol::DEMO_GRAY <= protocol::GRAY_CAPACITY);
+    assert!(GRAY <= protocol::MAX_GRAY_INPUT);
     rtt_target::rprintln!(
         "ICND2069: PIO0/SM0, DCLK={} Hz, {}x{}, {} groups, {} clocks/row",
         protocol::DCLK_HZ,
@@ -59,17 +61,17 @@ async fn main(_spawner: Spawner) {
         frame_len * 4,
         protocol::CONFIG_WRITES
     );
-    rtt_target::rprintln!("pattern=NOVA, OUT15=0, OUT14..0={}", protocol::DEMO_GRAY);
+    rtt_target::rprintln!("pattern={}, gray={}, input_limit={}", PATTERN_NAME, GRAY, protocol::MAX_GRAY_INPUT);
     if SOFT_RESET_ON_START {
         protocol::startup_reset(frame);
         driver.send(&frame[..frame_len], row_runs).await;
-        protocol::encode_frame(frame, &protocol::demo_frame());
+        protocol::encode_frame(frame, &image);
     }
     if !FULL_CONFIG_EVERY_FRAME {
         driver.send(&frame[..frame_len], row_runs).await;
         protocol::encode_with_config(
             frame,
-            &protocol::demo_frame(),
+            &image,
             Some(protocol::rotation_word(0)),
         );
     }
@@ -86,7 +88,7 @@ async fn main(_spawner: Spawner) {
     let mut frames = 0u32;
     let mut last = Instant::now();
     loop {
-        // Repeat uniform data. Driver keeps DCLK running across DMA boundaries.
+        // Repeat the selected image. DCLK runs across DMA boundaries.
         driver.send(&frame[..frame_len], row_runs).await;
         frames = frames.wrapping_add(1);
         if !FULL_CONFIG_EVERY_FRAME {
