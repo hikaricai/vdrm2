@@ -8,7 +8,7 @@ use embassy_rp::{
 use embassy_time::Timer;
 use fixed::types::U24F8;
 
-use crate::protocol::{BK_ACTIVE_HIGH, DCLK_HZ, DIN_ONE_SELECTS, PARK_WORD};
+use crate::protocol::{BK_ACTIVE_HIGH, DCLK_HZ, DIN_ONE_SELECTS, PARK};
 
 bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => pio::InterruptHandler<PIO0>;
@@ -46,8 +46,7 @@ impl Driver {
         let din = common.make_pio_pin(pins.din);
         let row = common.make_pio_pin(pins.row);
 
-        // Two SDR clocks in eight PIO cycles. Empty FIFO repeats X=PARK_WORD
-        // via nonblocking PULL, so DCLK never stalls between DMA transfers.
+        // Empty FIFO repeats two blank samples, keeping PLL input continuous.
         let program = pio_asm!(
             ".side_set 1",
             ".wrap_target",
@@ -88,10 +87,8 @@ impl Driver {
             sm.set_pins(Level::High, &[&din]);
         }
         sm.set_pin_dirs(pio::Direction::Out, &all);
-        // SAFETY: SM is disabled, TX FIFO contains exactly our fallback word.
-        // PULL BLOCK (0x80a0) loads OSR; MOV X, OSR (0xa027) saves it for PULL
-        // NOBLOCK's empty-FIFO path. Neither forced instruction drives pins.
-        sm.tx().push(PARK_WORD);
+        sm.tx().push(PARK as u32 * 0x10001);
+        // SAFETY: disabled SM, one owned FIFO word; PULL then MOV X, OSR.
         unsafe {
             sm.exec_instr(0x80a0);
             sm.exec_instr(0xa027);
@@ -106,7 +103,6 @@ impl Driver {
 
     /// Waveform must terminate in PARK (LE/ROW/LCK low, row outputs blanked).
     /// DMA completion is NOT wire completion: drain FIFO + OSR before return.
-    /// DCLK continues with PARK samples while the caller patches the next frame.
     pub async fn send(&mut self, words: &[u32]) {
         assert!(!words.is_empty());
         self.sm
