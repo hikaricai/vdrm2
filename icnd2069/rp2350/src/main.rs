@@ -33,13 +33,20 @@ static RESTART: ConstStaticCell<[u32; 2]> = ConstStaticCell::new([0; 2]);
 async fn main(_spawner: Spawner) {
     rtt_target::rtt_init_print!(rtt_target::ChannelMode::NoBlockSkip, 2048);
     let mut config = embassy_rp::config::Config::default();
-    if protocol::DCLK_HZ == 35_000_000 {
-        // 12 MHz crystal * 70 / 3 / 2 = 140 MHz, below the normal 150 MHz.
-        // Four PIO cycles at divider 1 give exact 35 MHz without fractional
-        // divider jitter. Other presets retain the existing 150 MHz clock.
+    if protocol::DCLK_HZ >= 35_000_000 {
+        // 35 MHz: 12 * 70 / 3 / 2 = 140 MHz, four PIO cycles per CLK.
+        // Experimental 40/45 MHz: feedback 80/90 gives 160/180 MHz.
+        // Only those two presets overclock; all use high 2 / low 2.
         config.clocks.xosc.as_mut().unwrap().sys_pll =
             Some(embassy_rp::clocks::PllConfig {
-                refdiv: 1, fbdiv: 70, post_div1: 3, post_div2: 2,
+                refdiv: 1,
+                fbdiv: match protocol::DCLK_HZ {
+                    45_000_000 => 90,
+                    40_000_000 => 80,
+                    _ => 70,
+                },
+                post_div1: 3,
+                post_div2: 2,
             });
     }
     let p = embassy_rp::init(config);

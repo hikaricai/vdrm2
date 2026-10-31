@@ -2,6 +2,10 @@
 
 当前 DCLK 默认 **35 MHz**，通过 `ICND2069_DCLK_MHZ` 选择 **12.5 / 25 / 35** 三档。普通帧约 **74.97 µs（13338.4 Hz）**；1.4 V 门限抓包的 133 个完整帧已验证灰度连续、256 次锁存和 16 行扫描。详见[35 MHz 实测记录](../20261031_config_interval/README.md#35-mhz-与可调档位)。
 
+另支持 `ICND2069_DCLK_MHZ=40` 超频实验档：系统时钟 160 MHz，PIO 每 CLK 4 周期，高低各 2（均为 12.5 ns，1:1 占空比）。普通帧理论周期 65.60 µs；本次仅编译、烧录并重启，未抓包验证。默认仍为 35 MHz。
+
+`ICND2069_DCLK_MHZ=45` 使用系统时钟 180 MHz，高低各约 11.11 ns（1:1），普通帧理论周期约 58.31 µs。仅 40/45 MHz 档超频；12.5/25 MHz 档为系统 150 MHz，35 MHz 档为系统 140 MHz。45 MHz 本次仅编译、烧录并重启，未抓包验证。
+
 当前配置：单颗 ICND2069，16 行 × 16 通道，启动首帧及每隔 10000 帧完整发送 49 条配置（`ICND2069_CONFIG_INTERVAL` 可调）；每帧发送 256 次 DATA_LATCH，然后只扫描一遍 16 行（03h=00h），紧接下一帧。默认只让物理 OUT0 使用灰度，其他通道全部为零；目标可通过 `ICND2069_TARGET_CHANNEL=0..15` 调整。`ICND2069_SCAN_REPEATS` 默认 1，允许 1～64。16 行目标像素使用同一灰度，逐帧循环零灰度加上 511～8191 的 8 个等间距档位（取整），共 9 帧：`0→511→1608→2705→3802→4900→5997→7094→8191→0`。
 
 [周期配置实测与原始抓包](../20261031_config_interval/README.md)：N=7 的 44 个完整帧验证配置间隔、灰度连续及 ROW 对齐；恢复 N=10000 后 46 个完整普通帧约 209.92 µs，每帧 256 次锁存及 16 行扫描。10 ms 抓包未直接覆盖 N=10000 的完整刷新间隔。
@@ -52,8 +56,14 @@ ICND2069_GRAY_MODE=static ICND2069_PATTERN=white ICND2069_GRAY=255 cargo build -
 # 配置刷新间隔，默认 10000；1 恢复每帧完整配置
 ICND2069_CONFIG_INTERVAL=10000 cargo build --release --locked
 
-# CLK 档位，只接受 12.5、25、35，默认 35；构建后同样需要烧录
+# 常规 CLK 档位：12.5、25、35，默认 35；另支持实验档 40
 ICND2069_DCLK_MHZ=35 cargo build --release --locked
+
+# 超频实验档：系统 160 MHz，CLK 40 MHz，高低电平比例为 1:1
+ICND2069_DCLK_MHZ=40 cargo build --release --locked
+
+# 超频实验档：系统 180 MHz，CLK 45 MHz，高低电平比例为 1:1
+ICND2069_DCLK_MHZ=45 cargo build --release --locked
 
 # 仅改变级联数量，允许 1～8，默认 1
 ICND2069_CHAIN_COPIES=8 cargo build --release --locked

@@ -28,12 +28,22 @@ pub const DCLK_HZ: u32 = match option_env!("ICND2069_DCLK_MHZ") {
         b"12.5" => 12_500_000,
         b"25" => 25_000_000,
         b"35" => 35_000_000,
-        _ => panic!("ICND2069_DCLK_MHZ must be 12.5, 25 or 35"),
+        b"40" => 40_000_000,
+        b"45" => 45_000_000,
+        _ => panic!("ICND2069_DCLK_MHZ must be 12.5, 25, 35, 40 or 45"),
     },
     None => 35_000_000,
 };
-pub const PIO_CYCLES_PER_DCLK: u32 = if DCLK_HZ == 35_000_000 { 4 } else { 6 };
-pub const SYS_HZ: u32 = if DCLK_HZ == 35_000_000 { 140_000_000 } else { 150_000_000 };
+pub const PIO_CYCLES_PER_DCLK: u32 = match DCLK_HZ {
+    45_000_000 | 40_000_000 | 35_000_000 => 4,
+    _ => 6,
+};
+pub const SYS_HZ: u32 = match DCLK_HZ {
+    45_000_000 => 180_000_000,
+    40_000_000 => 160_000_000,
+    35_000_000 => 140_000_000,
+    _ => 150_000_000,
+};
 pub const ROW_DCLKS: usize = 81;
 // Software input limit retained from the saved NOVA image. This is NOT a
 // calibrated PWM full scale. The previous 40-scan capture saturated by 512;

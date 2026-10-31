@@ -239,7 +239,7 @@ impl Driver {
         let din = common.make_pio_pin(pins.din);
         let row = common.make_pio_pin(pins.row);
 
-        // 35 MHz: four cycles, high 2 / low 2. Pull during the high phase
+        // 35/40/45 MHz: four cycles, high 2 / low 2. Pull during the high phase
         // removes a separate NOP. Lower presets retain the six-cycle program.
         // IRQ4 synchronizes SM1; no captured delay replay.
         let program = if crate::protocol::PIO_CYCLES_PER_DCLK == 4 {
