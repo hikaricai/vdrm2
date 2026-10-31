@@ -4,10 +4,6 @@
 mod driver;
 mod protocol;
 
-// Diagnostic: reproduce ICND-only power-on while MCU streams uniform data.
-// SOFT_RST does not clear ICND registers; physical power-on is still required.
-const INITIALIZE_CHIP: bool = false;
-
 use embassy_executor::Spawner;
 use embassy_rp::gpio::{Level, Output};
 use embassy_time::{Instant, Timer};
@@ -15,8 +11,6 @@ use panic_rtt_target as _;
 use static_cell::ConstStaticCell;
 
 // Large waveforms live in BSS, never on the stack or in an executor task frame.
-static INIT: ConstStaticCell<[u32; protocol::INIT_WORDS]> =
-    ConstStaticCell::new([0; protocol::INIT_WORDS]);
 static FRAME: ConstStaticCell<[u32; protocol::FRAME_WORDS]> =
     ConstStaticCell::new([0; protocol::FRAME_WORDS]);
 
@@ -40,8 +34,6 @@ async fn main(_spawner: Spawner) {
     );
     Timer::after_millis(100).await;
 
-    let init = INIT.take();
-    let init_len = protocol::encode_init(init);
     let frame = FRAME.take();
     let frame_len = protocol::encode_frame(frame, &protocol::demo_frame());
     assert_eq!(frame_len, protocol::FRAME_WORDS);
@@ -55,15 +47,14 @@ async fn main(_spawner: Spawner) {
         protocol::ROW_DCLKS
     );
     rtt_target::rprintln!(
-        "init={} bytes, frame={} bytes; RT5990 timing + PLL N code need hardware verification",
-        init_len * 4,
-        frame_len * 4
+        "frame={} bytes; {} WR_CFG/frame; reference PLL 04/05/06=04/0A/01",
+        frame_len * 4,
+        protocol::CONFIG_WRITES
     );
     rtt_target::rprintln!("pattern=uniform, raw_gray={}", protocol::DEMO_GRAY);
-    rtt_target::rprintln!("initialize_chip={}", INITIALIZE_CHIP);
-    if INITIALIZE_CHIP {
-        driver.send(&init[..init_len]).await;
-    }
+    // Every frame includes the complete reference configuration. Late ICND
+    // power-on no longer misses a one-shot initialization. The reference
+    // does not contain SOFT_RST/DIS_OP, so neither is added here.
 
     let mut frames = 0u32;
     let mut last = Instant::now();

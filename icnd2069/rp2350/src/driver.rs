@@ -5,7 +5,6 @@ use embassy_rp::{
     pio::{self, program::pio_asm, Common, Pio, ShiftConfig, StateMachine},
     Peripheral, PeripheralRef,
 };
-use embassy_time::Timer;
 use fixed::types::U24F8;
 
 use crate::protocol::{BK_ACTIVE_HIGH, DCLK_HZ, DIN_ONE_SELECTS, PARK};
@@ -52,16 +51,22 @@ impl Driver {
             ".wrap_target",
             "pull noblock side 0",
             "out pins, 16 side 0",
-            "nop          side 1 [1]",
-            "out pins, 16 side 0 [1]",
-            "nop          side 1 [1]",
+            "nop          side 0 [2]",
+            "nop          side 1 [6]",
+            "nop          side 0",
+            "out pins, 16 side 0",
+            "nop          side 0 [2]",
+            "nop          side 1 [6]",
             ".wrap",
         );
         let loaded = common.load_program(&program.program);
         let mut cfg = pio::Config::default();
         cfg.use_program(&loaded, &[&dclk]);
         // Convert the ratio, not 150 MHz itself (which exceeds U24F8's range).
-        let divider = (embassy_rp::clocks::clk_sys_freq() as u64 * 256) / (4 * DCLK_HZ as u64);
+        // 12 PIO cycles/DCLK: high 7, low 5. Pins update one PIO
+        // cycle after the falling edge. At 150 MHz: high 46.67 ns,
+        // LAT change 53.33 ns after rising, close to reference 40-50/50 ns.
+        let divider = (embassy_rp::clocks::clk_sys_freq() as u64 * 256) / (12 * DCLK_HZ as u64);
         cfg.clock_divider = U24F8::from_bits(divider as u32);
         cfg.fifo_join = pio::FifoJoin::TxOnly;
         cfg.shift_out = ShiftConfig {
@@ -102,17 +107,13 @@ impl Driver {
     }
 
     /// Waveform must terminate in PARK (LE/ROW/LCK low, row outputs blanked).
-    /// DMA completion is NOT wire completion: drain FIFO + OSR before return.
+    /// Returns at DMA completion, before FIFO drain, so the next transfer
+    /// can refill it without adding a CPU-sized gap to every frame.
     pub async fn send(&mut self, words: &[u32]) {
         assert!(!words.is_empty());
         self.sm
             .tx()
             .dma_push(self.dma.reborrow(), words, false)
             .await;
-        // Eight FIFO words + one OSR word = at most 18 DCLK = 1.8 us.
-        // Round up from DCLK_HZ, so changing that constant retains the drain.
-        let drain_us = (18_000_000u64).div_ceil(DCLK_HZ as u64) + 2;
-        Timer::after_micros(drain_us).await;
-        assert!(self.sm.tx().empty());
     }
 }

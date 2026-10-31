@@ -1,1 +1,7 @@
 icnd2069/SCH_Schematic3_2026-10-24.pdf 这是之前为了测试mbi5264画的测试板 icnd2069/8x8led.webp是led点阵的共阳和共阴极的原理图 之前是共阳的mbi5264和rt5960和788bs 现在要用共阴的icnd2069和rt5990和788as 你帮我看看之前的板子能不能无缝切换 分析结果输出到当前目录的md
+
+现在我把rp2350驱动的icnd2069测试板连接到这台mac上了 逻辑分析仪也接入mac 
+分析仪的ch0是clk ch1是data ch2是le ch3是gclk ch4是icnd的out0 ch5是icnd的out1
+你帮忙运行调试你之前写的icnd2069/rp2350 然后控制这台mac的后台dsview软件(如果有dsview的cli 优先使用cli处里)抓包分析验证 
+之前你做的一些dsview分析在dsview/icnd2069 可以参考
+
