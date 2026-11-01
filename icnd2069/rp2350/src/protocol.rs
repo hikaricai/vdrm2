@@ -1,10 +1,11 @@
-//! ICND2069 16-scan image and full configuration using fixed DCLK timing.
+//! ICND2069 54-scan image and full configuration using fixed DCLK timing.
 //! Each halfword describes pins for one DCLK rising-edge transfer.
 //! Reference: captures/reference/nova_to_devboard_100m_2s.dsl and the startup summary.
 
-pub const ROWS: usize = 16;
+/// ICND2069 register 02h is programmed as 53, selecting 54 scan rows.
+pub const ROWS: usize = 54;
 pub const CHANNELS: usize = 16;
-/// Number of complete 16-row sweeps per frame; build-time variable, default 8.
+/// Number of complete 54-row sweeps per frame; build-time variable, default 8.
 pub const SCAN_REPEATS: usize = match option_env!("ICND2069_SCAN_REPEATS") {
     Some(value) => {
         let bytes = value.as_bytes();
@@ -87,7 +88,7 @@ pub const DIAGONAL_LATCH: bool = match option_env!("ICND2069_PATTERN") {
     },
 };
 pub const fn latch_target(row: usize) -> usize {
-    if DIAGONAL_LATCH { row } else { TARGET_CHANNEL }
+    if DIAGONAL_LATCH { row % CHANNELS } else { TARGET_CHANNEL }
 }
 /// Physical OUT channel. Serial DATA_LATCH order remains OUT15 through OUT0.
 pub const TARGET_CHANNEL: usize = match option_env!("ICND2069_TARGET_CHANNEL") {
@@ -239,10 +240,14 @@ pub const DATA_ROW_DCLKS: usize = if SHORT_DATA {
 pub const DATA_PREFIX_DCLKS: usize = if SHORT_DATA { TRANSFER_DCLKS } else { 0 };
 pub const DATA_SUFFIX_DCLKS: usize =
     if SHORT_DATA && !DIAGONAL_LATCH && TARGET_CHANNEL == 0 { TRANSFER_DCLKS } else { 0 };
-// Diagonal OUT0 has 15 zero latches and an unlatched zero transfer after
-// its gray. Other rows have 14 zero repeats and a latched zero transfer.
+// Every diagonal OUT0 has 15 zero latches and an unlatched zero transfer
+// after its gray. Other rows have 14 zero repeats and a latched zero transfer.
 pub const DIAGONAL_EXTRA_DCLKS: usize =
-    if SHORT_DATA && DIAGONAL_LATCH { REPEAT_LATCH_GAP + 1 } else { 0 };
+    if SHORT_DATA && DIAGONAL_LATCH {
+        ((ROWS + CHANNELS - 1) / CHANNELS) * (REPEAT_LATCH_GAP + 1)
+    } else {
+        0
+    };
 // Full writes retain the historical one-clock inter-row separation. In
 // continuous latch mode it would create a second consecutive LAT-low clock
 // before the next repeated latch, so it is deliberately absent.
@@ -422,11 +427,12 @@ pub fn pattern_frame(pattern: Pattern, gray: u16) -> Frame {
     for (row, values) in frame.iter_mut().enumerate() {
         for (out, value) in values.iter_mut().enumerate() {
             if matches!(pattern, Pattern::Diagonal) {
-                // Only (row, OUTrow) is active. Quantize v before shifting:
-                // v = round(row * 32 / 15), gray = v << 1 (0..64).
-                let last = ROWS.min(CHANNELS) - 1;
-                *value = if row == out {
-                    let v = ((row * 32 + last / 2) / last) as u16;
+                // Repeat the 16-row diagonal for every physical scan row.
+                // v = round((row mod 16) * 32 / 15), gray = v << 1.
+                let diagonal_row = row % CHANNELS;
+                let last = CHANNELS - 1;
+                *value = if diagonal_row == out {
+                    let v = ((diagonal_row * 32 + last / 2) / last) as u16;
                     v << 1
                 } else {
                     0
@@ -544,7 +550,7 @@ fn encode_wave(wave: &mut Waveform<'_>, frame: &Frame, rotating: Option<u16>) ->
     wave.hold(PARK, FRAME_DCLKS - wave.clocks);
 
     // Overlay independently running ROW on the serialized command/data bus.
-    // GROUPS complete sweeps x 16 rows with a fixed ROW_DCLKS cadence.
+    // GROUPS complete sweeps x 54 rows with a fixed ROW_DCLKS cadence.
     let mut start = FIRST_ROW;
     for i in 0..GROUPS * ROWS {
         let period = row_period(i);
