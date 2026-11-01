@@ -109,6 +109,9 @@ async fn main(_spawner: Spawner) {
         protocol::CONTINUOUS_LATCH, protocol::TARGET_CHANNEL, protocol::REPEAT_LATCH_GAP,
         protocol::DATA_ROW_DCLKS,
     );
+    if protocol::CONTINUOUS_LATCH && protocol::DIAGONAL_LATCH {
+        rtt_target::rprintln!("diagonal latch: target=OUTrow, one gray + one zero transfer/row");
+    }
     rtt_target::rprintln!(
         "pattern={}, static gray={}, sweep={}, cycle={} frames, config interval={} ({} writes)",
         PATTERN_NAME, GRAY, GRAY_SWEEP, CYCLE_FRAMES, protocol::CONFIG_INTERVAL,

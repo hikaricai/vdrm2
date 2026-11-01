@@ -38,7 +38,7 @@ fn main() {
     println!("cargo:rustc-env=ICND2069_TARGET_CHANNEL={target}");
     let continuous_latch = env::var("ICND2069_CONTINUOUS_LATCH")
         .or_else(|_| env::var("ICND2069_SHORT_DATA"))
-        .unwrap_or_else(|_| "0".into());
+        .unwrap_or_else(|_| "1".into());
     assert!(
         continuous_latch == "0" || continuous_latch == "1",
         "ICND2069_CONTINUOUS_LATCH (legacy ICND2069_SHORT_DATA) must be 0 or 1"
@@ -71,9 +71,10 @@ fn main() {
         .unwrap_or_else(|_| if mode == "sweep" { "white".into() } else { "diagonal".into() });
     assert!(mode != "sweep" || pattern == "white", "sweep mode requires white pattern");
     assert!(
-        !matches!(pattern.as_str(), "gradient" | "diagonal") || continuous_latch == "0",
-        "gradient/diagonal requires ICND2069_CONTINUOUS_LATCH=0 to write all 256 pixels"
+        pattern != "gradient" || continuous_latch == "0",
+        "gradient requires ICND2069_CONTINUOUS_LATCH=0 to write all 256 pixels"
     );
+    println!("cargo:rustc-env=ICND2069_PATTERN={pattern}");
     let variant = match pattern.as_str() {
         "diagonal" => "Diagonal",
         "gradient" => "Gradient",

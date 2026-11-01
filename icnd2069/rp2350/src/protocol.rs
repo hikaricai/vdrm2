@@ -73,11 +73,22 @@ pub const CONTINUOUS_LATCH: bool = match option_env!("ICND2069_CONTINUOUS_LATCH"
         assert!(bytes.len() == 1 && (bytes[0] == b'0' || bytes[0] == b'1'));
         bytes[0] == b'1'
     }
-    None => false,
+    None => true,
     },
 };
 /// Compatibility alias for waveform sizing and existing host tools.
 pub const SHORT_DATA: bool = CONTINUOUS_LATCH;
+/// The diagonal advances the selected OUT with each logical data row.
+pub const DIAGONAL_LATCH: bool = match option_env!("ICND2069_PATTERN") {
+    Some(value) => matches!(value.as_bytes(), b"diagonal"),
+    None => match option_env!("ICND2069_GRAY_MODE") {
+        Some(value) => !matches!(value.as_bytes(), b"sweep"),
+        None => true,
+    },
+};
+pub const fn latch_target(row: usize) -> usize {
+    if DIAGONAL_LATCH { row } else { TARGET_CHANNEL }
+}
 /// Physical OUT channel. Serial DATA_LATCH order remains OUT15 through OUT0.
 pub const TARGET_CHANNEL: usize = match option_env!("ICND2069_TARGET_CHANNEL") {
     Some(value) => {
@@ -226,10 +237,17 @@ pub const DATA_ROW_DCLKS: usize = if SHORT_DATA {
 // before the first latch. OUT0 also needs an unlatched clear at frame end.
 pub const DATA_PREFIX_DCLKS: usize = if SHORT_DATA { 8 + TRANSFER_DCLKS } else { 0 };
 pub const DATA_SUFFIX_DCLKS: usize =
-    if SHORT_DATA && TARGET_CHANNEL == 0 { 8 + TRANSFER_DCLKS } else { 0 };
-pub const DATA_END: usize =
+    if SHORT_DATA && !DIAGONAL_LATCH && TARGET_CHANNEL == 0 { 8 + TRANSFER_DCLKS } else { 0 };
+// Diagonal OUT0 has 15 zero latches and an unlatched zero transfer after
+// its gray. Other rows have 14 zero repeats and a latched zero transfer.
+pub const DIAGONAL_EXTRA_DCLKS: usize =
+    if SHORT_DATA && DIAGONAL_LATCH { REPEAT_LATCH_GAP + 1 } else { 0 };
+pub const DATA_PAYLOAD_END: usize =
     49 + CONFIG_WRITES * (8 + TRANSFER_DCLKS)
-        + DATA_PREFIX_DCLKS + ROWS * DATA_ROW_DCLKS + ROWS - 1 + DATA_SUFFIX_DCLKS;
+        + DATA_PREFIX_DCLKS + ROWS * DATA_ROW_DCLKS + ROWS - 1
+        + DATA_SUFFIX_DCLKS + DIAGONAL_EXTRA_DCLKS;
+// DMA heads end on a packed two-DCLK word, including even latch gaps.
+pub const DATA_END: usize = (DATA_PAYLOAD_END + 1) & !1;
 // Load all data before the repeated display sweeps; next VSYNC follows the last
 // complete row window. Displayed data may lag the transmitted data by a frame.
 pub const FIRST_ROW: usize = DATA_END + 16;
@@ -259,21 +277,27 @@ pub const GRAY_SWEEP: &[u16] = if CONTINUOUS_LATCH { &[
 pub fn update_white(words: &mut [u32], gray: u16) {
     assert!(gray <= MAX_GRAY_INPUT);
     if SHORT_DATA {
-        let before_target = if TARGET_CHANNEL == 0 {
-            8 + TRANSFER_DCLKS + (CHANNELS - 2) * (REPEAT_LATCH_GAP + 1)
-        } else {
-            (CHANNELS - 1 - TARGET_CHANNEL) * (REPEAT_LATCH_GAP + 1)
-        };
+        let mut row_start = 49 + CONFIG_WRITES * (8 + TRANSFER_DCLKS)
+            + DATA_PREFIX_DCLKS;
         for row in 0..ROWS {
-            let start = 49 + CONFIG_WRITES * (8 + TRANSFER_DCLKS)
-                + DATA_PREFIX_DCLKS + row * (DATA_ROW_DCLKS + 1) + before_target + 8;
+            row_start += usize::from(row != 0);
+            let target = latch_target(row);
+            let before_target = if !DIAGONAL_LATCH && target == 0 {
+                8 + TRANSFER_DCLKS + (CHANNELS - 2) * (REPEAT_LATCH_GAP + 1)
+            } else {
+                (CHANNELS - 1 - target) * (REPEAT_LATCH_GAP + 1)
+            };
+            let start = row_start + before_target + 8;
             for t in start..start + TRANSFER_DCLKS {
                 let bit = 15 - (t - start) % 16;
                 let mask = (SIN as u32) << ((t & 1) * 16);
                 words[t / 2] = (words[t / 2] & !mask)
                     | if gray & (1 << bit) != 0 { mask } else { 0 };
             }
+            row_start += DATA_ROW_DCLKS
+                + if DIAGONAL_LATCH && target == 0 { REPEAT_LATCH_GAP + 1 } else { 0 };
         }
+        assert_eq!(row_start + DATA_SUFFIX_DCLKS, DATA_PAYLOAD_END);
         return;
     }
     let mut start = 49 + CONFIG_WRITES * (8 + TRANSFER_DCLKS);
@@ -350,11 +374,11 @@ impl<'a> Waveform<'a> {
 }
 pub type Frame = [[u16; CHANNELS]; ROWS];
 
-/// Keep only the selected channel for the continuous-latch demo.
+/// Keep the moving diagonal or the fixed selected channel for latch mode.
 pub fn target_frame(mut frame: Frame) -> Frame {
-    for values in &mut frame {
+    for (row, values) in frame.iter_mut().enumerate() {
         for (out, value) in values.iter_mut().enumerate() {
-            if out != TARGET_CHANNEL {
+            if out != latch_target(row) {
                 *value = 0;
             }
         }
@@ -389,7 +413,7 @@ pub fn pattern_frame(pattern: Pattern, gray: u16) -> Frame {
         for (out, value) in values.iter_mut().enumerate() {
             if matches!(pattern, Pattern::Diagonal) {
                 // Only (row, OUTrow) is active. Quantize v before shifting:
-                // v = round(row * 32 / 15), gray = v << 8.
+                // v = round(row * 32 / 15), gray = v << 1 (0..64).
                 let last = ROWS.min(CHANNELS) - 1;
                 *value = if row == out {
                     let v = ((row * 32 + last / 2) / last) as u16;
@@ -470,11 +494,13 @@ fn encode_wave(wave: &mut Waveform<'_>, frame: &Frame, rotating: Option<u16>) ->
     for (row, values) in frame.iter().enumerate() {
         if SHORT_DATA {
             wave.hold(PARK, usize::from(row != 0));
+            let target = latch_target(row);
             for out in (0..CHANNELS).rev() {
-                if out == TARGET_CHANNEL {
+                assert!(out == target || values[out] == 0);
+                if out == target {
                     wave.shift(values[out], 1, 8);
-                } else if out + 1 == TARGET_CHANNEL
-                    || (TARGET_CHANNEL == 0 && out == CHANNELS - 1)
+                } else if out + 1 == target
+                    || (!DIAGONAL_LATCH && target == 0 && out == CHANNELS - 1)
                 {
                     // OUT0's next serial slot is next row's OUT15.
                     wave.shift(0, 1, 8);
@@ -484,6 +510,11 @@ fn encode_wave(wave: &mut Waveform<'_>, frame: &Frame, rotating: Option<u16>) ->
                     wave.hold(PARK | LE, 1);
                 }
             }
+            if DIAGONAL_LATCH && target == 0 {
+                // No channel remains in this row: clear without a latch,
+                // so the next row starts with zero in the shift register.
+                wave.shift(0, 0, 8);
+            }
         } else {
             for out in (0..CHANNELS).rev() {
                 // Reference has an extra DCLK between logical data rows.
@@ -492,11 +523,13 @@ fn encode_wave(wave: &mut Waveform<'_>, frame: &Frame, rotating: Option<u16>) ->
             }
         }
     }
-    if SHORT_DATA && TARGET_CHANNEL == 0 {
+    if DATA_SUFFIX_DCLKS != 0 {
         // Clear the last row's target without consuming a 257th pixel.
         wave.shift(0, 0, 8);
     }
     if rotating.is_none() {
+        assert_eq!(wave.clocks, DATA_PAYLOAD_END);
+        wave.hold(PARK, DATA_END - DATA_PAYLOAD_END);
         assert_eq!(wave.clocks, DATA_END);
     }
     wave.hold(PARK, FRAME_DCLKS - wave.clocks);
