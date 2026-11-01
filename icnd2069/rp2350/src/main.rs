@@ -119,6 +119,8 @@ async fn main(_spawner: Spawner) {
     );
     rtt_target::rprintln!("normal frame={} clocks, first frame has full configuration",
         protocol::NORMAL_FRAME_DCLKS);
+    rtt_target::rprintln!("data/ROW overlap: first ROW at normal clock {}, VSYNC waits for both",
+        protocol::FIRST_ROW - protocol::CONFIG_SKIP_DCLKS);
     rtt_target::rprintln!("system clock={} Hz, PIO cycles/DCLK={}",
         protocol::SYS_HZ, protocol::PIO_CYCLES_PER_DCLK);
     Timer::after_millis(100).await;

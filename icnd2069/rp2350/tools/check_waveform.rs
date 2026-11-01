@@ -64,7 +64,7 @@ fn main() {
     }
     assert_eq!(tick,FRAME_DCLKS);
     assert_eq!(rows.len(),GROUPS * ROWS);
-    assert_eq!(rows[0], DATA_END + 16);
+    assert_eq!(rows[0], FIRST_ROW);
     assert!(rows.windows(2).enumerate().all(|(i,p)|p[1]-p[0]==row_period(i)));
     let counts:Vec<_>=(80..=83).map(|d| rows.windows(2).filter(|p|p[1]-p[0]==d).count()).collect();
     assert_eq!(counts.iter().sum::<usize>(),GROUPS * ROWS - 1);

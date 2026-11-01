@@ -248,10 +248,16 @@ pub const DATA_PAYLOAD_END: usize =
         + DATA_SUFFIX_DCLKS + DIAGONAL_EXTRA_DCLKS;
 // DMA heads end on a packed two-DCLK word, including even latch gaps.
 pub const DATA_END: usize = (DATA_PAYLOAD_END + 1) & !1;
-// Load all data before the repeated display sweeps; next VSYNC follows the last
-// complete row window. Displayed data may lag the transmitted data by a frame.
-pub const FIRST_ROW: usize = DATA_END + 16;
-pub const FRAME_DCLKS: usize = (FIRST_ROW + scan_period() + 1) & !1;
+// Scan the displayed frame while loading the next image. Begin only after
+// configuration, so skipping its DMA segment shifts both streams equally.
+pub const FIRST_ROW: usize = CONFIG_END_WORDS * 2 + 16;
+pub const SCAN_END: usize = FIRST_ROW + scan_period();
+// VSYNC waits for both streams. Retain a PARK tail for DMA bank completion
+// even when a long data transfer outlasts the scan.
+pub const FRAME_DCLKS: usize = (
+    if DATA_END + 16 > SCAN_END { DATA_END + 16 } else { SCAN_END }
+    + 1
+) & !1;
 pub const FRAME_WORDS: usize = FRAME_DCLKS / 2;
 pub const NORMAL_FRAME_DCLKS: usize = FRAME_DCLKS - CONFIG_SKIP_DCLKS;
 pub const HEAD_WORDS: usize = DATA_END / 2;

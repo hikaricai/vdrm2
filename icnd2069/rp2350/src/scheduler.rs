@@ -72,8 +72,8 @@ mod hardware {
             }
             pac::DMA.ints(1).write_value(1);
             let state = (&mut *addr_of_mut!(STATE)).as_mut().unwrap();
-            // DMA0 has already chained to the other bank. Its complete data
-            // head + 16-row tail gives us at least one frame to update this
+            // DMA0 has already chained to the other bank. Its complete
+            // frame gives us at least one frame to update this
             // bank. ROW DMA can prefetch into the other bank, but its 33+
             // run words prevent prefetch reaching this bank yet.
             state.prepare(state.bank);
