@@ -1,6 +1,6 @@
 //! ICND2069 16-scan image and full configuration using fixed DCLK timing.
 //! Each halfword describes pins for one DCLK rising-edge transfer.
-//! Reference: dbg/nova_to_devboard_100m_2s.dsl and the startup summary.
+//! Reference: captures/reference/nova_to_devboard_100m_2s.dsl and the startup summary.
 
 pub const ROWS: usize = 16;
 pub const CHANNELS: usize = 16;
@@ -229,15 +229,15 @@ pub const COMMON_PREFIX_WORDS: usize = 17;
 pub const CONFIG_END_WORDS: usize = (49 + CONFIG_WRITES * (8 + TRANSFER_DCLKS) + 1) / 2;
 pub const CONFIG_SKIP_DCLKS: usize = 2 * (CONFIG_END_WORDS - COMMON_PREFIX_WORDS);
 pub const DATA_ROW_DCLKS: usize = if SHORT_DATA {
-    2 * (8 + TRANSFER_DCLKS) + (CHANNELS - 2) * (REPEAT_LATCH_GAP + 1)
+    2 * TRANSFER_DCLKS + (CHANNELS - 2) * (REPEAT_LATCH_GAP + 1)
 } else {
-    CHANNELS * (8 + TRANSFER_DCLKS)
+    CHANNELS * TRANSFER_DCLKS
 };
 // Configuration leaves arbitrary bits in the shift registers. Clear them
 // before the first latch. OUT0 also needs an unlatched clear at frame end.
-pub const DATA_PREFIX_DCLKS: usize = if SHORT_DATA { 8 + TRANSFER_DCLKS } else { 0 };
+pub const DATA_PREFIX_DCLKS: usize = if SHORT_DATA { TRANSFER_DCLKS } else { 0 };
 pub const DATA_SUFFIX_DCLKS: usize =
-    if SHORT_DATA && !DIAGONAL_LATCH && TARGET_CHANNEL == 0 { 8 + TRANSFER_DCLKS } else { 0 };
+    if SHORT_DATA && !DIAGONAL_LATCH && TARGET_CHANNEL == 0 { TRANSFER_DCLKS } else { 0 };
 // Diagonal OUT0 has 15 zero latches and an unlatched zero transfer after
 // its gray. Other rows have 14 zero repeats and a latched zero transfer.
 pub const DIAGONAL_EXTRA_DCLKS: usize =
@@ -283,11 +283,11 @@ pub fn update_white(words: &mut [u32], gray: u16) {
             row_start += usize::from(row != 0);
             let target = latch_target(row);
             let before_target = if !DIAGONAL_LATCH && target == 0 {
-                8 + TRANSFER_DCLKS + (CHANNELS - 2) * (REPEAT_LATCH_GAP + 1)
+                TRANSFER_DCLKS + (CHANNELS - 2) * (REPEAT_LATCH_GAP + 1)
             } else {
                 (CHANNELS - 1 - target) * (REPEAT_LATCH_GAP + 1)
             };
-            let start = row_start + before_target + 8;
+            let start = row_start + before_target;
             for t in start..start + TRANSFER_DCLKS {
                 let bit = 15 - (t - start) % 16;
                 let mask = (SIN as u32) << ((t & 1) * 16);
@@ -303,7 +303,7 @@ pub fn update_white(words: &mut [u32], gray: u16) {
     let mut start = 49 + CONFIG_WRITES * (8 + TRANSFER_DCLKS);
     for row in 0..ROWS {
         for transfer in 0..CHANNELS {
-            start += 8 + usize::from(row != 0 && transfer == 0);
+            start += usize::from(row != 0 && transfer == 0);
             for t in start..start + TRANSFER_DCLKS {
                 let bit = 15 - (t - start) % 16;
                 let mask = (SIN as u32) << ((t & 1) * 16);
@@ -489,7 +489,7 @@ fn encode_wave(wave: &mut Waveform<'_>, frame: &Frame, rotating: Option<u16>) ->
     wave.shift(0x0055, WR_CFG, if rotating.is_some() { 9 } else { 8 });
     wave.shift(0x0155, WR_CFG, 8);
     if SHORT_DATA {
-        wave.shift(0, 0, 8);
+        wave.shift(0, 0, 0);
     }
     for (row, values) in frame.iter().enumerate() {
         if SHORT_DATA {
@@ -498,12 +498,12 @@ fn encode_wave(wave: &mut Waveform<'_>, frame: &Frame, rotating: Option<u16>) ->
             for out in (0..CHANNELS).rev() {
                 assert!(out == target || values[out] == 0);
                 if out == target {
-                    wave.shift(values[out], 1, 8);
+                    wave.shift(values[out], 1, 0);
                 } else if out + 1 == target
                     || (!DIAGONAL_LATCH && target == 0 && out == CHANNELS - 1)
                 {
                     // OUT0's next serial slot is next row's OUT15.
-                    wave.shift(0, 1, 8);
+                    wave.shift(0, 1, 0);
                 } else {
                     // SIN stays zero, so the cleared register remains zero.
                     wave.hold(PARK, REPEAT_LATCH_GAP);
@@ -513,19 +513,19 @@ fn encode_wave(wave: &mut Waveform<'_>, frame: &Frame, rotating: Option<u16>) ->
             if DIAGONAL_LATCH && target == 0 {
                 // No channel remains in this row: clear without a latch,
                 // so the next row starts with zero in the shift register.
-                wave.shift(0, 0, 8);
+                wave.shift(0, 0, 0);
             }
         } else {
             for out in (0..CHANNELS).rev() {
                 // Reference has an extra DCLK between logical data rows.
-                let gap = 8 + usize::from(row != 0 && out == CHANNELS - 1);
+                let gap = usize::from(row != 0 && out == CHANNELS - 1);
                 wave.shift(values[out], 1, gap);
             }
         }
     }
     if DATA_SUFFIX_DCLKS != 0 {
         // Clear the last row's target without consuming a 257th pixel.
-        wave.shift(0, 0, 8);
+        wave.shift(0, 0, 0);
     }
     if rotating.is_none() {
         assert_eq!(wave.clocks, DATA_PAYLOAD_END);

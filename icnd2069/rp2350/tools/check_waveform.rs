@@ -40,7 +40,7 @@ fn main() {
     assert!(data.iter().enumerate().all(|(i,c)|c.2==
         if white_only {255} else if i%16==0 {0} else {8192}));
     for (i,p) in data.windows(2).enumerate() {
-        assert_eq!(p[1].0-p[0].0,TRANSFER_DCLKS+8+usize::from((i+1)%16==0));
+        assert_eq!(p[1].0-p[0].0,TRANSFER_DCLKS+usize::from((i+1)%16==0));
     }
     for &(fall,w,value) in &cs {
         if w!=1 && w!=5 {continue;}
