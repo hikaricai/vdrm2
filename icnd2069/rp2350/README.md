@@ -1,12 +1,12 @@
 # ICND2069 / RP2350：单颗、16 行、1 组扫描
 
-当前 DCLK 默认 **12.5 MHz**，系统时钟 **150 MHz（不超频）**，普通帧理论周期 **209.92 µs（4763.7 Hz）**。`ICND2069_DCLK_MHZ` 可选择 **12.5 / 25 / 35 / 40 / 45**，40/45 为超频实验档。此前 35 MHz 的验证保留在[实测记录](../20261031_config_interval/README.md#35-mhz-与可调档位)。
+当前默认**关闭连续 latch**，每行完整写入 16 个灰度字。DCLK 默认 **12.5 MHz**，系统时钟 **150 MHz（不超频）**，普通帧理论周期 **600.32 µs（1665.8 Hz）**。`ICND2069_DCLK_MHZ` 可选择 **12.5 / 25 / 35 / 40 / 45**，40/45 为超频实验档。此前 35 MHz 的验证保留在[实测记录](../20261031_config_interval/README.md#35-mhz-与可调档位)。
 
-另支持 `ICND2069_DCLK_MHZ=40` 超频实验档：系统时钟 160 MHz，PIO 每 CLK 4 周期，高低各 2（均为 12.5 ns，1:1 占空比）。普通帧理论周期 65.60 µs；此前仅编译、烧录并重启，未抓包验证。
+另支持 `ICND2069_DCLK_MHZ=40` 超频实验档：系统时钟 160 MHz，PIO 每 CLK 4 周期，高低各 2（均为 12.5 ns，1:1 占空比）。默认完整写入模式的普通帧理论周期 187.60 µs；此前仅编译、烧录并重启，未抓包验证。
 
-`ICND2069_DCLK_MHZ=45` 使用系统时钟 180 MHz，高低各约 11.11 ns（1:1），普通帧理论周期约 58.31 µs。仅 40/45 MHz 档超频；12.5/25 MHz 档为系统 150 MHz，35 MHz 档为系统 140 MHz。45 MHz 本次仅编译、烧录并重启，未抓包验证。
+`ICND2069_DCLK_MHZ=45` 使用系统时钟 180 MHz，高低各约 11.11 ns（1:1），默认完整写入模式的普通帧理论周期约 166.76 µs。仅 40/45 MHz 档超频；12.5/25 MHz 档为系统 150 MHz，35 MHz 档为系统 140 MHz。45 MHz 此前仅编译、烧录并重启，未抓包验证。
 
-当前配置：单颗 ICND2069，16 行 × 16 通道，启动首帧及每隔 10000 帧完整发送 49 条配置（`ICND2069_CONFIG_INTERVAL` 可调）；每帧发送 256 次 DATA_LATCH，然后只扫描一遍 16 行（03h=00h），紧接下一帧。默认只让物理 OUT0 使用灰度，其他通道全部为零；目标可通过 `ICND2069_TARGET_CHANNEL=0..15` 调整。`ICND2069_SCAN_REPEATS` 默认 1，允许 1～64。16 行目标像素使用同一灰度，逐帧循环零灰度加上 511～8191 的 8 个等间距档位（取整），共 9 帧：`0→511→1608→2705→3802→4900→5997→7094→8191→0`。
+当前配置：单颗 ICND2069，16 行 × 16 通道，启动首帧及每隔 10000 帧完整发送 49 条配置（`ICND2069_CONFIG_INTERVAL` 可调）；每帧发送 256 次 DATA_LATCH，然后只扫描一遍 16 行（03h=00h），紧接下一帧。默认关闭连续 latch，帧内全部 256 个像素使用相同灰度，帧间按 11 档循环：`0→15→31→63→127→255→511→1023→2047→4095→8191→0`。`ICND2069_SCAN_REPEATS` 默认 1，允许 1～64。开启连续 latch 时仍只点亮 `ICND2069_TARGET_CHANNEL=0..15`（默认 OUT0），其余通道为零，沿用原 9 档序列：`0→511→1608→2705→3802→4900→5997→7094→8191→0`。
 
 [周期配置实测与原始抓包](../20261031_config_interval/README.md)：N=7 的 44 个完整帧验证配置间隔、灰度连续及 ROW 对齐；恢复 N=10000 后 46 个完整普通帧约 209.92 µs，每帧 256 次锁存及 16 行扫描。10 ms 抓包未直接覆盖 N=10000 的完整刷新间隔。
 
@@ -16,14 +16,17 @@
 
 - `ROWS=16`、`CHANNELS=16`、`GROUPS=1`；02h=0Fh，03h=00h。
 - 每帧保留 VSYNC、EN_OP。以首帧为 frame 0，仅 frame 0、N、2N…发送 PRE_ACT、解锁、全部寄存器、锁定，合计 49 条 WR_CFG；普通帧直接装载灰度，跳过配置时钟。
-- `ICND2069_SHORT_DATA=1`（默认）：按 OUT15→OUT0 顺序锁存，只完整移入目标灰度和紧随目标的零字，其余通道直接锁存已经清零的移位寄存器。SIN 始终保持零，直到下一次目标传输。
+- `ICND2069_CONTINUOUS_LATCH=1`：开启连续锁存，按 OUT15→OUT0 顺序锁存，只完整移入目标灰度和紧随目标的零字，其余通道直接锁存已经清零的移位寄存器。SIN 始终保持零，直到下一次目标传输。
+- `ICND2069_CONTINUOUS_LATCH=0`（默认关闭）：每行 16 个通道分别完整移入灰度字（每颗芯片 16 bit）再锁存。默认 sweep 模式帧内所有行、所有通道均为当前灰度，帧间按上述 11 档循环；此模式不使用 `TARGET_CHANNEL` 掩码。
+- 旧参数 `ICND2069_SHORT_DATA` 保留为兼容别名；同时设置时，以 `ICND2069_CONTINUOUS_LATCH` 为准。
 - 目标为 OUT0 时，主动零字对应下一行的 OUT15。数据开始前先无锁存地移入零，避免配置残留；最后一行 OUT0 后无锁存地移入零，不产生第 257 次 DATA_LATCH。
 - `ICND2069_REPEAT_LATCH_GAP=1`（默认，范围 1～64）：重复锁存间 LAT 低电平保持 1 个完整 DCLK，LAT 高电平为 1 个 DCLK。连续重复锁存的上升沿间距因此为 2 个 DCLK，防止相邻脉冲合成多时钟命令。
-- 默认每行数据段为 76 DCLK，较全量移入模式的 384 DCLK 减少约 80.2%；跨行额外间隔仍保留 1 DCLK。
+- 默认每行数据段为 384 DCLK；开启连续 latch 后为 76 DCLK，减少约 80.2%。跨行额外间隔仍保留 1 DCLK。
+- 关闭连续锁存时，默认单颗配置帧为 8696 DCLK，普通帧为 7504 DCLK；12.5 MHz 下分别为 695.68 µs 和 600.32 µs（普通帧约 1665.8 Hz）。两种模式均为每帧 256 次 DATA_LATCH、16 行扫描。
 - 第一行扫描在数据发送结束 16 DCLK 后开始；首个 ROW 高 12 DCLK，后续高 4 DCLK，所有行周期固定为 81 DCLK。
-- 帧长度根据配置、级联数、数据和最后一行窗口推导；默认单颗/OUT0 的配置帧为 3816 DCLK（12.5 MHz 下 305.28 µs），普通帧为 2624 DCLK（209.92 µs，4763.7 Hz）。最后一行窗口结束即进入下帧。
+- 帧长度根据配置、级联数、数据和最后一行窗口推导；开启连续 latch 时，单颗/OUT0 的配置帧为 3816 DCLK（12.5 MHz 下 305.28 µs），普通帧为 2624 DCLK（209.92 µs，4763.7 Hz）。最后一行窗口结束即进入下帧。
 - PIO0/SM0 驱动 CLK/LAT/DATA，SM1 驱动 ROW/OE。35 MHz 档自动使用 140 MHz 系统时钟，每周期 4 个 PIO 周期，高低各 2；另外两档沿用 150 MHz 系统时钟及 6 周期程序。三档均为整数分频。`OUT PINS,16` 消耗整个样本，OUT_COUNT=12 只驱动 GP10～21。无时钟延迟表、可变延迟分支或抓包行周期表。
-- DMA0/2/4 播放两个交替帧描述符组，DMA1/3/5 同步播放 ROW 描述符。尾段完成后 DMA 自动进入下一组，DMA_IRQ_1 更新已完成组，为再下一帧选择灰度、是否配置及首个 ROW 等待长度。IRQ 优先级 P1，更新必须在一帧内完成；当前默认最短帧约 210 µs，无软件换帧等待。
+- DMA0/2/4 播放两个交替帧描述符组，DMA1/3/5 同步播放 ROW 描述符。尾段完成后 DMA 自动进入下一组，DMA_IRQ_1 更新已完成组，为再下一帧选择灰度、是否配置及首个 ROW 等待长度。IRQ 优先级 P1，更新必须在一帧内完成；当前默认最短帧约 600 µs，无软件换帧等待。
 - 各档输入段、扫描段和 ROW 表在启动时生成并保持不变；只更新尚未复用的描述符及两个 ROW 首段字。RAM 占用不随 N 增长，配置刷新不会重置灰度序列。
 - 未发送 SOFT_RST；没有 SDO 读回。
 
@@ -44,7 +47,7 @@ OUT0/OUT1 对应**上一帧发送的灰度**。验证必须错开一帧：发送
 ## 构建与运行
 
 ```sh
-# 当前默认：单颗、全白、灰度逐帧循环
+# 当前默认：单颗、连续 latch 关闭、灰度逐帧循环
 cargo build --release --locked
 probe-rs download --chip RP235x --protocol swd --speed 1000 --verify target/thumbv8m.main-none-eabihf/release/icnd2069-demo
 probe-rs reset --chip RP235x --protocol swd --speed 1000
@@ -71,15 +74,22 @@ ICND2069_CHAIN_COPIES=8 cargo build --release --locked
 # 调整物理目标通道及重复锁存的 LAT-low 间隔
 ICND2069_TARGET_CHANNEL=7 ICND2069_REPEAT_LATCH_GAP=3 cargo build --release --locked
 
-# 恢复逐通道完整 16-bit 数据传输及完整图案
-ICND2069_SHORT_DATA=0 cargo build --release --locked
+# 关闭连续 latch（默认），每行完整写入 16 个灰度字
+ICND2069_CONTINUOUS_LATCH=0 cargo build --release --locked
+
+# 开启连续 latch
+ICND2069_CONTINUOUS_LATCH=1 cargo build --release --locked
 ```
 
-`ICND2069_GRAY_MODE`：`sweep`（默认）或 `static`。sweep 要求 `white`；1～3 颗选择完整的 9 帧灰度序列，4～8 颗为控制 RAM 使用保留 `0,1,127,255` 四帧循环。当前硬件使用单颗配置；扩展级联须重新核对 RAM 占用。构建参数不改变当前运行的固件，烧录后才生效。
+`ICND2069_GRAY_MODE`：`sweep`（默认）或 `static`。sweep 要求 `white`；1～3 颗选择完整灰度序列（连续 latch 关闭为 11 帧、开启为 9 帧），4～8 颗沿用为控制 RAM 使用保留的 `0,1,127,255` 四帧循环。当前硬件使用单颗配置；扩展级联须重新核对 RAM 占用。构建参数不改变当前运行的固件，烧录后才生效。
 
-static 模式保留图案 `reference`、`white`、`black`、`out0`、`out1`、`alternating_rows`、`checker`、`split`，灰度 `ICND2069_GRAY=0..8192`。省略图案默认 white。short-data 模式只取所选物理目标通道的图案值，其他通道强制为零；完整图案需设置 `ICND2069_SHORT_DATA=0`。
+static 模式保留图案 `reference`、`white`、`black`、`out0`、`out1`、`alternating_rows`、`checker`、`split`，灰度 `ICND2069_GRAY=0..8192`。省略图案默认 white。关闭连续 latch 时保留完整图案，`white` 为全部通道相同灰度；开启时只取所选物理目标通道的图案值，其他通道强制为零，例如 `out1` 图案需配合 `ICND2069_TARGET_CHANNEL=1`。
 
 ## DSView 与验证工具
+
+2026-11-01 当前波形输入核验：[原始抓包](../dbg/dsview/DSLogic%20U2Pro16-la-261101-001023.dsl)，100 MHz、实际时长 10.00448 ms、门限 1 V，仅分析 CH0～3。16 个完整普通帧，每帧 256 个灰度字一致，覆盖完整 11 档循环；周期 600.31～600.32 µs。每帧同行相邻 DATA_LATCH 间隔 24 CLK（240 次），跨行间隔 25 CLK（15 次）；LAT 高期间均只有 1 个 CLK 上升沿。ROW 每帧 16 次，周期通常 81 CLK，少数边沿的采样位置造成计数 80/82，未据此增加时序补偿。
+
+当前完整写入的 `wave.shift(value, 1, 8)` 先发 8 个 LAT 低、SIN=0 的 CLK，再按 D15→D0 发送 16 位，最后一位时 LAT 高。因此 24 CLK 是 8 个间隔 CLK 加 16 位数据，不是 24 位灰度。指南第 6 页定义 DATA_LATCH 将移位寄存器的最后 16 位写入 SRAM；数据图未要求这里的 8 个间隔 CLK，它们是当前代码沿用的参考时序余量。灰度 63 实测发送 `0x003F`，255 为 `0x00FF`，未左移到高 8 位。不能从 16 位串行接口推断低 8 位可以丢弃；指南第 20 页要求 Gamma 编码匹配组数和行宽。当前 03h=00h、07h=08h=20h 的手册灰度容量公式为 `1×32×4=128`，测试发送值 0～8191 不等同于已标定的线性亮度。
 
 35 MHz 下，当前硬件的 0.4 V 门限抓包会漏计部分 DCLK 上升沿；输入协议核验使用 1.4 V，OUT 观察使用 0.4 V。本轮已将现场门限恢复为 0.4 V。两个门限的输出跳变数不可直接比较。
 
@@ -114,7 +124,13 @@ ICND2069_SHORT_DATA=0 rustc --edition=2021 tools/check_waveform.rs -o /tmp/icnd2
 # 周期配置、灰度连续性、普通/配置波形和 ROW 对齐核验
 rustc --edition=2021 tools/check_config_interval.rs -o /tmp/icnd2069-interval-check
 /tmp/icnd2069-interval-check
+
+# 关闭连续 latch 的完整传输核验，同样检查每行 16 字及通道内容
+ICND2069_CONTINUOUS_LATCH=0 rustc --edition=2021 tools/check_config_interval.rs -o /tmp/icnd2069-latch-off-check
+/tmp/icnd2069-latch-off-check
 ```
+
+连续 latch 开关的两种 release 构建及主机编码核验均通过：覆盖全部 9 档灰度、配置帧/普通帧、256 次锁存、ROW 对齐及配置调度。关闭模式还核验每个灰度字的完整传输间隔；本次未新增硬件抓包。
 
 默认独立解码器仍按历史 8 颗处理，新单颗抓包必须加 `--chain-copies 1`。五采样点居中多数滤波在 100 MHz 下剔除/填补 10～20 ns 短跨越，保留原 DSL；报告同时记录改变的采样点数量。本轮两份最终抓包 CH0～3 改变点均为 0，原始和滤波后解码一致，不能因此推断其他抓包也没有毛刺。
 

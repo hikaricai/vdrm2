@@ -80,6 +80,11 @@ async fn main(_spawner: Spawner) {
         } else {
             protocol::pattern_frame(PATTERN, GRAY)
         };
+        let image = if protocol::CONTINUOUS_LATCH {
+            protocol::target_frame(image)
+        } else {
+            image
+        };
         protocol::encode_split(
             &mut heads[i * protocol::HEAD_WORDS..(i + 1) * protocol::HEAD_WORDS],
             tail,
@@ -93,8 +98,8 @@ async fn main(_spawner: Spawner) {
     );
     rtt_target::rprintln!("wave RAM={} bytes", heads.len() * 4 + tail.len() * 4 + row_runs.len() * 4);
     rtt_target::rprintln!(
-        "short_data={}, target=OUT{}, repeated LAT-low gap={} clocks, row input={} clocks",
-        protocol::SHORT_DATA, protocol::TARGET_CHANNEL, protocol::REPEAT_LATCH_GAP,
+        "continuous_latch={}, target=OUT{}, repeated LAT-low gap={} clocks, row input={} clocks",
+        protocol::CONTINUOUS_LATCH, protocol::TARGET_CHANNEL, protocol::REPEAT_LATCH_GAP,
         protocol::DATA_ROW_DCLKS,
     );
     rtt_target::rprintln!(

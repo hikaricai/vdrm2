@@ -60,15 +60,24 @@ pub const CHAIN_COPIES: usize = match option_env!("ICND2069_CHAIN_COPIES") {
     None => 1,
 };
 pub const TRANSFER_DCLKS: usize = 16 * CHAIN_COPIES;
-/// Send only the selected physical channel and its following zero word.
-pub const SHORT_DATA: bool = match option_env!("ICND2069_SHORT_DATA") {
+/// Enable repeated latches of zero; disabled shifts all 16 channel words.
+pub const CONTINUOUS_LATCH: bool = match option_env!("ICND2069_CONTINUOUS_LATCH") {
     Some(value) => {
         let bytes = value.as_bytes();
         assert!(bytes.len() == 1 && (bytes[0] == b'0' || bytes[0] == b'1'));
         bytes[0] == b'1'
     }
-    None => true,
+    None => match option_env!("ICND2069_SHORT_DATA") {
+    Some(value) => {
+        let bytes = value.as_bytes();
+        assert!(bytes.len() == 1 && (bytes[0] == b'0' || bytes[0] == b'1'));
+        bytes[0] == b'1'
+    }
+    None => false,
+    },
 };
+/// Compatibility alias for waveform sizing and existing host tools.
+pub const SHORT_DATA: bool = CONTINUOUS_LATCH;
 /// Physical OUT channel. Serial DATA_LATCH order remains OUT15 through OUT0.
 pub const TARGET_CHANNEL: usize = match option_env!("ICND2069_TARGET_CHANNEL") {
     Some(value) => {
@@ -239,10 +248,12 @@ const fn scan_period() -> usize {
     GROUPS * ROWS * ROW_DCLKS
 }
 
-/// Black plus eight evenly spaced words from 511 to 8191, rounded to integers.
-pub const GRAY_SWEEP: &[u16] = &[
+/// Full-write sweep is uniform across all pixels; latch mode keeps its sweep.
+pub const GRAY_SWEEP: &[u16] = if CONTINUOUS_LATCH { &[
     0, 511, 1608, 2705, 3802, 4900, 5997, 7094, 8191,
-];
+] } else { &[
+    0, 15, 31, 63, 127, 255, 511, 1023, 2047, 4095, 8191,
+] };
 
 /// Patch only the gray-data SIN bits in a buffer not currently used by DMA.
 pub fn update_white(words: &mut [u32], gray: u16) {
@@ -338,6 +349,18 @@ impl<'a> Waveform<'a> {
     }
 }
 pub type Frame = [[u16; CHANNELS]; ROWS];
+
+/// Keep only the selected channel for the continuous-latch demo.
+pub fn target_frame(mut frame: Frame) -> Frame {
+    for values in &mut frame {
+        for (out, value) in values.iter_mut().enumerate() {
+            if out != TARGET_CHANNEL {
+                *value = 0;
+            }
+        }
+    }
+    frame
+}
 
 /// Uniform gray throughout a frame; advance one gray level per frame.
 pub fn sweep_frame(frame_index: usize) -> Frame {

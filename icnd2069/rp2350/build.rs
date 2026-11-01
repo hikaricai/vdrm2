@@ -13,6 +13,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=ICND2069_CHAIN_COPIES");
     println!("cargo:rerun-if-env-changed=ICND2069_SCAN_REPEATS");
     println!("cargo:rerun-if-env-changed=ICND2069_SHORT_DATA");
+    println!("cargo:rerun-if-env-changed=ICND2069_CONTINUOUS_LATCH");
     println!("cargo:rerun-if-env-changed=ICND2069_REPEAT_LATCH_GAP");
     println!("cargo:rerun-if-env-changed=ICND2069_TARGET_CHANNEL");
     println!("cargo:rerun-if-env-changed=ICND2069_CONFIG_INTERVAL");
@@ -35,9 +36,15 @@ fn main() {
         .expect("ICND2069_TARGET_CHANNEL must be an integer in 0..=15");
     assert!(target < 16, "ICND2069_TARGET_CHANNEL must be in 0..=15");
     println!("cargo:rustc-env=ICND2069_TARGET_CHANNEL={target}");
-    let short_data = env::var("ICND2069_SHORT_DATA").unwrap_or_else(|_| "1".into());
-    assert!(short_data == "0" || short_data == "1", "ICND2069_SHORT_DATA must be 0 or 1");
-    println!("cargo:rustc-env=ICND2069_SHORT_DATA={short_data}");
+    let continuous_latch = env::var("ICND2069_CONTINUOUS_LATCH")
+        .or_else(|_| env::var("ICND2069_SHORT_DATA"))
+        .unwrap_or_else(|_| "0".into());
+    assert!(
+        continuous_latch == "0" || continuous_latch == "1",
+        "ICND2069_CONTINUOUS_LATCH (legacy ICND2069_SHORT_DATA) must be 0 or 1"
+    );
+    println!("cargo:rustc-env=ICND2069_CONTINUOUS_LATCH={continuous_latch}");
+    println!("cargo:rustc-env=ICND2069_SHORT_DATA={continuous_latch}");
     let latch_gap: usize = env::var("ICND2069_REPEAT_LATCH_GAP")
         .unwrap_or_else(|_| "1".into())
         .parse()
