@@ -243,9 +243,13 @@ pub const DATA_SUFFIX_DCLKS: usize =
 // its gray. Other rows have 14 zero repeats and a latched zero transfer.
 pub const DIAGONAL_EXTRA_DCLKS: usize =
     if SHORT_DATA && DIAGONAL_LATCH { REPEAT_LATCH_GAP + 1 } else { 0 };
+// Full writes retain the historical one-clock inter-row separation. In
+// continuous latch mode it would create a second consecutive LAT-low clock
+// before the next repeated latch, so it is deliberately absent.
+pub const DATA_INTER_ROW_DCLKS: usize = if SHORT_DATA { 0 } else { ROWS - 1 };
 pub const DATA_PAYLOAD_END: usize =
     49 + CONFIG_WRITES * (8 + TRANSFER_DCLKS)
-        + DATA_PREFIX_DCLKS + ROWS * DATA_ROW_DCLKS + ROWS - 1
+        + DATA_PREFIX_DCLKS + ROWS * DATA_ROW_DCLKS + DATA_INTER_ROW_DCLKS
         + DATA_SUFFIX_DCLKS + DIAGONAL_EXTRA_DCLKS;
 // DMA heads end on a packed two-DCLK word, including even latch gaps.
 pub const DATA_END: usize = (DATA_PAYLOAD_END + 1) & !1;
@@ -287,7 +291,6 @@ pub fn update_white(words: &mut [u32], gray: u16) {
         let mut row_start = 49 + CONFIG_WRITES * (8 + TRANSFER_DCLKS)
             + DATA_PREFIX_DCLKS;
         for row in 0..ROWS {
-            row_start += usize::from(row != 0);
             let target = latch_target(row);
             let before_target = if !DIAGONAL_LATCH && target == 0 {
                 TRANSFER_DCLKS + (CHANNELS - 2) * (REPEAT_LATCH_GAP + 1)
@@ -500,7 +503,6 @@ fn encode_wave(wave: &mut Waveform<'_>, frame: &Frame, rotating: Option<u16>) ->
     }
     for (row, values) in frame.iter().enumerate() {
         if SHORT_DATA {
-            wave.hold(PARK, usize::from(row != 0));
             let target = latch_target(row);
             for out in (0..CHANNELS).rev() {
                 assert!(out == target || values[out] == 0);
