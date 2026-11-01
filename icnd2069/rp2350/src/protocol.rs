@@ -5,7 +5,7 @@
 /// ICND2069 register 02h is programmed as 53, selecting 54 scan rows.
 pub const ROWS: usize = 54;
 pub const CHANNELS: usize = 16;
-/// Number of complete 54-row sweeps per frame; build-time variable, default 8.
+/// Number of complete 54-row sweeps per frame; build-time variable, default 1.
 pub const SCAN_REPEATS: usize = match option_env!("ICND2069_SCAN_REPEATS") {
     Some(value) => {
         let bytes = value.as_bytes();
@@ -20,7 +20,7 @@ pub const SCAN_REPEATS: usize = match option_env!("ICND2069_SCAN_REPEATS") {
         assert!(n >= 1 && n <= 64);
         n
     }
-    None => 8,
+    None => 1,
 };
 pub const GROUPS: usize = SCAN_REPEATS;
 /// Build-time preset in MHz. Integer PIO dividers keep each DCLK uniform.
@@ -45,7 +45,10 @@ pub const SYS_HZ: u32 = match DCLK_HZ {
     35_000_000 => 140_000_000,
     _ => 150_000_000,
 };
-pub const ROW_DCLKS: usize = 81;
+// Keep the 4-DCLK ROW high pulse and RT5990 control strobes unchanged.
+// At 54 scan rows, 60 DCLK/row makes the complete row-control segment
+// finish alongside the normal-frame gray-data transfer.
+pub const ROW_DCLKS: usize = 60;
 // Software input limit retained from the saved NOVA image. This is NOT a
 // calibrated PWM full scale. The previous 40-scan capture saturated by 512;
 // the new 16-scan/full-config mode must be measured independently.
@@ -427,12 +430,12 @@ pub fn pattern_frame(pattern: Pattern, gray: u16) -> Frame {
     for (row, values) in frame.iter_mut().enumerate() {
         for (out, value) in values.iter_mut().enumerate() {
             if matches!(pattern, Pattern::Diagonal) {
-                // Repeat the 16-row diagonal for every physical scan row.
-                // v = round((row mod 16) * 32 / 15), gray = v << 1.
+                // Repeat a descending 16-row diagonal for every physical row.
+                // v = round((15 - row mod 16) * 32 / 15), gray = v << 1.
                 let diagonal_row = row % CHANNELS;
                 let last = CHANNELS - 1;
                 *value = if diagonal_row == out {
-                    let v = ((diagonal_row * 32 + last / 2) / last) as u16;
+                    let v = (((last - diagonal_row) * 32 + last / 2) / last) as u16;
                     v << 1
                 } else {
                     0
