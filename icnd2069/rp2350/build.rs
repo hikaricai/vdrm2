@@ -51,23 +51,32 @@ fn main() {
         .expect("ICND2069_REPEAT_LATCH_GAP must be an integer in 1..=64");
     assert!((1..=64).contains(&latch_gap), "ICND2069_REPEAT_LATCH_GAP must be in 1..=64");
     println!("cargo:rustc-env=ICND2069_REPEAT_LATCH_GAP={latch_gap}");
-    let repeats: usize = env::var("ICND2069_SCAN_REPEATS")
-        .unwrap_or_else(|_| "1".into())
-        .parse()
-        .expect("ICND2069_SCAN_REPEATS must be an integer in 1..=64");
-    assert!((1..=64).contains(&repeats), "ICND2069_SCAN_REPEATS must be in 1..=64");
-    println!("cargo:rustc-env=ICND2069_SCAN_REPEATS={repeats}");
+    // Keep the default in protocol.rs only. Without an explicit override,
+    // option_env! must remain None so editing SCAN_REPEATS changes the build.
+    if let Ok(value) = env::var("ICND2069_SCAN_REPEATS") {
+        let repeats: usize = value.parse()
+            .expect("ICND2069_SCAN_REPEATS must be an integer in 1..=64");
+        assert!((1..=64).contains(&repeats), "ICND2069_SCAN_REPEATS must be in 1..=64");
+        println!("cargo:rustc-env=ICND2069_SCAN_REPEATS={repeats}");
+    }
     let chain: usize = env::var("ICND2069_CHAIN_COPIES")
         .unwrap_or_else(|_| "1".into())
         .parse()
         .expect("ICND2069_CHAIN_COPIES must be an integer in 1..=8");
     assert!((1..=8).contains(&chain), "ICND2069_CHAIN_COPIES must be in 1..=8");
     println!("cargo:rustc-env=ICND2069_CHAIN_COPIES={chain}");
-    let mode = env::var("ICND2069_GRAY_MODE").unwrap_or_else(|_| "sweep".into());
+    let mode = env::var("ICND2069_GRAY_MODE").unwrap_or_else(|_| "static".into());
     assert!(mode == "sweep" || mode == "static", "ICND2069_GRAY_MODE must be sweep/static");
-    let pattern = env::var("ICND2069_PATTERN").unwrap_or_else(|_| "white".into());
+    let pattern = env::var("ICND2069_PATTERN")
+        .unwrap_or_else(|_| if mode == "sweep" { "white".into() } else { "diagonal".into() });
     assert!(mode != "sweep" || pattern == "white", "sweep mode requires white pattern");
+    assert!(
+        !matches!(pattern.as_str(), "gradient" | "diagonal") || continuous_latch == "0",
+        "gradient/diagonal requires ICND2069_CONTINUOUS_LATCH=0 to write all 256 pixels"
+    );
     let variant = match pattern.as_str() {
+        "diagonal" => "Diagonal",
+        "gradient" => "Gradient",
         "reference" => "Reference",
         "white" => "White",
         "black" => "Black",
@@ -76,7 +85,7 @@ fn main() {
         "alternating_rows" => "AlternatingRows",
         "checker" => "Checker",
         "split" => "Split",
-        _ => panic!("ICND2069_PATTERN must be reference/white/black/out0/out1/alternating_rows/checker/split"),
+        _ => panic!("ICND2069_PATTERN must be diagonal/gradient/reference/white/black/out0/out1/alternating_rows/checker/split"),
     };
     let gray: u16 = env::var("ICND2069_GRAY")
         .unwrap_or_else(|_| "8192".into())

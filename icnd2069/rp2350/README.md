@@ -1,12 +1,20 @@
-# ICND2069 / RP2350：单颗、16 行、1 组扫描
+# ICND2069 / RP2350：单颗、16 行、8 组扫描
 
-当前默认**关闭连续 latch**，每行完整写入 16 个灰度字。DCLK 默认 **12.5 MHz**，系统时钟 **150 MHz（不超频）**，普通帧理论周期 **600.32 µs（1665.8 Hz）**。`ICND2069_DCLK_MHZ` 可选择 **12.5 / 25 / 35 / 40 / 45**，40/45 为超频实验档。此前 35 MHz 的验证保留在[实测记录](../20261031_config_interval/README.md#35-mhz-与可调档位)。
+当前默认图案为 `diagonal`：仅逻辑主对角线 `(行 i, OUTi)` 使用 `v=round(i×32/15)`、`gray=v<<8`，i=0..15，其余 240 个像素均为 0。v 序列为 `0,2,4,6,9,11,13,15,17,19,21,23,26,28,30,32`；先取整 v，再左移，灰度低 8 位始终为 0。首个对角像素灰度为 0，因此实际非零像素为 15 个；末像素为 8192。每帧图案一致。diagonal 固定使用上述范围，不受 `ICND2069_GRAY` 影响；`ICND2069_PATTERN=gradient` 可恢复此前整屏渐变图；下文整屏渐变验证属于历史记录。
+
+当前默认**关闭连续 latch**，每行完整写入 16 个灰度字。DCLK 默认 **12.5 MHz**，系统时钟 **150 MHz（不超频）**，每帧扫描 8 遍 16 行，共 **128 个 ROW 脉冲**，普通帧理论周期 **1326.08 µs（约 754.1 Hz）**。`ICND2069_DCLK_MHZ` 可选择 **12.5 / 25 / 35 / 40 / 45**，40/45 为超频实验档。此前 35 MHz 的验证保留在[实测记录](../20261031_config_interval/README.md#35-mhz-与可调档位)。
+
+2026-11-01 最新状态：用户反馈 16 遍效果与此前差不多，随后 8 遍固件已烧录、Flash 校验通过；RTT 确认 `groups=8`、`pattern=gradient`、`cycle=1`，配置帧 17768 DCLK、普通帧 16576 DCLK。未使用 DSView。已移除 build.rs 的扫描次数默认注入：未设置 `ICND2069_SCAN_REPEATS` 时，默认值只取 protocol.rs 的 `None => 8`；显式环境变量仍优先。修改后需重新编译、烧录。每帧 256 个灰度字与 ROW 数量分别计数；ROW=16 行×遍数，16 列在一行内并行输出。原 GCLK 网络实际连接 ICND2069 的 ROW，芯片内部 PWM GCLK 不在该引脚输出。
+
+2026-11-01 最新反馈：32 遍也有灰度变化，但肉眼看变化主要在前半部分；尚无定量亮度或饱和阈值测量。随后改为默认 16 遍并烧录，通过 Flash 校验；RTT 确认 `groups=16`、`pattern=gradient`、`sweep=false`、`cycle=1`，波形 RAM 58324 字节，配置帧 28136 DCLK，普通帧 26944 DCLK。已退出 RTT 并重新复位，未使用 DSView；16 遍实际效果待目视确认。
+
+2026-11-01 此前记录：用户目视确认 64 遍扫描时已经能看出灰度变化。随后 32 遍固件烧录通过 Flash 校验；RTT 确认 `groups=32`、`pattern=gradient`、`sweep=false`、`cycle=1`，波形 RAM 101844 字节，配置帧 48872 DCLK，普通帧 47680 DCLK。此前 64 遍主机编码核验为 02h=0Fh、03h=3Fh、每帧 1024 个 ROW 脉冲；32 遍为 02h=0Fh、03h=1Fh、每帧 512 个 ROW 脉冲。下文此前单组的抓包及周期数值仅对应 `ICND2069_SCAN_REPEATS=1`。
 
 另支持 `ICND2069_DCLK_MHZ=40` 超频实验档：系统时钟 160 MHz，PIO 每 CLK 4 周期，高低各 2（均为 12.5 ns，1:1 占空比）。默认完整写入模式的普通帧理论周期 187.60 µs；此前仅编译、烧录并重启，未抓包验证。
 
 `ICND2069_DCLK_MHZ=45` 使用系统时钟 180 MHz，高低各约 11.11 ns（1:1），默认完整写入模式的普通帧理论周期约 166.76 µs。仅 40/45 MHz 档超频；12.5/25 MHz 档为系统 150 MHz，35 MHz 档为系统 140 MHz。45 MHz 此前仅编译、烧录并重启，未抓包验证。
 
-当前配置：单颗 ICND2069，16 行 × 16 通道，启动首帧及每隔 10000 帧完整发送 49 条配置（`ICND2069_CONFIG_INTERVAL` 可调）；每帧发送 256 次 DATA_LATCH，然后只扫描一遍 16 行（03h=00h），紧接下一帧。默认关闭连续 latch，帧内全部 256 个像素使用相同灰度，帧间按 11 档循环：`0→15→31→63→127→255→511→1023→2047→4095→8191→0`。`ICND2069_SCAN_REPEATS` 默认 1，允许 1～64。开启连续 latch 时仍只点亮 `ICND2069_TARGET_CHANNEL=0..15`（默认 OUT0），其余通道为零，沿用原 9 档序列：`0→511→1608→2705→3802→4900→5997→7094→8191→0`。
+当前配置：单颗 ICND2069，16 行 × 16 通道，启动首帧及每隔 10000 帧完整发送 49 条配置（`ICND2069_CONFIG_INTERVAL` 可调）；每帧发送 256 次 DATA_LATCH，然后扫描 8 遍 16 行（03h=07h），紧接下一帧。默认关闭连续 latch，使用固定 `gradient` 图案，所有帧的灰度图一致。按逻辑行优先、行内 OUT0→OUT15 编号，像素序号 i=0..255 的灰度为 `round(i×8192/255)`，首像素 0，末像素 8192，相邻像素增加 32 或 33。串行传输仍按 OUT15→OUT0，不改变物理通道映射。`ICND2069_SCAN_REPEATS` 默认 8，允许 1～64。渐变图必须完整写入，不支持连续 latch。
 
 [周期配置实测与原始抓包](../20261031_config_interval/README.md)：N=7 的 44 个完整帧验证配置间隔、灰度连续及 ROW 对齐；恢复 N=10000 后 46 个完整普通帧约 209.92 µs，每帧 256 次锁存及 16 行扫描。10 ms 抓包未直接覆盖 N=10000 的完整刷新间隔。
 
@@ -14,10 +22,10 @@
 
 ## 时序和 DMA
 
-- `ROWS=16`、`CHANNELS=16`、`GROUPS=1`；02h=0Fh，03h=00h。
+- `ROWS=16`、`CHANNELS=16`、`GROUPS=8`；02h=0Fh，03h=07h。
 - 每帧保留 VSYNC、EN_OP。以首帧为 frame 0，仅 frame 0、N、2N…发送 PRE_ACT、解锁、全部寄存器、锁定，合计 49 条 WR_CFG；普通帧直接装载灰度，跳过配置时钟。
 - `ICND2069_CONTINUOUS_LATCH=1`：开启连续锁存，按 OUT15→OUT0 顺序锁存，只完整移入目标灰度和紧随目标的零字，其余通道直接锁存已经清零的移位寄存器。SIN 始终保持零，直到下一次目标传输。
-- `ICND2069_CONTINUOUS_LATCH=0`（默认关闭）：每行 16 个通道分别完整移入灰度字（每颗芯片 16 bit）再锁存。默认 sweep 模式帧内所有行、所有通道均为当前灰度，帧间按上述 11 档循环；此模式不使用 `TARGET_CHANNEL` 掩码。
+- `ICND2069_CONTINUOUS_LATCH=0`（默认关闭）：每行 16 个通道分别完整移入灰度字（每颗芯片 16 bit）再锁存。默认 static/gradient 模式重复同一张 0～8192 渐变图；可选 sweep 模式帧内使用统一灰度，帧间按 11 档循环；此模式不使用 `TARGET_CHANNEL` 掩码。
 - 旧参数 `ICND2069_SHORT_DATA` 保留为兼容别名；同时设置时，以 `ICND2069_CONTINUOUS_LATCH` 为准。
 - 目标为 OUT0 时，主动零字对应下一行的 OUT15。数据开始前先无锁存地移入零，避免配置残留；最后一行 OUT0 后无锁存地移入零，不产生第 257 次 DATA_LATCH。
 - `ICND2069_REPEAT_LATCH_GAP=1`（默认，范围 1～64）：重复锁存间 LAT 低电平保持 1 个完整 DCLK，LAT 高电平为 1 个 DCLK。连续重复锁存的上升沿间距因此为 2 个 DCLK，防止相邻脉冲合成多时钟命令。
@@ -46,8 +54,11 @@ OUT0/OUT1 对应**上一帧发送的灰度**。验证必须错开一帧：发送
 
 ## 构建与运行
 
+修改扫描次数并立即烧录、复位（在本目录执行）：`bash tools/flash.sh 16`。
+参数范围 1～64，例如 `bash tools/flash.sh 8` 为 128 个 ROW 脉冲/帧，`bash tools/flash.sh 16` 为 256 个。脚本将参数明确传入构建，构建成功后才烧录并校验、复位；单独 `cargo build` 不会更新板上固件。RTT 的 `ROW pulses/frame` 统计生成的 ROW 表，可确认该固件的扫描数量，不代表引脚波形实测。
+
 ```sh
-# 当前默认：单颗、连续 latch 关闭、灰度逐帧循环
+# 当前默认：单颗、16 扫、连续 latch 关闭、每帧相同的 0～8192 渐变图
 cargo build --release --locked
 probe-rs download --chip RP235x --protocol swd --speed 1000 --verify target/thumbv8m.main-none-eabihf/release/icnd2069-demo
 probe-rs reset --chip RP235x --protocol swd --speed 1000
@@ -77,13 +88,13 @@ ICND2069_TARGET_CHANNEL=7 ICND2069_REPEAT_LATCH_GAP=3 cargo build --release --lo
 # 关闭连续 latch（默认），每行完整写入 16 个灰度字
 ICND2069_CONTINUOUS_LATCH=0 cargo build --release --locked
 
-# 开启连续 latch
-ICND2069_CONTINUOUS_LATCH=1 cargo build --release --locked
+# 开启连续 latch，使用旧全白灰度循环
+ICND2069_CONTINUOUS_LATCH=1 ICND2069_GRAY_MODE=sweep cargo build --release --locked
 ```
 
-`ICND2069_GRAY_MODE`：`sweep`（默认）或 `static`。sweep 要求 `white`；1～3 颗选择完整灰度序列（连续 latch 关闭为 11 帧、开启为 9 帧），4～8 颗沿用为控制 RAM 使用保留的 `0,1,127,255` 四帧循环。当前硬件使用单颗配置；扩展级联须重新核对 RAM 占用。构建参数不改变当前运行的固件，烧录后才生效。
+`ICND2069_GRAY_MODE`：`static`（默认）或 `sweep`。默认 static 图案为 `gradient`，每帧使用相同的 256 像素渐变；`ICND2069_GRAY` 控制渐变终点，默认 8192。sweep 默认图案为 `white`，也只允许 white；1～3 颗选择完整灰度序列（连续 latch 关闭为 11 帧、开启为 9 帧），4～8 颗沿用为控制 RAM 使用保留的 `0,1,127,255` 四帧循环。当前硬件使用单颗配置；扩展级联须重新核对 RAM 占用。构建参数不改变当前运行的固件，烧录后才生效。
 
-static 模式保留图案 `reference`、`white`、`black`、`out0`、`out1`、`alternating_rows`、`checker`、`split`，灰度 `ICND2069_GRAY=0..8192`。省略图案默认 white。关闭连续 latch 时保留完整图案，`white` 为全部通道相同灰度；开启时只取所选物理目标通道的图案值，其他通道强制为零，例如 `out1` 图案需配合 `ICND2069_TARGET_CHANNEL=1`。
+static 模式保留图案 `reference`、`white`、`black`、`out0`、`out1`、`alternating_rows`、`checker`、`split`，并新增默认 `gradient`，灰度 `ICND2069_GRAY=0..8192`。关闭连续 latch 时保留完整图案，`white` 为全部通道相同灰度；开启时只取所选物理目标通道的图案值，其他通道强制为零，例如 `out1` 图案需配合 `ICND2069_TARGET_CHANNEL=1`；gradient 与连续 latch 同时启用会在构建时报错。
 
 ## DSView 与验证工具
 

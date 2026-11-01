@@ -70,6 +70,8 @@ async fn main(_spawner: Spawner) {
     let tail = TAIL.take();
     let row_runs = ROW_RUNS.take();
     protocol::encode_row_runs(row_runs);
+    let row_pulses = row_runs.iter().filter(|run| **run & 1 != 0).count();
+    assert_eq!(row_pulses, protocol::ROWS * protocol::SCAN_REPEATS);
     for i in 0..CYCLE_FRAMES {
         let image = if GRAY_SWEEP {
             if CYCLE_FRAMES == protocol::GRAY_SWEEP.len() {
@@ -97,6 +99,11 @@ async fn main(_spawner: Spawner) {
         protocol::DCLK_HZ, protocol::FRAME_DCLKS,
     );
     rtt_target::rprintln!("wave RAM={} bytes", heads.len() * 4 + tail.len() * 4 + row_runs.len() * 4);
+    rtt_target::rprintln!(
+        "ROW pulses/frame={} ({} rows x {} sweeps), reg03=0x{:02x}",
+        row_pulses, protocol::ROWS, protocol::SCAN_REPEATS,
+        protocol::GROUPS - 1,
+    );
     rtt_target::rprintln!(
         "continuous_latch={}, target=OUT{}, repeated LAT-low gap={} clocks, row input={} clocks",
         protocol::CONTINUOUS_LATCH, protocol::TARGET_CHANNEL, protocol::REPEAT_LATCH_GAP,

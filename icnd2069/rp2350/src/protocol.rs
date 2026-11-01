@@ -4,7 +4,7 @@
 
 pub const ROWS: usize = 16;
 pub const CHANNELS: usize = 16;
-/// Number of complete 16-row sweeps per frame; build-time variable, default 1.
+/// Number of complete 16-row sweeps per frame; build-time variable, default 8.
 pub const SCAN_REPEATS: usize = match option_env!("ICND2069_SCAN_REPEATS") {
     Some(value) => {
         let bytes = value.as_bytes();
@@ -19,7 +19,7 @@ pub const SCAN_REPEATS: usize = match option_env!("ICND2069_SCAN_REPEATS") {
         assert!(n >= 1 && n <= 64);
         n
     }
-    None => 1,
+    None => 8,
 };
 pub const GROUPS: usize = SCAN_REPEATS;
 /// Build-time preset in MHz. Integer PIO dividers keep each DCLK uniform.
@@ -369,6 +369,8 @@ pub fn sweep_frame(frame_index: usize) -> Frame {
 
 #[derive(Clone, Copy, Debug)]
 pub enum Pattern {
+    Diagonal,
+    Gradient,
     Reference,
     White,
     Black,
@@ -385,7 +387,29 @@ pub fn pattern_frame(pattern: Pattern, gray: u16) -> Frame {
     let mut frame = [[0; CHANNELS]; ROWS];
     for (row, values) in frame.iter_mut().enumerate() {
         for (out, value) in values.iter_mut().enumerate() {
+            if matches!(pattern, Pattern::Diagonal) {
+                // Only (row, OUTrow) is active. Quantize v before shifting:
+                // v = round(row * 32 / 15), gray = v << 8.
+                let last = ROWS.min(CHANNELS) - 1;
+                *value = if row == out {
+                    let v = ((row * 32 + last / 2) / last) as u16;
+                    v << 1
+                } else {
+                    0
+                };
+                continue;
+            }
+            if matches!(pattern, Pattern::Gradient) {
+                // Row-major pixel order: OUT0..OUT15, then the next row.
+                // Integer rounding preserves both endpoints, 0 and gray.
+                let index = row * CHANNELS + out;
+                let last = ROWS * CHANNELS - 1;
+                *value = ((index * gray as usize + last / 2) / last) as u16;
+                continue;
+            }
             let on = match pattern {
+                Pattern::Diagonal => unreachable!(),
+                Pattern::Gradient => unreachable!(),
                 Pattern::Reference => out != 15,
                 Pattern::White => true,
                 Pattern::Black => false,
