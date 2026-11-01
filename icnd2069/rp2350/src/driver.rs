@@ -7,7 +7,7 @@ use embassy_rp::{
 };
 use fixed::types::U24F8;
 
-use crate::protocol::{BK_ACTIVE_HIGH, DCLK_HZ, DIN_ONE_SELECTS};
+use crate::protocol::{DCLK_HZ, DIN_ONE_SELECTS};
 
 bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => pio::InterruptHandler<PIO0>;
@@ -293,9 +293,7 @@ impl Driver {
         sm.set_config(&cfg);
         let all = [&le, &sin, &dclk, &lck, &bk, &din];
         sm.set_pins(Level::Low, &all);
-        if BK_ACTIVE_HIGH {
-            sm.set_pins(Level::High, &[&bk]);
-        }
+        // BK starts inactive; waveform rows generate the complete 8-DCLK pulse.
         if !DIN_ONE_SELECTS {
             sm.set_pins(Level::High, &[&din]);
         }

@@ -149,7 +149,8 @@ const fn select_bit(selected: bool) -> u16 {
         0
     }
 }
-pub const PARK: u16 = blank(true) | select_bit(false);
+// BK is inactive outside each row pulse, preventing an over-wide first pulse.
+pub const PARK: u16 = blank(false) | select_bit(false);
 pub const VSYNC: usize = 3;
 pub const WR_CFG: usize = 5;
 pub const ENABLE: usize = 11;
