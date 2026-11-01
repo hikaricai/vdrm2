@@ -49,6 +49,13 @@ pub const SYS_HZ: u32 = match DCLK_HZ {
 // At 54 scan rows, 60 DCLK/row makes the complete row-control segment
 // finish alongside the normal-frame gray-data transfer.
 pub const ROW_DCLKS: usize = 60;
+// Programming Guide V4.2 p.13-14: with 8 < DCLK < 16 MHz, the highest
+// listed valid PLL ratio is P=12, M=2, N=1, so R=6 and GCLK=75 MHz at
+// the default 12.5 MHz DCLK. Preserve the prior values for experimental
+// DCLK presets, whose PLL tables are not covered by this change.
+pub const PLL_M: u8 = if DCLK_HZ == 12_500_000 { 0x02 } else { 0x04 };
+pub const PLL_P: u8 = if DCLK_HZ == 12_500_000 { 0x0c } else { 0x0a };
+pub const PLL_N: u8 = 0x01;
 // Software input limit retained from the saved NOVA image. This is NOT a
 // calibrated PWM full scale. The previous 40-scan capture saturated by 512;
 // the new 16-scan/full-config mode must be measured independently.
@@ -166,9 +173,9 @@ pub const PRE_ACT: usize = 14;
 pub const REGISTERS: &[(u8, u8)] = &[
     (0x02, (ROWS - 1) as u8),
     (0x03, (GROUPS - 1) as u8),
-    (0x04, 0x04),
-    (0x05, 0x0a),
-    (0x06, 0x01),
+    (0x04, PLL_M),
+    (0x05, PLL_P),
+    (0x06, PLL_N),
     (0x07, 0x20),
     (0x08, 0x20),
     (0x09, 0x08),
