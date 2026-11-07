@@ -12,7 +12,7 @@ use embassy_time::Timer;
 use panic_rtt_target as _;
 use static_cell::ConstStaticCell;
 
-// Both patterns use a single static image, shared by the two DMA banks.
+// Both latch modes use one static gradient, shared by the two DMA banks.
 static HEADS: ConstStaticCell<[u32; protocol::HEAD_WORDS]> =
     ConstStaticCell::new([0; protocol::HEAD_WORDS]);
 static TAIL: ConstStaticCell<[u32; protocol::TAIL_WORDS]> =
@@ -95,7 +95,7 @@ async fn main(_spawner: Spawner) {
         rtt_target::rprintln!("diagonal latch: target=OUTrow, one gray + one zero transfer/row");
     }
     rtt_target::rprintln!(
-        "config.json: pattern={}, gray range={:?}, config interval={} ({} writes)",
+        "config.json: image={}, gray range={:?}, config interval={} ({} writes)",
         PATTERN_NAME, GRAY_RANGE, protocol::CONFIG_INTERVAL,
         protocol::CONFIG_WRITES,
     );

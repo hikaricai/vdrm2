@@ -485,6 +485,7 @@ pub fn pattern_frame(pattern: Pattern, gray: u16) -> Frame {
 }
 
 /// Normal rotates the OUT0..OUT15 gradient right by one channel per row.
+/// Diagonal keeps only OUT(row % 16), fading from gray[1] to gray[0].
 /// The pattern repeats every 16 rows and on each cascaded chip.
 /// Integer interpolation rounds to the nearest gray and preserves endpoints.
 pub fn pattern_frame_range(pattern: Pattern, gray: [u16; 2]) -> Frame {
@@ -492,23 +493,20 @@ pub fn pattern_frame_range(pattern: Pattern, gray: [u16; 2]) -> Frame {
     let mut frame = [[0; CHANNELS]; ROWS];
     for (row, values) in frame.iter_mut().enumerate() {
         for (out, value) in values.iter_mut().enumerate() {
-            if matches!(pattern, Pattern::Diagonal) {
-                // Repeat a descending 16-row diagonal for every physical row.
-                // v = round((15 - row mod 16) * 32 / 15), gray = v << 1.
+            let position = if matches!(pattern, Pattern::Diagonal) {
+                // One nonzero-capable channel per row permits zero repeats.
+                // Top-level gray controls the diagonal as well as full pixels.
                 let diagonal_row = row % CHANNELS;
-                let last = CHANNELS - 1;
-                *value = if diagonal_row == out {
-                    let v = (((last - diagonal_row) * 32 + last / 2) / last) as u16;
-                    v << 1
-                } else {
-                    0
-                };
-                continue;
-            }
+                if out != diagonal_row {
+                    continue;
+                }
+                CHANNELS - 1 - diagonal_row
+            } else {
+                (out + CHANNELS - row % CHANNELS) % CHANNELS
+            } as u32;
             // Weighted endpoints also support descending ranges without
             // unsigned subtraction. Serial transfer still runs OUT15..OUT0.
             let last = (CHANNELS - 1) as u32;
-            let position = ((out + CHANNELS - row % CHANNELS) % CHANNELS) as u32;
             *value = ((u32::from(gray[0]) * (last - position)
                 + u32::from(gray[1]) * position + last / 2) / last) as u16;
         }

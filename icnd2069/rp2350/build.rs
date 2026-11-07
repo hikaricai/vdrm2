@@ -2,29 +2,29 @@ use serde::Deserialize;
 use std::{env, fs, path::PathBuf};
 
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
+// Unknown fields are ignored so renamed options and debug notes can stay.
 struct Config {
     scan_repeats: u8,
     config_interval: u32,
     chains: u8,
     dclk_mhz: f64,
-    // Optional documentation only; does not affect the selected frequency.
-    _dclk_mhz_doc: Option<String>,
-    pattern: Pattern,
-    // Inactive example kept in config.json for convenient pattern switching.
-    _pattern: Option<serde_json::Value>,
+    gray: Gray,
+    #[serde(default, deserialize_with = "read_repeat_latch")]
+    repeat_latch: Option<RepeatLatch>,
 }
 
 #[derive(Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-enum Pattern {
-    Diagonal {
-        #[serde(default = "default_latch_gap")]
-        repeat_latch_gap: u8,
-    },
-    Normal {
-        gray: Gray,
-    },
+struct RepeatLatch {
+    #[serde(default = "default_latch_gap")]
+    repeat_latch_gap: u8,
+}
+
+// A missing field disables repeat latch; a present field must be an object.
+fn read_repeat_latch<'de, D>(deserializer: D) -> Result<Option<RepeatLatch>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    RepeatLatch::deserialize(deserializer).map(Some)
 }
 
 #[derive(Deserialize)]
@@ -57,21 +57,19 @@ fn main() {
         [1.0, 3.0, 6.0, 10.0, 12.5, 20.0, 25.0, 30.0, 31.0, 32.0, 33.0, 34.0, 35.0, 40.0, 45.0].contains(&config.dclk_mhz),
         "config.json: dclk_mhz must be 1, 3, 6, 10, 12.5, 20, 25, 30, 31, 32, 33, 34, 35, 40 or 45"
     );
-    let (name, variant, gray, continuous_latch, latch_gap) = match config.pattern {
-        Pattern::Diagonal { repeat_latch_gap } => {
+    let gray = match config.gray {
+        Gray::Uniform(value) => [value; 2],
+        Gray::Range(range) => range,
+    };
+    assert!(gray.iter().all(|&value| value <= 8192),
+        "config.json: gray must be 0..=8192 or [start, end], each in 0..=8192");
+    let (continuous_latch, latch_gap) = match config.repeat_latch {
+        Some(RepeatLatch { repeat_latch_gap }) => {
             assert!((1..=64).contains(&repeat_latch_gap),
-                "config.json: pattern.repeat_latch_gap must be 1..=64");
-            ("diagonal", "Diagonal", [64, 64], true, repeat_latch_gap)
+                "config.json: repeat_latch.repeat_latch_gap must be 1..=64");
+            (true, repeat_latch_gap)
         }
-        Pattern::Normal { gray } => {
-            let gray = match gray {
-                Gray::Uniform(value) => [value; 2],
-                Gray::Range(range) => range,
-            };
-            assert!(gray.iter().all(|&value| value <= 8192),
-                "config.json: pattern.gray must be 0..=8192 or [start, end], each in 0..=8192");
-            ("normal", "Normal", gray, false, 1)
-        }
+        None => (false, 1),
     };
 
     // Internal compiler inputs for protocol.rs and host waveform tools.
@@ -80,7 +78,8 @@ fn main() {
     println!("cargo:rustc-env=ICND2069_CONFIG_INTERVAL={}", config.config_interval);
     println!("cargo:rustc-env=ICND2069_CHAIN_COPIES={}", config.chains);
     println!("cargo:rustc-env=ICND2069_DCLK_MHZ={}", config.dclk_mhz);
-    println!("cargo:rustc-env=ICND2069_PATTERN={name}");
+    // The image is identical in both modes; only the transfer method changes.
+    println!("cargo:rustc-env=ICND2069_PATTERN=diagonal");
     println!("cargo:rustc-env=ICND2069_GRAY_MODE=static");
     println!("cargo:rustc-env=ICND2069_CONTINUOUS_LATCH={}", u8::from(continuous_latch));
     println!("cargo:rustc-env=ICND2069_SHORT_DATA={}", u8::from(continuous_latch));
@@ -89,8 +88,8 @@ fn main() {
     fs::write(
         out.join("pattern_config.rs"),
         format!(
-            "const PATTERN: protocol::Pattern = protocol::Pattern::{variant};\n\
-             const PATTERN_NAME: &str = \"{name}\";\n\
+            "const PATTERN: protocol::Pattern = protocol::Pattern::Diagonal;\n\
+             const PATTERN_NAME: &str = \"diagonal\";\n\
              const GRAY_RANGE: [u16; 2] = {gray:?};\n"
         ),
     ).unwrap();

@@ -1,15 +1,11 @@
 {
-    "scan_repeats": 1,
+    "scan_repeats": 32,
     "config_interval": 1000,
-    "chains": 1,
+    "chains": 8,
     "_dclk_mhz_doc": "单位 MHz；可选 1、3、6、10、12.5、20、25、30、31、32、33、34、35、40、45。所有档位使用整数 PIO 分频；1/3 为低速时序实验档，低于 ICND2069 指南 PLL 输入范围；40/45 为 RP2350 超频实验档。",
-    "dclk_mhz": 30,
-    "pattern": {
-        "type": "diagonal",
-        "repeat_latch_gap": 4
+    "dclk_mhz": 12.5,
+    "-repeat_latch": {
+        "repeat_latch_gap": 1
     },
-    "_pattern": {
-        "type": "normal",
-        "gray": [0, 255]
-    }
+    "gray": [0, 256]
 }
