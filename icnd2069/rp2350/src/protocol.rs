@@ -84,23 +84,71 @@ pub const PIO_CLKDIV_INT: u32 = {
     assert!(divider >= 1 && divider <= 65535);
     divider
 };
-// Keep the 4-DCLK ROW high pulse and RT5990 control strobes unchanged.
-// At 54 scan rows, 60 DCLK/row makes the complete row-control segment
-// finish alongside the normal-frame gray-data transfer.
-pub const ROW_DCLKS: usize = 60;
-// Programming Guide V4.2 p.13-14: with 8 < DCLK < 16 MHz, the highest
-// listed valid PLL ratio is P=12, M=2, N=1, so R=6 and GCLK=75 MHz at
-// the default 12.5 MHz DCLK. At 6 MHz use the 4<DCLK<8 table's
-// M=1/P=10 setting. Retain N's existing encoding. 1/3 MHz use the same
-// low-range registers for timing experiments, outside the guide's PLL
-// input constraints; valid LED output is not guaranteed at those clocks.
-pub const PLL_M: u8 = match DCLK_HZ {
-    1_000_000 | 3_000_000 | 6_000_000 => 0x01,
-    10_000_000 | 12_500_000 => 0x02,
-    _ => 0x04,
+// Guide V4.2 p.13: M/P occupy five bits; 4 MHz < DCLK/M < 10 MHz.
+// For >=20 MHz use P=5*M so GCLK=5*DCLK assuming N=1. Choose the smallest
+// M satisfying the reference input range. This intentionally reaches/exceeds
+// the guide's strict <100 MHz PLL limit: 100..225 MHz experimental targets.
+const PLL_MP: (u8, u8) = match DCLK_HZ {
+    1_000_000 | 3_000_000 | 6_000_000 => (1, 10),
+    10_000_000 | 12_500_000 => (2, 12),
+    20_000_000 | 25_000_000 => (3, 15),
+    30_000_000..=35_000_000 => (4, 20),
+    40_000_000 | 45_000_000 => (5, 25),
+    _ => panic!("missing ICND2069 PLL preset"),
 };
-pub const PLL_P: u8 = if matches!(DCLK_HZ, 10_000_000 | 12_500_000) { 0x0c } else { 0x0a };
+pub const PLL_M: u8 = PLL_MP.0;
+pub const PLL_P: u8 = PLL_MP.1;
+// Retain register 06h=01h. Its mapping to the mathematical divisor is not
+// explicit in the guide; frequency and row-time calculations ASSUME N=1.
 pub const PLL_N: u8 = 0x01;
+pub const GCLK_HZ_ASSUMING_N1: u32 = {
+    let dclk = DCLK_HZ as u64;
+    let m = PLL_M as u64;
+    let p = PLL_P as u64;
+    assert!(m >= 1 && m <= 31 && p >= 1 && p <= 31);
+    if DCLK_HZ >= 20_000_000 {
+        assert!(4_000_000 * m < dclk && dclk < 10_000_000 * m);
+        assert!(p == 5 * m);
+    }
+    (dclk * p / m) as u32
+};
+// Guide p.14-15: ceil((2*0E + 4*07 + 2*0F + 2*0D)/R) + 1 + E,
+// E=2 minimum. Use the longest RGB timing and retain at least 60 DCLK.
+// Low-frequency experiments keep their existing cadence. ROW high remains
+// 12 DCLK for the first pulse and four thereafter. At R=5 the current RGB
+// registers need at most 34 DCLK, so all >=20 MHz presets use 60 DCLK.
+pub const ROW_DCLKS: usize = if DCLK_HZ < 20_000_000 {
+    60
+} else {
+    let mut ticks = [0usize; 3];
+    let mut i = 0;
+    while i < REGISTERS.len() {
+        let (address, values) = REGISTERS[i];
+        let (mask, factor) = match address {
+            0x07 => (0xff, 4),
+            0x0d | 0x0e => (0x1f, 2),
+            0x0f => (0x0f, 2),
+            _ => (0, 0),
+        };
+        let mut color = 0;
+        while color < 3 {
+            ticks[color] += (values[color] & mask) as usize * factor;
+            color += 1;
+        }
+        i += 1;
+    }
+    let mut period = 60;
+    let mut color = 0;
+    while color < 3 {
+        let required = (ticks[color] * PLL_M as usize + PLL_P as usize - 1)
+            / PLL_P as usize + 3;
+        if required > period {
+            period = required;
+        }
+        color += 1;
+    }
+    period
+};
 // Software input limit retained from the saved NOVA image. This is NOT a
 // calibrated PWM full scale. The previous 40-scan capture saturated by 512;
 // the new 16-scan/full-config mode must be measured independently.

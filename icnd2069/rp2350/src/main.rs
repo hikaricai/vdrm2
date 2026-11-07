@@ -105,6 +105,16 @@ async fn main(_spawner: Spawner) {
         protocol::FIRST_ROW - protocol::CONFIG_SKIP_DCLKS);
     rtt_target::rprintln!("system clock={} Hz, PIO cycles/DCLK={}, divider={}+0/256",
         protocol::SYS_HZ, protocol::PIO_CYCLES_PER_DCLK, protocol::PIO_CLKDIV_INT);
+    rtt_target::rprintln!(
+        "ICND2069 PLL: M={}, P={}, reg06=0x{:02x}, GCLK={} Hz (assuming N=1), ROW={} DCLK",
+        protocol::PLL_M, protocol::PLL_P, protocol::PLL_N,
+        protocol::GCLK_HZ_ASSUMING_N1, protocol::ROW_DCLKS,
+    );
+    if protocol::GCLK_HZ_ASSUMING_N1 == 100_000_000 {
+        rtt_target::rprintln!("100 MHz PLL boundary experiment: guide specifies strictly <100 MHz");
+    } else if protocol::GCLK_HZ_ASSUMING_N1 > 100_000_000 {
+        rtt_target::rprintln!("5x PLL experiment: calculated frequency exceeds guide's <100 MHz limit");
+    }
     // Ideal frame rate from DCLK counts, without FIFO stalls. Split the
     // division before scaling to avoid overflow at config_interval=u32::MAX.
     let fps_x100 = |frames: u64, clocks: u64| {
