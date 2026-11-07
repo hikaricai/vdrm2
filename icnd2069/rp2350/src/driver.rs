@@ -1,13 +1,17 @@
 use embassy_rp::{
     bind_interrupts,
     gpio::Level,
-    peripherals::{DMA_CH0, DMA_CH1, DMA_CH2, DMA_CH3, DMA_CH4, DMA_CH5, PIN_10, PIN_13, PIN_15, PIN_16, PIN_18, PIN_20, PIN_22, PIO0},
+    peripherals::{
+        DMA_CH0, DMA_CH1, DMA_CH2, DMA_CH3, DMA_CH4, DMA_CH5,
+        PIN_0, PIN_1, PIN_2, PIN_3, PIN_4, PIN_5, PIN_6, PIN_7, PIN_8,
+        PIN_9, PIN_10, PIN_11, PIN_12, PIN_13, PIN_14, PIN_15, PIN_16, PIN_17, PIO0,
+    },
     pio::{self, program::pio_asm, Common, Pio, ShiftConfig, StateMachine},
     Peripheral, PeripheralRef,
 };
 use fixed::types::U24F8;
 
-use crate::protocol::{DCLK_HZ, DIN_ONE_SELECTS};
+use crate::protocol::DIN_ONE_SELECTS;
 
 bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => pio::InterruptHandler<PIO0>;
@@ -15,16 +19,30 @@ bind_interrupts!(struct Irqs {
 });
 
 pub struct Pins {
-    pub le: PIN_10,
-    pub sin: PIN_13,
-    pub dclk: PIN_15,
-    pub lck: PIN_16,
-    pub bk: PIN_18,
-    pub din: PIN_20,
-    pub row: PIN_22,
+    pub r1: PIN_0,
+    pub g1: PIN_1,
+    pub b1: PIN_2,
+    pub r2: PIN_3,
+    pub g2: PIN_4,
+    pub b2: PIN_5,
+    pub r3: PIN_6,
+    pub g3: PIN_7,
+    pub b3: PIN_8,
+    pub r4: PIN_9,
+    pub g4: PIN_10,
+    pub b4: PIN_11,
+    // ICND2069
+    pub dclk: PIN_12,
+    pub le: PIN_13,
+    pub row: PIN_14,
+    // RT5990
+    pub lck: PIN_15,
+    pub bk: PIN_16,
+    pub din: PIN_17,
 }
 
-/// SM0 drives CLK/LAT/DATA; SM1 advances OE using SM0's per-clock IRQ.
+/// SM0 drives RGB1..4 and LE/LCK/BK/DIN, with DCLK on side-set.
+/// SM1 advances ROW using SM0's per-clock IRQ.
 pub struct Driver {
     sm: StateMachine<'static, PIO0, 0>,
     row_sm: StateMachine<'static, PIO0, 1>,
@@ -57,6 +75,9 @@ impl Driver {
             crate::scheduler::start(heads, head_words, tail, row_runs,
                 descriptors, row_descriptors, first_runs, restart);
         }
+        // Clear setup history before streaming; later TXSTALL means DCLK
+        // was stretched while SM0 waited for data. Read/clear once per poll.
+        let _ = self.sm.tx().stalled();
         self._common.apply_sm_batch(|b| {
             b.restart(&mut self.sm);
             b.restart(&mut self.row_sm);
@@ -64,6 +85,10 @@ impl Driver {
             b.set_enable(&mut self.sm, true);
         });
         self.started = true;
+    }
+
+    pub fn take_dclk_stall(&mut self) -> bool {
+        self.sm.tx().stalled()
     }
 
     /// Alternate a gray-specific input head and the shared scan tail. DMA2
@@ -231,15 +256,26 @@ impl Driver {
             sm1: mut row_sm,
             ..
         } = Pio::new(pio, Irqs);
+        let r1 = common.make_pio_pin(pins.r1);
+        let g1 = common.make_pio_pin(pins.g1);
+        let b1 = common.make_pio_pin(pins.b1);
+        let r2 = common.make_pio_pin(pins.r2);
+        let g2 = common.make_pio_pin(pins.g2);
+        let b2 = common.make_pio_pin(pins.b2);
+        let r3 = common.make_pio_pin(pins.r3);
+        let g3 = common.make_pio_pin(pins.g3);
+        let b3 = common.make_pio_pin(pins.b3);
+        let r4 = common.make_pio_pin(pins.r4);
+        let g4 = common.make_pio_pin(pins.g4);
+        let b4 = common.make_pio_pin(pins.b4);
         let le = common.make_pio_pin(pins.le);
-        let sin = common.make_pio_pin(pins.sin);
         let dclk = common.make_pio_pin(pins.dclk);
         let lck = common.make_pio_pin(pins.lck);
         let bk = common.make_pio_pin(pins.bk);
         let din = common.make_pio_pin(pins.din);
         let row = common.make_pio_pin(pins.row);
 
-        // 35/40/45 MHz: four cycles, high 2 / low 2. Pull during the high phase
+        // >=30 MHz: four cycles, high 2 / low 2. Pull during the high phase
         // removes a separate NOP. Lower presets retain the six-cycle program.
         // IRQ4 synchronizes SM1; no captured delay replay.
         let program = if crate::protocol::PIO_CYCLES_PER_DCLK == 4 {
@@ -248,7 +284,7 @@ impl Driver {
                 ".wrap_target",
                 "pull ifempty block side 1 [1]",
                 "irq 4 side 0",
-                "out pins, 16 side 0",
+                "out pins, 32 side 0",
                 ".wrap",
             ).program
         } else {
@@ -258,7 +294,7 @@ impl Driver {
                 "nop side 1 [2]",
                 "pull ifempty block side 0",
                 "irq 4 side 0",
-                "out pins, 16 side 0",
+                "out pins, 32 side 0",
                 ".wrap",
             ).program
         };
@@ -266,32 +302,27 @@ impl Driver {
         let mut cfg = pio::Config::default();
         cfg.use_program(&loaded, &[&dclk]);
         // Convert the ratio, not 150 MHz itself (which exceeds U24F8's range).
-        // OUT consumes the full 16-bit sample in one instruction; OUT_COUNT
-        // remains 12, so padding bits do not drive GP22..25.
-        // At 35 MHz, LAT/SIN change after 3 PIO cycles, IRQ4 after 2.
-        let denominator = crate::protocol::PIO_CYCLES_PER_DCLK as u64 * DCLK_HZ as u64;
-        let numerator = embassy_rp::clocks::clk_sys_freq() as u64;
-        assert_eq!(numerator % denominator, 0, "DCLK preset must have an integer divider");
-        let divider = numerator * 256 / denominator;
-        assert!(divider >= 256, "PIO clock divider must be at least 1");
-        cfg.clock_divider = U24F8::from_bits(divider as u32);
+        // One 32-bit word per DCLK covers GP0..17; only 18 bits drive pins.
+        // Side-set owns DCLK (GP12); sticky SM1 output owns ROW (GP14).
+        // The low 8 fractional bits are always zero: never approximate a
+        // requested DCLK with a fractional divider (which adds long cycles).
+        assert_eq!(embassy_rp::clocks::clk_sys_freq(), crate::protocol::SYS_HZ);
+        cfg.clock_divider = U24F8::from_bits(crate::protocol::PIO_CLKDIV_INT << 8);
         cfg.fifo_join = pio::FifoJoin::TxOnly;
         cfg.shift_out = ShiftConfig {
             auto_fill: false,
             threshold: 32,
             direction: pio::ShiftDirection::Right,
         };
-        let mut pin_cfg = cfg.get_pins();
-        pin_cfg.out_base = 10;
-        pin_cfg.out_count = 12;
-        // SAFETY: OUT covers GP10..21. Only the owned pins above are
-        // muxed to PIO and enabled as outputs. Gap pins retain their GPIO mux
-        // and direction. SM1 uses a disjoint OUT mapping at GP22.
-        // GP15 is also inside
-        // OUT's range; hardware side-set has priority over OUT on that pin.
-        unsafe { cfg.set_pins(pin_cfg) };
+        cfg.set_out_pins(&[
+            &r1, &g1, &b1, &r2, &g2, &b2, &r3, &g3, &b3, &r4, &g4, &b4,
+            &dclk, &le, &row, &lck, &bk, &din,
+        ]);
         sm.set_config(&cfg);
-        let all = [&le, &sin, &dclk, &lck, &bk, &din];
+        let all = [
+            &r1, &g1, &b1, &r2, &g2, &b2, &r3, &g3, &b3, &r4, &g4, &b4,
+            &le, &lck, &bk, &din, &dclk,
+        ];
         sm.set_pins(Level::Low, &all);
         // BK starts inactive; waveform rows generate the complete 8-DCLK pulse.
         if !DIN_ONE_SELECTS {
@@ -312,6 +343,10 @@ impl Driver {
         let mut row_cfg = pio::Config::default();
         row_cfg.use_program(&row_loaded, &[]);
         row_cfg.set_out_pins(&[&row]);
+        // GP14 lies inside SM0's contiguous OUT range. SM1 has higher pin
+        // priority; continuously reassert its last ROW value so SM0 cannot
+        // clear it between the sparse ROW transitions.
+        row_cfg.out_sticky = true;
         row_cfg.fifo_join = pio::FifoJoin::TxOnly;
         row_cfg.shift_out = ShiftConfig {
             auto_fill: false,

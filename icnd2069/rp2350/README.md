@@ -1,10 +1,178 @@
-# ICND2069 / RP2350：单颗、54 行、1 组扫描
+# ICND2069 / RP2350：JSON 配置、54 行
 
-BK（GP18）使用原有 DCLK/PIO 指令时序。配置、数据区与帧间为低电平；每个 ROW 前 BK 只拉高 **8 个完整 DCLK**，默认 12.5 MHz 下为 640 ns。启动也保持低，避免 DSView 中首个 BK 脉冲宽于其他行。
+## 先烧录
 
-当前 `02h=0x35`，为 54 扫。默认图案为 `diagonal`：以 16 行为周期重复斜线；逻辑行 `i mod 16` 的 OUTi 固定写入灰度字 `255`，其余通道为 0。54 行包含 3 个完整周期及第 4 个周期的前 6 行。diagonal 固定使用该灰度字，不受 `ICND2069_GRAY` 影响；`ICND2069_PATTERN=gradient` 可恢复此前整屏渐变图；下文整屏渐变验证属于历史记录。
+在 `icnd2069/rp2350` 目录执行，一条命令完成编译、烧录、运行并查看 RTT 日志：
 
-## 2026-11-01 单遍扫描灰度目视验证
+```sh
+cargo run --release
+```
+
+编译参数全部读取本目录的 [`config.json`](config.json)，修改后 Cargo 自动重新构建。`bash build.sh` 执行同一条命令；只编译使用 `cargo build --release`。
+
+当前配置：**每路级联 6 颗、54 行、1 遍扫描、25 MHz、diagonal 对角线渐变**。旧的 `ICND2069_*` 环境变量不再覆盖 JSON。
+
+## config.json 参数
+
+| 字段 | 当前值 | 可选值 / 含义 |
+|---|---|---|
+| `scan_repeats` | `1` | 整数 1～64；每帧 ROW 数为 `54 × 遍数`，03h 为 `遍数 - 1` |
+| `config_interval` | `10000` | 整数 1～4294967295；第 0、N、2N…帧写完整配置 |
+| `chains` | `6` | 整数 1～8；每条数据线的级联芯片数，同色链内使用相同配置和灰度 |
+| `dclk_mhz` | `30` | 数值 1、3、6、10、12.5、20、25、30、31、32、33、34、35、40、45；1/3 为低速时序实验档，40/45 为超频实验档 |
+| `_dclk_mhz_doc` | 频率说明 | 可选字符串，仅用于文档说明，不参与编译参数选择 |
+| `pattern.type` | `"diagonal"` | 只支持 `"diagonal"` 或 `"normal"` |
+| `pattern.repeat_latch_gap` | `1` | 仅 diagonal 使用；整数 1～64，省略为 1；重复锁存之间 LAT 低电平的完整 DCLK 数 |
+| `pattern.gray` | 备用示例为 `[0, 255]` | normal 必填；`[起点, 终点]` 生成 16 个灰度，每下一行循环右移一个 OUT；两端均为整数 0～8192，也接受单个整数表示整行同灰度 |
+| `_pattern` | normal 示例 | 可选的备用配置，完全不参与编译 |
+
+除 `repeat_latch_gap`、`_dclk_mhz_doc` 和 `_pattern` 外，上表中对应模式的字段必须填写；拼错字段、模式或越界数值会导致编译报错。JSON 不支持注释，`_pattern` 用于保留另一种模式的示例。
+
+行数 `ROWS=54`、通道数 `CHANNELS=16`、行周期 `ROW_DCLKS=60` 固定。02h=`0x35`，03h=`scan_repeats - 1`。组合参数仍需满足 512 KiB RAM 容量。
+
+### DCLK 精确分频
+
+所有档位均满足 `DCLK = 系统时钟 / PIO 整数分频 / 每 DCLK 指令周期数`。PIO 分频器的小数部分固定为 0，高低电平各占一半周期；编译期校验系统 PLL 的 VCO 范围、输出频率和 PIO 整除关系，不允许用近似分数分频凑频率。
+
+| DCLK（MHz） | 系统时钟（MHz） | PIO 周期/DCLK | PIO 整数分频 |
+|---|---|---|---|
+| 1 | 150 | 6 | 25 |
+| 3 | 144 | 6 | 8 |
+| 6 | 144 | 6 | 4 |
+| 10 | 120 | 6 | 2 |
+| 12.5 | 150 | 6 | 2 |
+| 20 | 120 | 6 | 1 |
+| 25 | 150 | 6 | 1 |
+| 30 | 120 | 4 | 1 |
+| 31 | 124 | 4 | 1 |
+| 32 | 128 | 4 | 1 |
+| 33 | 132 | 4 | 1 |
+| 34 | 136 | 4 | 1 |
+| 35 | 140 | 4 | 1 |
+| 40 | 160 | 4 | 1 |
+| 45 | 180 | 4 | 1 |
+
+31 MHz 使用系统 PLL `12 MHz × 124 / 4 / 3 = 124 MHz`，VCO 为 1488 MHz，避免使用低于合法范围的 744 MHz VCO。32/33/34 MHz 分别使用 `12 MHz × 64/66/68 / 3 / 2`。
+
+整数分频排除了分数分频导致的长短周期；绝对频率仍受板载晶振误差和 PLL 抖动影响。若 DMA 未及时供数，阻塞的 PULL 仍会拉长 DCLK：固件每秒读取并清除 SM0 的 TXSTALL 标志，检测到后打印告警；`affected polling windows` 统计发现缺数的轮询窗口数，不是精确缺数次数。无告警不等于已完成电气波形验证，实际边沿需在芯片输入端测量。
+
+2026-11-07 全档位核验：15 个 JSON 档位全部通过主机 PLL/PIO 精确比例、分频小数部分为零及 RGB/灰度/ROW 波形检查；31/32/33/34 MHz 和当前 30 MHz 的 RP2350 release 构建通过。本轮未烧录，TXSTALL 检测和实际边沿均待上板验证。
+
+10/20 MHz 每 DCLK 使用 6 个 PIO 周期，整数分频为 2/1；30 MHz 使用 4 个 PIO 周期，整数分频为 1，均保持高低各半且不超频。10 MHz 的 ICND2069 PLL 配置为 `04h=02h, 05h=0Ch`，20/30 MHz 沿用 `04h=04h, 05h=0Ah`，06h 均保留 `01h`。
+
+2026-11-07 新增档位验证：10/20/30 MHz、6 颗级联、diagonal 均通过 release 构建、整数分频检查和 RGB/像素/ROW 主机波形核验；尚未烧录或测量实际 DCLK。
+
+1/3/6 MHz 均使用每 DCLK 6 个 PIO 周期，整数分频分别为 25/8/4，高低各占 3 个 PIO 周期。6 MHz 配套使用 ICND2069 `04h=01h`、`05h=0Ah`，06h 保留 `01h`；1/3 MHz 沿用这组低频配置，但低于指南的 PLL 输入范围，只作为时序实验档，不保证 LED 正常输出。GPIO、每帧 DCLK 数及 ROW 脉冲数不变，实际时间随 DCLK 缩放。
+
+2026-11-07 低频档验证：1/3/6 MHz、6 颗级联、diagonal 均通过 release 构建、整数分频检查和 RGB/像素/ROW 主机波形核验；尚未烧录或测量实际 DCLK。
+
+## 两种 pattern
+
+`diagonal` 自动启用连续 latch，每 16 行重复对角线，灰度从 64 递减到 0：
+
+```json
+"pattern": {
+    "type": "diagonal",
+    "repeat_latch_gap": 1
+}
+```
+
+`normal` 自动关闭连续 latch，第一行 OUT0～OUT15 按 `gray` 指定的起点、终点线性变化，四舍五入到整数。每下一行把整组灰度循环右移一个 OUT，OUT15 的值回到 OUT0，每 16 行重复；四组 RGB、每颗级联芯片使用相同图案。每个像素完整移入，每颗芯片每像素 16 DCLK：
+
+```json
+"pattern": {
+    "type": "normal",
+    "gray": [0, 255]
+}
+```
+
+`[0, 255]` 的前三行如下（按物理 OUT0→OUT15）：
+
+```text
+第 1 行：  0,  17,  34, …, 221, 238, 255
+第 2 行：255,   0,  17, …, 204, 221, 238
+第 3 行：238, 255,   0, …, 187, 204, 221
+```
+
+`[255, 0]` 生成递减灰度后按相同方向平移；`255` 或 `[255, 255]` 为整行同灰度，平移后显示不变。串行写入仍按 OUT15→OUT0；帧内时钟数及理论 FPS 不变。
+
+把需要的对象放在 `pattern` 下即可生效，`_pattern` 不生效。normal 的 `gray=0` 或 `[0, 0]` 为全黑；8192 是软件允许的灰度字上限，不是经过亮度标定的满亮值。固件不再提供 sweep 和其他图案。
+
+2026-11-07 JSON 构建验证：6 颗／12.5 MHz 下两种模式 release 编译通过；主机逐路核验 RGB 配置、864 次像素锁存及 ROW 对齐，normal 的每个像素均完整写入 gray。另验证配置切换触发重编译、旧环境变量无法覆盖 JSON、字段/范围错误会中止构建；未烧录。
+
+<details>
+<summary>手动烧录（需要指定 SWD 速度时）</summary>
+
+```sh
+cargo build --release --locked &&
+probe-rs download --chip RP235x --protocol swd --speed 1000 --verify \
+  target/thumbv8m.main-none-eabihf/release/icnd2069-demo &&
+probe-rs reset --chip RP235x --protocol swd --speed 1000
+```
+
+也可执行 `bash tools/flash.sh` 完成同样的步骤，参数同样读取 `config.json`。
+
+</details>
+
+## Pico 2 引脚接线
+
+四组 RGB 共 12 路数据，控制信号共用。所有信号都在 Pico 2 排针上，GPIO 编号与排针脚号对应如下：
+
+| 信号 | GPIO（R / G / B 顺序） | Pico 2 排针脚号 |
+|---|---|---|
+| R1 / G1 / B1 | GP0 / GP1 / GP2 | 1 / 2 / 4 |
+| R2 / G2 / B2 | GP3 / GP4 / GP5 | 5 / 6 / 7 |
+| R3 / G3 / B3 | GP6 / GP7 / GP8 | 9 / 10 / 11 |
+| R4 / G4 / B4 | GP9 / GP10 / GP11 | 12 / 14 / 15 |
+| ICND2069 DCLK | GP12 | 16 |
+| ICND2069 LE / LAT | GP13 | 17 |
+| ICND2069 ROW（旧 GCLK 网络） | GP14 | 19 |
+| RT5990 LCK | GP15 | 20 |
+| RT5990 BK | GP16 | 21 |
+| RT5990 DIN（行选择数据） | GP17 | 22 |
+
+GP25 保留给 Pico 2 板载 LED；共地可接排针 3、8、13、18、23、28 或 38 脚。**旧接线需要按此表重接。**
+
+配置按 R/G/B 分别发送，四组中同色使用相同配置；灰度数据仍在 12 路同步发送同一图案，尚未提供各组、各颜色独立图像。`chains` 表示每条数据线的级联芯片数，四组 RGB 不需要把它乘以 12。
+
+### RGB 配置
+
+采用[抓包寄存器汇总](../../dsview/icnd2069/ICND2069-抓包寄存器汇总.md)中 B/C 两份长包的颜色参数；字段含义参见[寄存器配置整理](../../dsview/icnd2069/ICND2069-寄存器配置整理.md)。以下均为十六进制，源码表在 `src/protocol.rs` 的 `REGISTERS`，数组顺序为 `[R, G, B]`。
+
+| 地址 | R | G | B | 用途 |
+|---|---|---|---|---|
+| 0C | 01 | 0C | 0D | 耦合优化 1 |
+| 0E | 07 | 06 | 0A | 低灰首行补偿时间 |
+| 18 | 1F | 1F | 2F | 低灰首行补偿组合字段 |
+| 19 | 20 | 80 | A0 | 低灰首行补偿组合字段 |
+| 1C | 72 | 76 | 64 | 电流增益 |
+| 1E | 41 | 46 | 48 | 消影 |
+| 1F | 04 | 20 | 20 | 耦合优化 2 |
+| 23 | 01 | 01 | 05 | 低灰偏移补偿 |
+
+其余配置三色一致；02h/03h 和 PLL 04h～06h 按当前行数、扫描遍数及 DCLK 设置。每条配置在同一组 DCLK/LE 上并行发送 RGB 字，仍为 49 条 WR_CFG，不增加时钟数或波形 RAM。启动和周期刷新均使用分色配置。
+
+这些值是参考板的实测写入值，当前 microLED 板的绿蓝点亮效果仍需烧录后验证。
+
+2026-11-07 主机验证：`tools/check_config_interval.rs` 逐路解码 GP0～11，直接读取上述抓包表核对 45 个配置地址及 8 项颜色差异，并检查全级联、配置刷新、轮转配置和灰度更新。它与 `tools/check_diagonal_latch.rs` 均通过默认配置、25 MHz／6 颗（连续 latch 开/关）、8 颗／64 遍扫描的核验。默认及 25 MHz／6 颗 static 固件 release 构建通过；本轮未烧录。
+
+PIO 每个 DCLK 使用一个 32 位 DMA 样本，覆盖 GP0～GP17。DCLK 由 side-set 输出；ROW 由优先级更高的 SM1 持续保持，避免被 SM0 的输出覆盖。帧时序保持不变，波形缓冲占用和数据 DMA 带宽是此前两个 DCLK 打包一个字时的两倍。
+
+diagonal 和 normal 都只保存一帧图案，两个 DMA 描述符组共享该缓冲。normal 完整移入每个像素，其数据缓冲随 `chains` 增长；扫描尾缓冲随 `scan_repeats` 增长。
+
+## 当前时序概览
+
+启动 RTT 在系统时钟行后打印 `theoretical FPS`：`normal` 为普通帧、`config` 为完整写配置帧，均按 `DCLK_HZ / 帧内 DCLK 数` 计算；`avg` 按每 N 帧包含 1 个配置帧、N−1 个普通帧计算，N 为 `config_interval`。显示两位小数，是无 FIFO 停顿时的理论帧率，不是实测值。
+
+BK（GP16）使用原有 DCLK/PIO 指令时序。配置、数据区与帧间为低电平；每个 ROW 前 BK 只拉高 **8 个完整 DCLK**，默认 12.5 MHz 下为 640 ns。启动也保持低，避免 DSView 中首个 BK 脉冲宽于其他行。
+
+当前 `02h=0x35`，为 54 扫。diagonal 以 16 行为周期重复斜线；令 `r = 行号 % 16`，OUTr 写入 `round((15-r)×32/15) << 1`，其余通道为 0。54 行包含 3 个完整周期及第 4 个周期的前 6 行。diagonal 不接受 `gray` 字段。
+
+## 历史调试与验证记录
+
+以下保留不同阶段的实验记录，包含旧的环境变量配置、16 行、8/16/32/64 遍扫描、不同图案及行周期；其中“当前”“默认”“最新”等措辞描述记录当时的状态。**当前烧录方法与 JSON 参数以上方说明为准，历史命令及抓包结论只适用于对应固件。**
+
+### 2026-11-01 单遍扫描灰度目视验证
 
 用户实测运行命令：`ICND2069_SCAN_REPEATS=1 cargo run --release`，反馈“可以分清楚8个gray”。
 
@@ -32,7 +200,7 @@ DCLK 默认 **12.5 MHz**，系统时钟 **150 MHz（不超频）**。当前为 5
 
 [此前单遍扫描实测与原始抓包](../captures/experiments/20261031_single_sweep_gray/README.md)：两份独立 100 MHz / 50 ms / 0.4 V 抓包，共 142 个完整帧，配置、灰度、单颗传输和 16 次扫描均通过核验。该历史配置帧周期约 **697.70 µs，1433.28 Hz**。64 遍扫描的[灰度分析](../captures/experiments/20261031_analysis_gray/README.md)测得约 **7246.47 µs，138 Hz**；[此前 13 档分析](../captures/experiments/20261031_analysis_gray2/README.md)观察到 511 及以上已测字的数字输出近似饱和。当前单组模式的连续亮度分级仍待验证。
 
-## 时序和 DMA
+### 时序和 DMA（历史）
 
 - `ROWS=16`、`CHANNELS=16`、`GROUPS=8`；02h=0Fh，03h=07h。
 - 每帧保留 VSYNC、EN_OP。以首帧为 frame 0，仅 frame 0、N、2N…发送 PRE_ACT、解锁、全部寄存器、锁定，合计 49 条 WR_CFG；普通帧直接装载灰度，跳过配置时钟。
@@ -51,7 +219,7 @@ DCLK 默认 **12.5 MHz**，系统时钟 **150 MHz（不超频）**。当前为 5
 - 各档输入段、扫描段和 ROW 表在启动时生成并保持不变；只更新尚未复用的描述符及两个 ROW 首段字。RAM 占用不随 N 增长，配置刷新不会重置灰度序列。
 - 未发送 SOFT_RST；没有 SDO 读回。
 
-## Flash 大小与烧录耗时
+### Flash 大小与烧录耗时（历史）
 
 波形在启动时由代码生成到 RAM；HEADS、TAIL、ROW_RUNS 等静态零初始化缓冲位于 `.bss`，不作为 Flash 数据烧录。ELF 中的调试段也不参与烧录。
 
@@ -59,61 +227,19 @@ DCLK 默认 **12.5 MHz**，系统时钟 **150 MHz（不超频）**。当前为 5
 
 周期配置调度版本的可烧录段约 30 KiB，原完整延迟表版本为 238796 字节（约 233.2 KiB）。此前裁剪前缀版本在 1000 kHz SWD、带校验烧录时约 2.48 秒，完整表版本约 14.69 秒；具体耗时仍受探针和连接状态影响。
 
-## 灰度验证结论
+### 灰度验证结论（历史）
 
 OUT0/OUT1 对应**上一帧发送的灰度**。验证必须错开一帧：发送 0 的那一帧仍显示前一帧，随后发送 1 的帧才显示全黑。
 
 当前配置和 0.4 V 门限下，灰度 0 无输出，所测非零灰度 1～255 每路每帧均有 16 个主脉冲，脉宽约 4.66/4.68 µs。灰度数据变化、开关响应和扫描次数已验证，**连续亮度分级尚未验证**。不能沿用旧 64 组扫描中靠开启组数体现灰度的标定；8192 仍只是软件输入上限。
 
-## 构建与运行
-
-修改扫描次数并立即烧录、复位（在本目录执行）：`bash tools/flash.sh 16`。
-参数范围 1～64，例如 `bash tools/flash.sh 8` 为 128 个 ROW 脉冲/帧，`bash tools/flash.sh 16` 为 256 个。脚本将参数明确传入构建，构建成功后才烧录并校验、复位；单独 `cargo build` 不会更新板上固件。RTT 的 `ROW pulses/frame` 统计生成的 ROW 表，可确认该固件的扫描数量，不代表引脚波形实测。
-
-```sh
-# 当前默认：单颗、16 行×8 遍、连续 latch、斜向灰度线
-cargo build --release --locked
-probe-rs download --chip RP235x --protocol swd --speed 1000 --verify target/thumbv8m.main-none-eabihf/release/icnd2069-demo
-probe-rs reset --chip RP235x --protocol swd --speed 1000
-swift tools/capture.swift
-
-# 固定全白灰度（构建后同样需要 download/reset）
-ICND2069_GRAY_MODE=static ICND2069_PATTERN=white ICND2069_GRAY=255 cargo build --release --locked
-
-# 配置刷新间隔，默认 10000；1 恢复每帧完整配置
-ICND2069_CONFIG_INTERVAL=10000 cargo build --release --locked
-
-# 常规 CLK 档位：12.5、25、35，默认 12.5；另支持实验档 40/45
-ICND2069_DCLK_MHZ=12.5 cargo build --release --locked
-
-# 超频实验档：系统 160 MHz，CLK 40 MHz，高低电平比例为 1:1
-ICND2069_DCLK_MHZ=40 cargo build --release --locked
-
-# 超频实验档：系统 180 MHz，CLK 45 MHz，高低电平比例为 1:1
-ICND2069_DCLK_MHZ=45 cargo build --release --locked
-
-# 仅改变级联数量，允许 1～8，默认 1
-ICND2069_CHAIN_COPIES=8 cargo build --release --locked
-
-# 调整物理目标通道及重复锁存的 LAT-low 间隔
-ICND2069_TARGET_CHANNEL=7 ICND2069_REPEAT_LATCH_GAP=3 cargo build --release --locked
-
-# 关闭连续 latch，每行完整写入 16 个灰度字
-ICND2069_CONTINUOUS_LATCH=0 cargo build --release --locked
-
-# 开启连续 latch，使用旧全白灰度循环
-ICND2069_CONTINUOUS_LATCH=1 ICND2069_GRAY_MODE=sweep cargo build --release --locked
-```
-
-用户单遍扫描运行命令（现在默认启用连续 latch）：`ICND2069_SCAN_REPEATS=1 cargo run --release`。
-
-`ICND2069_GRAY_MODE`：`static`（默认）或 `sweep`。默认 static 图案为 `diagonal`，固定上述灰度字；整屏 `gradient` 的 `ICND2069_GRAY` 控制渐变终点，默认 8192。sweep 默认图案为 `white`，也只允许 white；1～3 颗选择完整灰度序列（连续 latch 关闭为 11 帧、开启为 9 帧），4～8 颗沿用为控制 RAM 使用保留的 `0,1,127,255` 四帧循环。当前硬件使用单颗配置；扩展级联须重新核对 RAM 占用。构建参数不改变当前运行的固件，烧录后才生效。
-
-static 模式支持 `diagonal`（默认）、`gradient`、`reference`、`white`、`black`、`out0`、`out1`、`alternating_rows`、`checker`、`split`。关闭连续 latch 时保留完整图案；开启时 diagonal 使用 OUTrow，其余图案只取 `ICND2069_TARGET_CHANNEL`，其他通道强制为零，例如 `out1` 图案需配合 `ICND2069_TARGET_CHANNEL=1`；gradient 与连续 latch 同时启用会在构建时报错。
+### 主机编码核验（历史）
 
 本次主机核验：`rustc --edition=2021 tools/check_diagonal_latch.rs -o /tmp/icnd2069-diagonal-latch-check && /tmp/icnd2069-diagonal-latch-check`。按 DCLK 模拟串行移位并核验全部 256 个锁存值、LAT 高期间只有 1 个上升沿、DMA 头尾拼接和 ROW 数量；覆盖 1/8 颗级联、LAT-low 间隔 1/2/3/64、固定目标 OUT0/7/15，以及关闭连续 latch 的完整写入。
 
-## DSView 与验证工具
+## DSView 与验证工具（历史接线）
+
+以下抓包使用旧 GPIO 分配。新接线采集时 CH0～3 应分别接 GP12（DCLK）、GP0（R1，或其他 RGB 数据脚）、GP13（LE）、GP14（ROW）；解码器的分析仪通道编号不变。
 
 2026-11-01 当前波形输入核验：[原始抓包](../captures/reference/dsview/DSLogic%20U2Pro16-la-261101-001023.dsl)，100 MHz、实际时长 10.00448 ms、门限 1 V，仅分析 CH0～3。16 个完整普通帧，每帧 256 个灰度字一致，覆盖完整 11 档循环；周期 600.31～600.32 µs。每帧同行相邻 DATA_LATCH 间隔 24 CLK（240 次），跨行间隔 25 CLK（15 次）；LAT 高期间均只有 1 个 CLK 上升沿。ROW 每帧 16 次，周期通常 81 CLK，少数边沿的采样位置造成计数 80/82，未据此增加时序补偿。
 
