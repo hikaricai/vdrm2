@@ -117,10 +117,19 @@ async fn main(_spawner: Spawner) {
         protocol::PLL_M, protocol::PLL_P, protocol::PLL_N,
         protocol::GCLK_HZ_ASSUMING_N1, protocol::ROW_DCLKS,
     );
+    rtt_target::rprintln!(
+        "PWM: reg07=reg08={}, nominal accelerate=256/{}x, display={} GCLK/group, theoretical gray capacity={}",
+        protocol::PWM_WIDTH, protocol::PWM_WIDTH,
+        4 * u32::from(protocol::PWM_WIDTH),
+        protocol::GROUPS * 4 * usize::from(protocol::PWM_WIDTH),
+    );
+    rtt_target::rprintln!("ideal PWM window={} ns/group (assuming N=1)",
+        4_000_000_000u64 * u64::from(protocol::PWM_WIDTH)
+            / u64::from(protocol::GCLK_HZ_ASSUMING_N1));
     if protocol::GCLK_HZ_ASSUMING_N1 == 100_000_000 {
         rtt_target::rprintln!("100 MHz PLL boundary experiment: guide specifies strictly <100 MHz");
     } else if protocol::GCLK_HZ_ASSUMING_N1 > 100_000_000 {
-        rtt_target::rprintln!("5x PLL experiment: calculated frequency exceeds guide's <100 MHz limit");
+        rtt_target::rprintln!("PLL experiment: calculated frequency exceeds guide's <100 MHz limit");
     }
     // Ideal frame rate from DCLK counts, without FIFO stalls. Split the
     // division before scaling to avoid overflow at config_interval=u32::MAX.

@@ -85,10 +85,9 @@ pub const PIO_CLKDIV_INT: u32 = {
     divider
 };
 // Guide V4.2 p.13: M/P occupy five bits; 4 MHz < DCLK/M < 10 MHz.
-// For >=20 MHz use P=5*M so GCLK=5*DCLK assuming N=1. Choose the smallest
-// M satisfying the reference input range. This intentionally reaches/exceeds
-// the guide's strict <100 MHz PLL limit: 100..225 MHz experimental targets.
-const PLL_MP: (u8, u8) = match DCLK_HZ {
+// Without an explicit GCLK target retain the historical presets, including
+// the >=20 MHz 5x experiments and the out-of-range 1/3 MHz input experiments.
+const LEGACY_PLL_MP: (u8, u8) = match DCLK_HZ {
     1_000_000 | 3_000_000 | 6_000_000 => (1, 10),
     10_000_000 | 12_500_000 => (2, 12),
     20_000_000 | 25_000_000 => (3, 15),
@@ -96,11 +95,64 @@ const PLL_MP: (u8, u8) = match DCLK_HZ {
     40_000_000 | 45_000_000 => (5, 25),
     _ => panic!("missing ICND2069 PLL preset"),
 };
+const fn unsigned_setting(value: &str) -> u32 {
+    let bytes = value.as_bytes();
+    assert!(!bytes.is_empty());
+    let mut n = 0u32;
+    let mut i = 0;
+    while i < bytes.len() {
+        assert!(bytes[i] >= b'0' && bytes[i] <= b'9');
+        n = n * 10 + (bytes[i] - b'0') as u32;
+        i += 1;
+    }
+    n
+}
+/// Zero selects the legacy PLL preset. Cargo emits this from config.json.
+pub const GCLK_TARGET_HZ: u32 = match option_env!("ICND2069_GCLK_HZ") {
+    Some(value) => unsigned_setting(value),
+    None => 0,
+};
+const PLL_MP: (u8, u8) = if GCLK_TARGET_HZ == 0 {
+    LEGACY_PLL_MP
+} else if DCLK_HZ == 12_500_000 && GCLK_TARGET_HZ == 31_250_000 {
+    // dsview/icnd2069/ICND2069-抓包寄存器汇总.md: 04=04, 05=0A.
+    // Deliberate capture-replay exception: DCLK/M=3.125 MHz is below
+    // the guide's range. Do not substitute the equivalent ratio M=2/P=5.
+    (4, 10)
+} else {
+    assert!(GCLK_TARGET_HZ > 25_000_000, "GCLK must exceed 25 MHz");
+    let dclk = DCLK_HZ as u64;
+    let mut m = 1u64;
+    let mut result = (0, 0);
+    while m <= 31 {
+        let product = GCLK_TARGET_HZ as u64 * m;
+        let p = product / dclk;
+        if 4_000_000 * m < dclk && dclk < 10_000_000 * m
+            && product % dclk == 0 && p >= 1 && p <= 31
+        {
+            result = (m as u8, p as u8);
+            break;
+        }
+        m += 1;
+    }
+    assert!(result.0 != 0, "GCLK target has no exact valid M/P pair");
+    result
+};
 pub const PLL_M: u8 = PLL_MP.0;
 pub const PLL_P: u8 = PLL_MP.1;
 // Retain register 06h=01h. Its mapping to the mathematical divisor is not
 // explicit in the guide; frequency and row-time calculations ASSUME N=1.
 pub const PLL_N: u8 = 0x01;
+/// Guide p.14: reg07=reg08, nominal acceleration 256/PWM_WIDTH,
+/// with 4*PWM_WIDTH display GCLK ticks per row/group.
+pub const PWM_WIDTH: u8 = {
+    let width = match option_env!("ICND2069_PWM_WIDTH") {
+        Some(value) => unsigned_setting(value),
+        None => 16,
+    };
+    assert!(width >= 4 && width <= 255, "PWM width must be 4..255 for current RGB reg0C");
+    width as u8
+};
 pub const GCLK_HZ_ASSUMING_N1: u32 = {
     let dclk = DCLK_HZ as u64;
     let m = PLL_M as u64;
@@ -108,18 +160,15 @@ pub const GCLK_HZ_ASSUMING_N1: u32 = {
     assert!(m >= 1 && m <= 31 && p >= 1 && p <= 31);
     if DCLK_HZ >= 20_000_000 {
         assert!(4_000_000 * m < dclk && dclk < 10_000_000 * m);
-        assert!(p == 5 * m);
     }
     (dclk * p / m) as u32
 };
 // Guide p.14-15: ceil((2*0E + 4*07 + 2*0F + 2*0D)/R) + 1 + E,
 // E=2 minimum. Use the longest RGB timing and retain at least 60 DCLK.
-// Low-frequency experiments keep their existing cadence. ROW high remains
-// 12 DCLK for the first pulse and four thereafter. At R=5 the current RGB
-// registers need at most 34 DCLK, so all >=20 MHz presets use 60 DCLK.
-pub const ROW_DCLKS: usize = if DCLK_HZ < 20_000_000 {
-    60
-} else {
+// ROW high remains 12 DCLK for the first pulse and four thereafter.
+// Recalculate at every DCLK preset: slower GCLK / wider PWM can require
+// more than 60 DCLK, in which case the complete scan and frame grow too.
+pub const ROW_DCLKS: usize = {
     let mut ticks = [0usize; 3];
     let mut i = 0;
     while i < REGISTERS.len() {
@@ -276,7 +325,7 @@ pub const ENABLE: usize = 11;
 pub const PRE_ACT: usize = 14;
 
 // R/G/B values from dsview/icnd2069/ICND2069-抓包寄存器汇总.md (B/C).
-// Keep the current row/group/PLL settings instead of the reference scan mode.
+// Override the reference row/group/PLL settings and PWM width from JSON.
 // 00/01 are access controls, sent outside this list to keep the whole batch
 // unlocked. The reference rotation includes them but they are not payload.
 pub const REGISTERS: &[(u8, [u8; 3])] = &[
@@ -285,8 +334,8 @@ pub const REGISTERS: &[(u8, [u8; 3])] = &[
     (0x04, [PLL_M; 3]),
     (0x05, [PLL_P; 3]),
     (0x06, [PLL_N; 3]),
-    (0x07, [0x20; 3]),
-    (0x08, [0x20; 3]),
+    (0x07, [PWM_WIDTH; 3]),
+    (0x08, [PWM_WIDTH; 3]),
     (0x09, [0x08; 3]),
     (0x0a, [0x08; 3]),
     (0x0b, [0x00; 3]),
