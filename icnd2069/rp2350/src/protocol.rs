@@ -152,9 +152,9 @@ pub const ROW_DCLKS: usize = if DCLK_HZ < 20_000_000 {
 // Software input limit retained from the saved NOVA image. This is NOT a
 // calibrated PWM full scale. The previous 40-scan capture saturated by 512;
 // the new 16-scan/full-config mode must be measured independently.
-pub const MAX_GRAY_INPUT: u16 = 8192;
+pub const MAX_GRAY_INPUT: u16 = if CONTINUOUS_LATCH { 255 } else { 8192 };
 pub const DEMO_GRAY: u16 = 8192;
-/// One identical word per cascaded ICND2069; build-time variable, default 1.
+/// Cascaded ICND2069 chips per input; chip 0 is nearest the MCU.
 pub const CHAIN_COPIES: usize = match option_env!("ICND2069_CHAIN_COPIES") {
     Some(value) => {
         let bytes = value.as_bytes();
@@ -164,6 +164,15 @@ pub const CHAIN_COPIES: usize = match option_env!("ICND2069_CHAIN_COPIES") {
     None => 1,
 };
 pub const TRANSFER_DCLKS: usize = 16 * CHAIN_COPIES;
+pub const TOTAL_CHANNELS: usize = CHANNELS * CHAIN_COPIES;
+// Starting with a cleared chain, shift one gray byte and move it to the
+// selected chip. Clearing afterwards only needs to flush that byte out.
+pub const fn latch_gray_dclks(row: usize) -> usize {
+    8 + 16 * latch_chip(row)
+}
+pub const fn latch_clear_dclks(row: usize) -> usize {
+    16 * (CHAIN_COPIES - latch_chip(row))
+}
 /// Enable repeated latches of zero; disabled shifts all 16 channel words.
 pub const CONTINUOUS_LATCH: bool = match option_env!("ICND2069_CONTINUOUS_LATCH") {
     Some(value) => {
@@ -187,10 +196,16 @@ pub const DIAGONAL_LATCH: bool = match option_env!("ICND2069_PATTERN") {
     Some(value) => matches!(value.as_bytes(), b"diagonal"),
     None => true,
 };
-pub const fn latch_target(row: usize) -> usize {
-    if DIAGONAL_LATCH { row % CHANNELS } else { TARGET_CHANNEL }
+pub const fn latch_pixel(row: usize) -> usize {
+    if DIAGONAL_LATCH { row % TOTAL_CHANNELS } else { TARGET_CHANNEL }
 }
-/// Physical OUT channel. Serial DATA_LATCH order remains OUT15 through OUT0.
+pub const fn latch_target(row: usize) -> usize {
+    latch_pixel(row) % CHANNELS
+}
+pub const fn latch_chip(row: usize) -> usize {
+    latch_pixel(row) / CHANNELS
+}
+/// Logical column (chip * 16 + OUT). Latch order remains OUT15 through OUT0.
 pub const TARGET_CHANNEL: usize = match option_env!("ICND2069_TARGET_CHANNEL") {
     Some(value) => {
         let bytes = value.as_bytes();
@@ -202,7 +217,7 @@ pub const TARGET_CHANNEL: usize = match option_env!("ICND2069_TARGET_CHANNEL") {
             n = n * 10 + (bytes[i] - b'0') as usize;
             i += 1;
         }
-        assert!(n < CHANNELS);
+        assert!(n < TOTAL_CHANNELS);
         n
     }
     None => 0,
@@ -348,23 +363,26 @@ pub const COMMON_PREFIX_WORDS: usize = 34;
 pub const CONFIG_END_WORDS: usize = (49 + CONFIG_WRITES * (8 + TRANSFER_DCLKS) + 1) & !1;
 pub const CONFIG_SKIP_DCLKS: usize = CONFIG_END_WORDS - COMMON_PREFIX_WORDS;
 pub const DATA_ROW_DCLKS: usize = if SHORT_DATA {
-    2 * TRANSFER_DCLKS + (CHANNELS - 2) * (REPEAT_LATCH_GAP + 1)
+    TRANSFER_DCLKS + 8 + (CHANNELS - 2) * (REPEAT_LATCH_GAP + 1)
 } else {
     CHANNELS * TRANSFER_DCLKS
 };
 // Configuration leaves arbitrary bits in the shift registers. Clear them
-// before the first latch. OUT0 also needs an unlatched clear at frame end.
+// before the first latch. Every OUT0 row clears without a latch at row end.
 pub const DATA_PREFIX_DCLKS: usize = if SHORT_DATA { TRANSFER_DCLKS } else { 0 };
-pub const DATA_SUFFIX_DCLKS: usize =
-    if SHORT_DATA && !DIAGONAL_LATCH && TARGET_CHANNEL == 0 { TRANSFER_DCLKS } else { 0 };
-// Every diagonal OUT0 has 15 zero latches and an unlatched zero transfer
+// Every OUT0 row has 15 zero latches and an unlatched zero transfer
 // after its gray. Other rows have 14 zero repeats and a latched zero transfer.
-pub const DIAGONAL_EXTRA_DCLKS: usize =
-    if SHORT_DATA && DIAGONAL_LATCH {
-        ((ROWS + CHANNELS - 1) / CHANNELS) * (REPEAT_LATCH_GAP + 1)
-    } else {
-        0
-    };
+pub const LATCH_EXTRA_DCLKS: usize = {
+    let mut clocks = 0;
+    let mut row = 0;
+    while SHORT_DATA && row < ROWS {
+        if latch_target(row) == 0 {
+            clocks += REPEAT_LATCH_GAP + 1;
+        }
+        row += 1;
+    }
+    clocks
+};
 // Full writes retain the historical one-clock inter-row separation. In
 // continuous latch mode it would create a second consecutive LAT-low clock
 // before the next repeated latch, so it is deliberately absent.
@@ -372,7 +390,7 @@ pub const DATA_INTER_ROW_DCLKS: usize = if SHORT_DATA { 0 } else { ROWS - 1 };
 pub const DATA_PAYLOAD_END: usize =
     49 + CONFIG_WRITES * (8 + TRANSFER_DCLKS)
         + DATA_PREFIX_DCLKS + ROWS * DATA_ROW_DCLKS + DATA_INTER_ROW_DCLKS
-        + DATA_SUFFIX_DCLKS + DIAGONAL_EXTRA_DCLKS;
+        + LATCH_EXTRA_DCLKS;
 // Preserve the previous even-clock head boundary and PARK padding.
 pub const DATA_END: usize = (DATA_PAYLOAD_END + 1) & !1;
 // Scan the displayed frame while loading the next image. Begin only after
@@ -401,7 +419,7 @@ const fn scan_period() -> usize {
 
 /// Full-write sweep is uniform across all pixels; latch mode keeps its sweep.
 pub const GRAY_SWEEP: &[u16] = if CONTINUOUS_LATCH { &[
-    0, 511, 1608, 2705, 3802, 4900, 5997, 7094, 8191,
+    0, 31, 63, 95, 127, 159, 191, 223, 255,
 ] } else { &[
     0, 15, 31, 63, 127, 255, 511, 1023, 2047, 4095, 8191,
 ] };
@@ -414,22 +432,18 @@ pub fn update_white(words: &mut [u32], gray: u16) {
             + DATA_PREFIX_DCLKS;
         for row in 0..ROWS {
             let target = latch_target(row);
-            let before_target = if !DIAGONAL_LATCH && target == 0 {
-                TRANSFER_DCLKS + (CHANNELS - 2) * (REPEAT_LATCH_GAP + 1)
-            } else {
-                (CHANNELS - 1 - target) * (REPEAT_LATCH_GAP + 1)
-            };
+            let before_target = (CHANNELS - 1 - target) * (REPEAT_LATCH_GAP + 1);
             let start = row_start + before_target;
-            for t in start..start + TRANSFER_DCLKS {
-                let bit = 15 - (t - start) % 16;
+            for t in start..start + latch_gray_dclks(row) {
+                let offset = t - start;
                 let mask = SIN;
                 words[t] = (words[t] & !mask)
-                    | if gray & (1 << bit) != 0 { mask } else { 0 };
+                    | if offset < 8 && gray & (1 << (7 - offset)) != 0 { mask } else { 0 };
             }
             row_start += DATA_ROW_DCLKS
-                + if DIAGONAL_LATCH && target == 0 { REPEAT_LATCH_GAP + 1 } else { 0 };
+                + if target == 0 { REPEAT_LATCH_GAP + 1 } else { 0 };
         }
-        assert_eq!(row_start + DATA_SUFFIX_DCLKS, DATA_PAYLOAD_END);
+        assert_eq!(row_start, DATA_PAYLOAD_END);
         return;
     }
     let mut start = 49 + CONFIG_WRITES * (8 + TRANSFER_DCLKS);
@@ -487,6 +501,32 @@ impl<'a> Waveform<'a> {
     fn shift(&mut self, value: u16, le_clocks: usize, gap: usize) {
         self.shift_rgb([value; 3], le_clocks, gap);
     }
+    // Requires a zeroed shift chain before every gray transfer.
+    fn shift_latch_gray(&mut self, value: u16, row: usize) {
+        assert!(value <= 255, "continuous latch gray must fit in 8 bits");
+        let clocks = latch_gray_dclks(row);
+        for t in 0..clocks {
+            let data = if t < 8 && value & (1 << (7 - t)) != 0 { SIN } else { 0 };
+            let latch = if t + 1 == clocks { LE } else { 0 };
+            self.sample(PARK | data | latch);
+        }
+    }
+    fn clear_latch_gray(&mut self, row: usize, latch: bool) {
+        self.hold(PARK, latch_clear_dclks(row) - 1);
+        self.sample(PARK | if latch { LE } else { 0 });
+    }
+    fn shift_pixels(&mut self, values: &[u16; TOTAL_CHANNELS], out: usize, gap: usize) {
+        self.hold(PARK, gap);
+        // Farthest chip first; the last serial word remains nearest SIN.
+        for chip in (0..CHAIN_COPIES).rev() {
+            let value = values[chip * CHANNELS + out];
+            assert!(value <= MAX_GRAY_INPUT);
+            for bit in (0..16).rev() {
+                let data = if value & (1 << bit) != 0 { SIN } else { 0 };
+                self.sample(PARK | data | if chip == 0 && bit == 0 { LE } else { 0 });
+            }
+        }
+    }
     fn shift_rgb(&mut self, values: [u16; 3], le_clocks: usize, gap: usize) {
         self.hold(PARK, gap);
         for copy in 0..CHAIN_COPIES {
@@ -502,13 +542,13 @@ impl<'a> Waveform<'a> {
         }
     }
 }
-pub type Frame = [[u16; CHANNELS]; ROWS];
+pub type Frame = [[u16; TOTAL_CHANNELS]; ROWS];
 
 /// Keep the moving diagonal or the fixed selected channel for latch mode.
 pub fn target_frame(mut frame: Frame) -> Frame {
     for (row, values) in frame.iter_mut().enumerate() {
         for (out, value) in values.iter_mut().enumerate() {
-            if out != latch_target(row) {
+            if out != latch_pixel(row) {
                 *value = 0;
             }
         }
@@ -518,7 +558,7 @@ pub fn target_frame(mut frame: Frame) -> Frame {
 
 /// Uniform gray throughout a frame; advance one gray level per frame.
 pub fn sweep_frame(frame_index: usize) -> Frame {
-    [[GRAY_SWEEP[frame_index % GRAY_SWEEP.len()]; CHANNELS]; ROWS]
+    [[GRAY_SWEEP[frame_index % GRAY_SWEEP.len()]; TOTAL_CHANNELS]; ROWS]
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -532,29 +572,29 @@ pub fn pattern_frame(pattern: Pattern, gray: u16) -> Frame {
     pattern_frame_range(pattern, [gray; 2])
 }
 
-/// Normal rotates the OUT0..OUT15 gradient right by one channel per row.
-/// Diagonal keeps only OUT(row % 16), fading from gray[1] to gray[0].
-/// The pattern repeats every 16 rows and on each cascaded chip.
+/// Normal rotates the full chain-width gradient right by one column per row.
+/// Diagonal keeps column (row % TOTAL_CHANNELS), fading gray[1] to gray[0].
+/// Column = chip * 16 + OUT; chip 0 is nearest the MCU.
 /// Integer interpolation rounds to the nearest gray and preserves endpoints.
 pub fn pattern_frame_range(pattern: Pattern, gray: [u16; 2]) -> Frame {
     assert!(gray.iter().all(|&value| value <= MAX_GRAY_INPUT));
-    let mut frame = [[0; CHANNELS]; ROWS];
+    let mut frame = [[0; TOTAL_CHANNELS]; ROWS];
     for (row, values) in frame.iter_mut().enumerate() {
         for (out, value) in values.iter_mut().enumerate() {
             let position = if matches!(pattern, Pattern::Diagonal) {
                 // One nonzero-capable channel per row permits zero repeats.
                 // Top-level gray controls the diagonal as well as full pixels.
-                let diagonal_row = row % CHANNELS;
+                let diagonal_row = row % TOTAL_CHANNELS;
                 if out != diagonal_row {
                     continue;
                 }
-                CHANNELS - 1 - diagonal_row
+                TOTAL_CHANNELS - 1 - diagonal_row
             } else {
-                (out + CHANNELS - row % CHANNELS) % CHANNELS
+                (out + TOTAL_CHANNELS - row % TOTAL_CHANNELS) % TOTAL_CHANNELS
             } as u32;
             // Weighted endpoints also support descending ranges without
             // unsigned subtraction. Serial transfer still runs OUT15..OUT0.
-            let last = (CHANNELS - 1) as u32;
+            let last = (TOTAL_CHANNELS - 1) as u32;
             *value = ((u32::from(gray[0]) * (last - position)
                 + u32::from(gray[1]) * position + last / 2) / last) as u16;
         }
@@ -603,37 +643,32 @@ fn encode_wave(wave: &mut Waveform<'_>, frame: &Frame, rotating: Option<[u16; 3]
     for (row, values) in frame.iter().enumerate() {
         if SHORT_DATA {
             let target = latch_target(row);
+            for (pixel, &value) in values.iter().enumerate() {
+                assert!(pixel == latch_pixel(row) || value == 0);
+            }
             for out in (0..CHANNELS).rev() {
-                assert!(out == target || values[out] == 0);
                 if out == target {
-                    wave.shift(values[out], 1, 0);
-                } else if out + 1 == target
-                    || (!DIAGONAL_LATCH && target == 0 && out == CHANNELS - 1)
-                {
-                    // OUT0's next serial slot is next row's OUT15.
-                    wave.shift(0, 1, 0);
+                    wave.shift_latch_gray(values[latch_pixel(row)], row);
+                } else if out + 1 == target {
+                    wave.clear_latch_gray(row, true);
                 } else {
                     // SIN stays zero, so the cleared register remains zero.
                     wave.hold(PARK, REPEAT_LATCH_GAP);
                     wave.hold(PARK | LE, 1);
                 }
             }
-            if DIAGONAL_LATCH && target == 0 {
+            if target == 0 {
                 // No channel remains in this row: clear without a latch,
                 // so the next row starts with zero in the shift register.
-                wave.shift(0, 0, 0);
+                wave.clear_latch_gray(row, false);
             }
         } else {
             for out in (0..CHANNELS).rev() {
                 // Reference has an extra DCLK between logical data rows.
                 let gap = usize::from(row != 0 && out == CHANNELS - 1);
-                wave.shift(values[out], 1, gap);
+                wave.shift_pixels(values, out, gap);
             }
         }
-    }
-    if DATA_SUFFIX_DCLKS != 0 {
-        // Clear the last row's target without consuming a 257th pixel.
-        wave.shift(0, 0, 0);
     }
     if rotating.is_none() {
         assert_eq!(wave.clocks, DATA_PAYLOAD_END);

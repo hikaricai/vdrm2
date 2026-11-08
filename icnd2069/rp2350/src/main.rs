@@ -76,7 +76,7 @@ async fn main(_spawner: Spawner) {
     protocol::encode_split(heads, tail, &image);
     rtt_target::rprintln!(
         "ICND2069: chain={}, {}x{}, groups={}, DCLK={} Hz, frame={} clocks",
-        protocol::CHAIN_COPIES, protocol::CHANNELS, protocol::ROWS, protocol::GROUPS,
+        protocol::CHAIN_COPIES, protocol::TOTAL_CHANNELS, protocol::ROWS, protocol::GROUPS,
         protocol::DCLK_HZ, protocol::FRAME_DCLKS,
     );
     rtt_target::rprintln!("wave RAM={} bytes", heads.len() * 4 + tail.len() * 4 + row_runs.len() * 4);
@@ -87,12 +87,19 @@ async fn main(_spawner: Spawner) {
         protocol::GROUPS - 1,
     );
     rtt_target::rprintln!(
-        "continuous_latch={}, target=OUT{}, repeated LAT-low gap={} clocks, row input={} clocks",
+        "continuous_latch={}, fixed column={}, repeated LAT-low gap={} clocks, base row input={} clocks",
         protocol::CONTINUOUS_LATCH, protocol::TARGET_CHANNEL, protocol::REPEAT_LATCH_GAP,
         protocol::DATA_ROW_DCLKS,
     );
     if protocol::CONTINUOUS_LATCH && protocol::DIAGONAL_LATCH {
-        rtt_target::rprintln!("diagonal latch: target=OUTrow, one gray + one zero transfer/row");
+        rtt_target::rprintln!("diagonal latch: column=row%{}, chip=column/16 (0 nearest MCU), OUT=column%16",
+            protocol::TOTAL_CHANNELS);
+    }
+    if protocol::CONTINUOUS_LATCH {
+        rtt_target::rprintln!(
+            "8-bit latch gray: 8+16*chip clocks, clear=16*(chains-chip), total={} clocks/row",
+            protocol::TRANSFER_DCLKS + 8,
+        );
     }
     rtt_target::rprintln!(
         "config.json: image={}, gray range={:?}, config interval={} ({} writes)",

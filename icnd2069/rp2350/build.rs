@@ -65,6 +65,8 @@ fn main() {
         "config.json: gray must be 0..=8192 or [start, end], each in 0..=8192");
     let (continuous_latch, latch_gap) = match config.repeat_latch {
         Some(RepeatLatch { repeat_latch_gap }) => {
+            assert!(gray.iter().all(|&value| value <= 255),
+                "config.json: repeat_latch uses 8-bit gray, each value must be 0..=255");
             assert!((1..=64).contains(&repeat_latch_gap),
                 "config.json: repeat_latch.repeat_latch_gap must be 1..=64");
             (true, repeat_latch_gap)
