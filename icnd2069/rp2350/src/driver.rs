@@ -4,7 +4,7 @@ use embassy_rp::{
     peripherals::{
         DMA_CH0, DMA_CH1, DMA_CH2, DMA_CH3, DMA_CH4, DMA_CH5,
         PIN_0, PIN_1, PIN_2, PIN_3, PIN_4, PIN_5, PIN_6, PIN_7, PIN_8,
-        PIN_9, PIN_10, PIN_11, PIN_12, PIN_13, PIN_14, PIN_15, PIN_16, PIN_17, PIO0,
+        PIN_9, PIN_10, PIN_11, PIN_13, PIN_15, PIN_16, PIN_17, PIN_18, PIN_19, PIO0,
     },
     pio::{self, program::pio_asm, Common, Pio, ShiftConfig, StateMachine},
     Peripheral, PeripheralRef,
@@ -19,26 +19,26 @@ bind_interrupts!(struct Irqs {
 });
 
 pub struct Pins {
-    pub r1: PIN_0,
-    pub g1: PIN_1,
-    pub b1: PIN_2,
-    pub r2: PIN_3,
-    pub g2: PIN_4,
-    pub b2: PIN_5,
-    pub r3: PIN_6,
-    pub g3: PIN_7,
-    pub b3: PIN_8,
-    pub r4: PIN_9,
-    pub g4: PIN_10,
-    pub b4: PIN_11,
+    pub r1: PIN_5,
+    pub g1: PIN_4,
+    pub b1: PIN_3,
+    pub r2: PIN_11,
+    pub g2: PIN_10,
+    pub b2: PIN_9,
+    pub r3: PIN_2,
+    pub g3: PIN_1,
+    pub b3: PIN_0,
+    pub r4: PIN_8,
+    pub g4: PIN_7,
+    pub b4: PIN_6,
     // ICND2069
-    pub dclk: PIN_12,
-    pub le: PIN_13,
-    pub row: PIN_14,
+    pub dclk: PIN_19,
+    pub le: PIN_18,
+    pub row: PIN_13,
     // RT5990
-    pub lck: PIN_15,
-    pub bk: PIN_16,
-    pub din: PIN_17,
+    pub lck: PIN_16,
+    pub lbk: PIN_15,
+    pub ldata: PIN_17,
 }
 
 /// SM0 drives RGB1..4 and LE/LCK/BK/DIN, with DCLK on side-set.
@@ -271,14 +271,17 @@ impl Driver {
         let le = common.make_pio_pin(pins.le);
         let dclk = common.make_pio_pin(pins.dclk);
         let lck = common.make_pio_pin(pins.lck);
-        let bk = common.make_pio_pin(pins.bk);
-        let din = common.make_pio_pin(pins.din);
+        let bk = common.make_pio_pin(pins.lbk);
+        let din = common.make_pio_pin(pins.ldata);
         let row = common.make_pio_pin(pins.row);
 
-        // >=30 MHz: four cycles, high 2 / low 2. Pull during the high phase
-        // removes a separate NOP. Lower presets retain the six-cycle program.
-        // IRQ4 synchronizes SM1; no captured delay replay.
-        let program = if crate::protocol::PIO_CYCLES_PER_DCLK == 4 {
+        // Separate configuration speed uses in-band OUT PC and autopull.
+        // Otherwise retain the four/six-cycle fixed-speed programs.
+        // IRQ4 synchronizes SM1 once per DCLK at either speed.
+        let program = if crate::protocol::SEPARATE_CFG_DCLK {
+            crate::dclk_program::dual_rate(
+                crate::protocol::PIO_CYCLES_PER_DCLK, crate::protocol::CFG_HALF_CYCLES)
+        } else if crate::protocol::PIO_CYCLES_PER_DCLK == 4 {
             pio_asm!(
                 ".side_set 1",
                 ".wrap_target",
@@ -302,22 +305,26 @@ impl Driver {
         let mut cfg = pio::Config::default();
         cfg.use_program(&loaded, &[&dclk]);
         // Convert the ratio, not 150 MHz itself (which exceeds U24F8's range).
-        // One 32-bit word per DCLK covers GP0..17; only 18 bits drive pins.
-        // Side-set owns DCLK (GP12); sticky SM1 output owns ROW (GP14).
+        // One 32-bit word per DCLK maps its low 19 bits to GP0..18.
+        // Side-set owns DCLK (GP19); sticky SM1 output owns ROW (GP13).
         // The low 8 fractional bits are always zero: never approximate a
         // requested DCLK with a fractional divider (which adds long cycles).
         assert_eq!(embassy_rp::clocks::clk_sys_freq(), crate::protocol::SYS_HZ);
         cfg.clock_divider = U24F8::from_bits(crate::protocol::PIO_CLKDIV_INT << 8);
         cfg.fifo_join = pio::FifoJoin::TxOnly;
         cfg.shift_out = ShiftConfig {
-            auto_fill: false,
+            auto_fill: crate::protocol::SEPARATE_CFG_DCLK,
             threshold: 32,
             direction: pio::ShiftDirection::Right,
         };
-        cfg.set_out_pins(&[
-            &r1, &g1, &b1, &r2, &g2, &b2, &r3, &g3, &b3, &r4, &g4, &b4,
-            &dclk, &le, &row, &lck, &bk, &din,
-        ]);
+        // OUT addresses a contiguous GPIO range, including unused GP12/14.
+        // Leave those two pins unmuxed and do not enable their output drivers.
+        let mut pin_cfg = cfg.get_pins();
+        pin_cfg.out_base = 0;
+        pin_cfg.out_count = 19;
+        // SAFETY: all driven pins in this range are owned by this driver.
+        // GP12/14 remain unmuxed; ROW is owned by this driver's sticky SM1.
+        unsafe { cfg.set_pins(pin_cfg); }
         sm.set_config(&cfg);
         let all = [
             &r1, &g1, &b1, &r2, &g2, &b2, &r3, &g3, &b3, &r4, &g4, &b4,
@@ -343,7 +350,7 @@ impl Driver {
         let mut row_cfg = pio::Config::default();
         row_cfg.use_program(&row_loaded, &[]);
         row_cfg.set_out_pins(&[&row]);
-        // GP14 lies inside SM0's contiguous OUT range. SM1 has higher pin
+        // GP13 lies inside SM0's contiguous OUT range. SM1 has higher pin
         // priority; continuously reassert its last ROW value so SM0 cannot
         // clear it between the sparse ROW transitions.
         row_cfg.out_sticky = true;

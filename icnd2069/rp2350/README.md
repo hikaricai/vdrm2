@@ -17,9 +17,11 @@ cargo run --release
 | 字段 | 当前值 | 可选值 / 含义 |
 |---|---|---|
 | `scan_repeats` | `1` | 整数 1～64；每帧 ROW 数为 `54 × 遍数`，03h 为 `遍数 - 1` |
+| `keep_scan_time` | `true` | 可选布尔值，省略为 `false`。开启时将全部 `54×scan_repeats` 次换行均匀分配到首个 ROW 至 gray 写入结束的窗口；扫描总时间不随遍数增加，平均换行速度随遍数同比增加 |
 | `config_interval` | `1000` | 整数 1～4294967295；第 0、N、2N…帧写完整配置 |
 | `chains` | `2` | 整数 1～8；每条数据线的级联芯片数，组成 `chains×16` 列，各芯片使用相同配置、独立像素 |
 | `dclk_mhz` | `30` | 数值 1、3、6、10、12.5、20、25、30、31、32、33、34、35、40、45；1/3 为低速时序实验档，40/45 为超频实验档 |
+| `cfg_dclk_mhz` | `1` | 可选，寄存器配置段的 DCLK MHz；省略跟随 `dclk_mhz`。正数且不高于 `dclk_mhz`，必须能以当前 PIO 时钟生成整数、对称的高低半周期，每半周期不超过 512 个 PIO 周期 |
 | `gclk_mhz` | `75` | 可选，目标内部 GCLK MHz，按 N=1 自动精确选择 M/P；必须 >25 MHz，>=100 MHz 允许作实验并提示；不能精确生成则报错；省略恢复旧 PLL 预设 |
 | `pwm_width` | `16` | 可选，整数 4～255，省略默认 16；写入 07h/08h，名义倍率为 `256/pwm_width` |
 | `_dclk_mhz_doc` | 频率说明 | 注释字段示例，按未知字段忽略，不参与编译参数选择 |
@@ -27,13 +29,23 @@ cargo run --release
 | `repeat_latch` | 当前启用 | 可选对象；存在时开启连续 latch，省略或改名时完整写入所有像素，显示同一斜线 |
 | `repeat_latch.repeat_latch_gap` | 备用值为 `1` | 整数 1～64，省略为 1；连续重复锁存之间 LAT 低电平的完整 DCLK 数 |
 
-除 `repeat_latch`、其中的 `repeat_latch_gap` 和注释字段外，上表字段必须填写。`repeat_latch: {}` 也会开启连续 latch，间隔默认为 1；已知参数的类型和范围仍会校验。
+`keep_scan_time=true` 时，扫描结束点与 `DATA_END` 对齐；不能整除的 DCLK 均匀分配，各行周期最多相差 1 DCLK。ROW 高电平仍为首行 12 DCLK、后续 4 DCLK，BK/LCK 脉宽保持 8/2 DCLK。为保留这些脉冲及 PIO 执行间隔，最短行周期必须达到 14 DCLK，遍数过多会编译报错。这一实验模式覆盖按 PWM/GCLK 核算的行周期，可能提前截断显示窗口；不会自动修改 GCLK 或 PWM_WIDTH。关闭或省略该字段时使用原行周期，扫描总时间随遍数增长。
+
+除 `cfg_dclk_mhz`、`keep_scan_time`、`repeat_latch`、其中的 `repeat_latch_gap` 和注释字段外，上表字段必须填写。`repeat_latch: {}` 也会开启连续 latch，间隔默认为 1；已知参数的类型和范围仍会校验。
 
 顶层和 `repeat_latch` 内的未知字段均忽略，可用于注释、备用配置和调试记录。例如把 `repeat_latch` 改名为 `_repeat_latch` 即可关闭连续 latch 并保留原配置；只有准确名为 `repeat_latch` 的对象生效。旧的 `pattern` / `_pattern` 字段也会忽略。文件仍需符合 JSON 语法，说明内容写成字段即可。
 
-行数 `ROWS=54`、每颗芯片通道数 `CHANNELS=16` 固定，图像宽度 `TOTAL_CHANNELS=chains×16`。所有档位均按 RGB 最长显示时序核算行周期，最少 60 DCLK；降低 GCLK 或增加 PWM 宽度时自动延长，必要时降低帧率。02h=`0x35`，03h=`scan_repeats - 1`。组合参数仍需满足 512 KiB RAM 容量。
+行数 `ROWS=54`、每颗芯片通道数 `CHANNELS=16` 固定，图像宽度 `TOTAL_CHANNELS=chains×16`。`keep_scan_time=false` 时，所有档位均按 RGB 最长显示时序核算行周期，最少 60 DCLK；降低 GCLK 或增加 PWM 宽度时自动延长，必要时降低帧率。02h=`0x35`，03h=`scan_repeats - 1`。组合参数仍需满足 512 KiB RAM 容量。
 
 ### DCLK 精确分频
+
+`cfg_dclk_mhz` 仅用于每个配置帧的寄存器配置段（PRE_ACT、配置解锁、寄存器写入、配置锁定及对齐时钟），启动配置和按 `config_interval` 周期重写均生效。公共 VSYNC/ENABLE 前缀、灰度写入、ROW/RT5990 扫描使用 `dclk_mhz`，普通帧完全跳过慢速段。ICND2069 的 M/P 配置仍按正常数据阶段的 `dclk_mhz` 与 `gclk_mhz` 计算。
+
+例如 `dclk_mhz=25`、`cfg_dclk_mhz=1`：PIO 运行在 150 MHz，普通 DCLK 高低各 3 个 PIO 周期，配置 DCLK 高低各 75 个周期。波形字的高位携带 PIO 跳转地址，在对应时钟边界选择延时，不依赖 DMA 完成中断切换分频；GPIO、配置位数和 ROW 同步脉冲数不变。省略配置速度或设为相同速度时继续使用原 PIO 程序。
+
+配置速度要求 `PIO时钟 / (2×配置DCLK)` 为整数。当前 25 MHz 档可以用 1 MHz；12.5 MHz 档的 PIO 时钟为 75 MHz，因此不能生成对称的 1 MHz，可用 1.25 MHz。不可精确生成的组合会编译报错。RTT 会打印两种速度，理论 FPS 已计入慢速配置耗时。1 MHz 配置阶段低于芯片指南的 PLL 输入范围，切回正常速度后的锁定与显示效果需实测。
+
+验证命令：`cargo build --release --locked`，随后运行 `python3 tools/check_dclk.py` 和 `python3 tools/check_chain_width.py`。前者解释执行实际生成的 PIO 指令，检查高低电平时长、快慢切换、GPIO 数据、ROW IRQ 计数与帧时长；这不代替实测 FIFO 供数及芯片输出。
 
 所有档位均满足 `DCLK = 系统时钟 / PIO 整数分频 / 每 DCLK 指令周期数`。PIO 分频器的小数部分固定为 0，高低电平各占一半周期；编译期校验系统 PLL 的 VCO 范围、输出频率和 PIO 整除关系，不允许用近似分数分频凑频率。
 

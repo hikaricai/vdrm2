@@ -2,6 +2,7 @@
 #![no_main]
 
 mod driver;
+mod dclk_program;
 mod protocol;
 mod scheduler;
 include!(concat!(env!("OUT_DIR"), "/pattern_config.rs"));
@@ -43,27 +44,27 @@ async fn main(_spawner: Spawner) {
         p.DMA_CH0,
         p.DMA_CH1,
         driver::Pins {
-            // 四组 RGB 数据，全部使用 Pico 2 排针引出的 GPIO。
-            r1: p.PIN_0,
-            g1: p.PIN_1,
-            b1: p.PIN_2,
-            r2: p.PIN_3,
-            g2: p.PIN_4,
-            b2: p.PIN_5,
-            r3: p.PIN_6,
-            g3: p.PIN_7,
-            b3: p.PIN_8,
-            r4: p.PIN_9,
-            g4: p.PIN_10,
-            b4: p.PIN_11,
+            // 开发板接线见 hardware/dev_sch.png，编号为 GPIO。
+            r1: p.PIN_5,
+            g1: p.PIN_4,
+            b1: p.PIN_3,
+            r2: p.PIN_11,
+            g2: p.PIN_10,
+            b2: p.PIN_9,
+            r3: p.PIN_2,
+            g3: p.PIN_1,
+            b3: p.PIN_0,
+            r4: p.PIN_8,
+            g4: p.PIN_7,
+            b4: p.PIN_6,
             // icnd2069
-            dclk: p.PIN_12,
-            le: p.PIN_13,
-            row: p.PIN_14,
+            dclk: p.PIN_19,
+            le: p.PIN_18,
+            row: p.PIN_13,
             // rt5990
-            lck: p.PIN_15,
-            bk: p.PIN_16,
-            din: p.PIN_17,
+            lck: p.PIN_16,
+            lbk: p.PIN_15,
+            ldata: p.PIN_17,
         },
     );
     let heads = HEADS.take();
@@ -80,7 +81,10 @@ async fn main(_spawner: Spawner) {
         protocol::DCLK_HZ, protocol::FRAME_DCLKS,
     );
     rtt_target::rprintln!("wave RAM={} bytes", heads.len() * 4 + tail.len() * 4 + row_runs.len() * 4);
-    rtt_target::rprintln!("RGB1..4=GP0..11 (RGB-specific config, mirrored gray), ICND DCLK/LE/ROW=GP12..14, RT LCK/BK/DIN=GP15..17");
+    rtt_target::rprintln!("configuration DCLK={} Hz, data/scan DCLK={} Hz",
+        protocol::CFG_DCLK_HZ, protocol::DCLK_HZ);
+    rtt_target::rprintln!("RGB1=GP5/4/3, RGB2=GP11/10/9, RGB3=GP2/1/0, RGB4=GP8/7/6 (RGB-specific config, mirrored gray)");
+    rtt_target::rprintln!("ICND CLK/LAT/ROW=GP19/18/13, RT LCLK/LBK/LDATA=GP16/15/17");
     rtt_target::rprintln!(
         "ROW pulses/frame={} ({} rows x {} sweeps), reg03=0x{:02x}",
         row_pulses, protocol::ROWS, protocol::SCAN_REPEATS,
@@ -110,6 +114,15 @@ async fn main(_spawner: Spawner) {
         protocol::NORMAL_FRAME_DCLKS);
     rtt_target::rprintln!("data/ROW overlap: first ROW at normal clock {}, VSYNC waits for both",
         protocol::FIRST_ROW - protocol::CONFIG_SKIP_DCLKS);
+    rtt_target::rprintln!(
+        "keep_scan_time={}, scan={} DCLK, ROW period={}..{} DCLK (base={}), scan/data end={}/{}",
+        protocol::KEEP_SCAN_TIME, protocol::SCAN_DCLKS,
+        protocol::ROW_DCLKS,
+        protocol::SCAN_DCLKS.div_ceil(protocol::ROWS * protocol::GROUPS),
+        protocol::BASE_ROW_DCLKS,
+        protocol::SCAN_END - protocol::CONFIG_SKIP_DCLKS,
+        protocol::DATA_END - protocol::CONFIG_SKIP_DCLKS,
+    );
     rtt_target::rprintln!("system clock={} Hz, PIO cycles/DCLK={}, divider={}+0/256",
         protocol::SYS_HZ, protocol::PIO_CYCLES_PER_DCLK, protocol::PIO_CLKDIV_INT);
     rtt_target::rprintln!(
@@ -131,14 +144,14 @@ async fn main(_spawner: Spawner) {
     } else if protocol::GCLK_HZ_ASSUMING_N1 > 100_000_000 {
         rtt_target::rprintln!("PLL experiment: calculated frequency exceeds guide's <100 MHz limit");
     }
-    // Ideal frame rate from DCLK counts, without FIFO stalls. Split the
+    // Ideal frame rate from PIO cycles, including slow configuration. Split the
     // division before scaling to avoid overflow at config_interval=u32::MAX.
     let fps_x100 = |frames: u64, clocks: u64| {
-        let ticks = u64::from(protocol::DCLK_HZ) * frames;
+        let ticks = u64::from(protocol::SYS_HZ / protocol::PIO_CLKDIV_INT) * frames;
         (ticks / clocks) * 100 + ((ticks % clocks) * 100 + clocks / 2) / clocks
     };
-    let normal_clocks = protocol::NORMAL_FRAME_DCLKS as u64;
-    let config_clocks = protocol::FRAME_DCLKS as u64;
+    let normal_clocks = protocol::NORMAL_FRAME_PIO_CYCLES;
+    let config_clocks = protocol::CONFIG_FRAME_PIO_CYCLES;
     let interval = u64::from(protocol::CONFIG_INTERVAL);
     let normal_fps = fps_x100(1, normal_clocks);
     let config_fps = fps_x100(1, config_clocks);

@@ -23,6 +23,15 @@ pub const SCAN_REPEATS: usize = match option_env!("ICND2069_SCAN_REPEATS") {
     None => 1,
 };
 pub const GROUPS: usize = SCAN_REPEATS;
+/// Fit all sweeps into the gray-loading window, regardless of repeat count.
+pub const KEEP_SCAN_TIME: bool = match option_env!("ICND2069_KEEP_SCAN_TIME") {
+    Some(value) => match value.as_bytes() {
+        b"0" => false,
+        b"1" => true,
+        _ => panic!("ICND2069_KEEP_SCAN_TIME must be 0 or 1"),
+    },
+    None => false,
+};
 /// Build-time preset in MHz. Integer PIO dividers keep each DCLK uniform.
 pub const DCLK_HZ: u32 = match option_env!("ICND2069_DCLK_MHZ") {
     Some(value) => match value.as_bytes() {
@@ -107,6 +116,25 @@ const fn unsigned_setting(value: &str) -> u32 {
     }
     n
 }
+pub const CFG_DCLK_HZ: u32 = match option_env!("ICND2069_CFG_DCLK_HZ") {
+    Some(value) => unsigned_setting(value),
+    None => DCLK_HZ,
+};
+/// Configuration uses an exact, symmetric PIO delay, without changing clk_sys.
+pub const CFG_HALF_CYCLES: u32 = {
+    assert!(CFG_DCLK_HZ > 0 && CFG_DCLK_HZ <= DCLK_HZ,
+        "cfg_dclk_mhz must be positive and no faster than dclk_mhz");
+    let pio_hz = SYS_HZ / PIO_CLKDIV_INT;
+    assert!(pio_hz % (2 * CFG_DCLK_HZ) == 0,
+        "cfg_dclk_mhz needs an integer PIO half-period at the selected dclk_mhz");
+    let half = pio_hz / (2 * CFG_DCLK_HZ);
+    assert!(half <= 512, "cfg_dclk_mhz is too low: maximum half-period is 512 PIO cycles");
+    half
+};
+pub const SEPARATE_CFG_DCLK: bool = CFG_HALF_CYCLES * 2 != PIO_CYCLES_PER_DCLK;
+// In the dual-rate PIO program, OUT PC consumes bits 19..31 after GPIO0..18.
+// PC=0 is the normal loop; PC=3 extends this clock's high and low phases.
+pub const CFG_CLOCK_TAG: u32 = 3 << 19;
 /// Zero selects the legacy PLL preset. Cargo emits this from config.json.
 pub const GCLK_TARGET_HZ: u32 = match option_env!("ICND2069_GCLK_HZ") {
     Some(value) => unsigned_setting(value),
@@ -168,7 +196,7 @@ pub const GCLK_HZ_ASSUMING_N1: u32 = {
 // ROW high remains 12 DCLK for the first pulse and four thereafter.
 // Recalculate at every DCLK preset: slower GCLK / wider PWM can require
 // more than 60 DCLK, in which case the complete scan and frame grow too.
-pub const ROW_DCLKS: usize = {
+pub const BASE_ROW_DCLKS: usize = {
     let mut ticks = [0usize; 3];
     let mut i = 0;
     while i < REGISTERS.len() {
@@ -289,16 +317,18 @@ pub const REPEAT_LATCH_GAP: usize = match option_env!("ICND2069_REPEAT_LATCH_GAP
     None => 1,
 };
 
-// Each sample maps directly to Pico 2 GP0..17. RGB1..4 occupy GP0..11.
+// Each sample maps directly to development-board GP0..18 (hardware/dev_sch.png).
+// RGB1=GP5/4/3, RGB2=GP11/10/9, RGB3=GP2/1/0, RGB4=GP8/7/6.
 // Configuration is color-specific; gray data still describes one image
 // mirrored onto all 12 inputs, not independently addressable RGB planes.
-pub const RGB_SIN: [u32; 3] = [0x0249, 0x0492, 0x0924];
+pub const RGB_SIN: [u32; 3] = [0x0924, 0x0492, 0x0249];
 pub const SIN: u32 = 0x0fff;
-pub const LE: u32 = 1 << 13;
-pub const LCK: u32 = 1 << 15;
-pub const BK: u32 = 1 << 16;
+pub const LE: u32 = 1 << 18;
+pub const LCK: u32 = 1 << 16;
+pub const BK: u32 = 1 << 15;
 pub const DIN: u32 = 1 << 17;
-// GP12/14 are zero here: side-set owns DCLK, and sticky SM1 output owns ROW.
+// GP12/14 are unused; GP13 is zero here because sticky SM1 owns ROW.
+// DCLK on GP19 is driven separately by side-set.
 // The reference's six channels do not measure RT5990 DIN/LCK/BK.
 // Preserve the existing board assumptions; do not claim measured parity.
 pub const BK_ACTIVE_HIGH: bool = true;
@@ -411,6 +441,18 @@ pub const CONFIG_INTERVAL: u32 = match option_env!("ICND2069_CONFIG_INTERVAL") {
 pub const COMMON_PREFIX_WORDS: usize = 34;
 pub const CONFIG_END_WORDS: usize = (49 + CONFIG_WRITES * (8 + TRANSFER_DCLKS) + 1) & !1;
 pub const CONFIG_SKIP_DCLKS: usize = CONFIG_END_WORDS - COMMON_PREFIX_WORDS;
+/// Full-frame duration in PIO cycles, including slow configuration clocks.
+pub const CONFIG_FRAME_PIO_CYCLES: u64 = FRAME_DCLKS as u64 * PIO_CYCLES_PER_DCLK as u64
+    + CONFIG_SKIP_DCLKS as u64 * (2 * CFG_HALF_CYCLES - PIO_CYCLES_PER_DCLK) as u64;
+pub const NORMAL_FRAME_PIO_CYCLES: u64 =
+    NORMAL_FRAME_DCLKS as u64 * PIO_CYCLES_PER_DCLK as u64;
+pub const fn clock_tag(clock: usize) -> u32 {
+    if SEPARATE_CFG_DCLK && clock >= COMMON_PREFIX_WORDS && clock < CONFIG_END_WORDS {
+        CFG_CLOCK_TAG
+    } else {
+        0
+    }
+}
 pub const DATA_ROW_DCLKS: usize = if SHORT_DATA {
     TRANSFER_DCLKS + 8 + (CHANNELS - 2) * (REPEAT_LATCH_GAP + 1)
 } else {
@@ -445,7 +487,21 @@ pub const DATA_END: usize = (DATA_PAYLOAD_END + 1) & !1;
 // Scan the displayed frame while loading the next image. Begin only after
 // configuration, so skipping its DMA segment shifts both streams equally.
 pub const FIRST_ROW: usize = CONFIG_END_WORDS + 16;
-pub const SCAN_END: usize = FIRST_ROW + scan_period();
+pub const SCAN_DCLKS: usize = if KEEP_SCAN_TIME {
+    DATA_END - FIRST_ROW
+} else {
+    GROUPS * ROWS * BASE_ROW_DCLKS
+};
+/// Minimum row period; kept-time scans distribute the remainder one clock at a time.
+pub const ROW_DCLKS: usize = {
+    let period = SCAN_DCLKS / (GROUPS * ROWS);
+    // Preserve the initial 12-DCLK ROW high and at least two low clocks.
+    // This also leaves room for the 8-DCLK BK and 2-DCLK DIN/LCK timing.
+    assert!(period >= 14,
+        "keep_scan_time: too many scan_repeats for the gray-loading window; reduce scan_repeats (minimum row period is 14 DCLK)");
+    period
+};
+pub const SCAN_END: usize = FIRST_ROW + SCAN_DCLKS;
 // VSYNC waits for both streams. Retain a PARK tail for DMA bank completion
 // even when a long data transfer outlasts the scan.
 pub const FRAME_DCLKS: usize = (
@@ -458,12 +514,14 @@ pub const HEAD_WORDS: usize = DATA_END;
 pub const TAIL_WORDS: usize = FRAME_WORDS - HEAD_WORDS;
 pub const ROW_RUN_COUNT: usize = GROUPS * ROWS * 2 + 1;
 pub const VSYNC_FALL: usize = 8;
-pub const fn row_period(_index: usize) -> usize {
-    ROW_DCLKS
+pub const fn row_start(index: usize) -> usize {
+    FIRST_ROW + index * SCAN_DCLKS / (GROUPS * ROWS)
 }
 
-const fn scan_period() -> usize {
-    GROUPS * ROWS * ROW_DCLKS
+pub const fn row_period(index: usize) -> usize {
+    // Refer to ROW_DCLKS so the pulse-width bound is checked for host tools too.
+    assert!(ROW_DCLKS >= 14);
+    row_start(index + 1) - row_start(index)
 }
 
 /// Full-write sweep is uniform across all pixels; latch mode keeps its sweep.
@@ -532,7 +590,7 @@ impl<'a> Waveform<'a> {
     }
     pub fn sample(&mut self, pins: u32) {
         let clock = self.clocks;
-        *self.word_mut(clock) = pins;
+        *self.word_mut(clock) = pins | clock_tag(clock);
         self.clocks += 1;
     }
     pub fn hold(&mut self, pins: u32, clocks: usize) {
@@ -727,7 +785,7 @@ fn encode_wave(wave: &mut Waveform<'_>, frame: &Frame, rotating: Option<[u16; 3]
     wave.hold(PARK, FRAME_DCLKS - wave.clocks);
 
     // Overlay independently running ROW on the serialized command/data bus.
-    // GROUPS complete sweeps x 54 rows with a fixed ROW_DCLKS cadence.
+    // GROUPS complete sweeps x 54 rows; distribute fractional periods in DCLK.
     let mut start = FIRST_ROW;
     for i in 0..GROUPS * ROWS {
         let period = row_period(i);
