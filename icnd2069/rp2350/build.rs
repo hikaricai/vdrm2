@@ -16,9 +16,21 @@ struct Config {
     gclk_mhz: Option<f64>,
     #[serde(default = "default_pwm_width")]
     pwm_width: u8,
+    #[serde(default = "default_pattern")]
+    pattern: String,
+    #[serde(default = "default_color")]
+    color: String,
     gray: Gray,
     #[serde(default, deserialize_with = "read_repeat_latch")]
     repeat_latch: Option<RepeatLatch>,
+}
+
+fn default_pattern() -> String {
+    "diagonal".into()
+}
+
+fn default_color() -> String {
+    "rgb".into()
 }
 
 #[derive(Deserialize)]
@@ -65,6 +77,19 @@ fn main() {
     assert!((1..=64).contains(&config.scan_repeats), "config.json: scan_repeats must be 1..=64");
     assert!(config.config_interval > 0, "config.json: config_interval must be 1..=4294967295");
     assert!((1..=8).contains(&config.chains), "config.json: chains must be 1..=8");
+    assert!(matches!(config.color.as_str(), "r" | "g" | "b" | "rg" | "rb" | "gb" | "rgb"),
+        "config.json: color must be r, g, b, rg, rb, gb or rgb");
+    let (pattern_kind, pattern_variant, target_channel) = if config.pattern == "diagonal" {
+        ("diagonal", "Diagonal".to_owned(), 0)
+    } else {
+        let column = config.pattern.strip_prefix("col_")
+            .filter(|value| !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit()))
+            .and_then(|value| value.parse::<usize>().ok())
+            .expect("config.json: pattern must be diagonal or col_x (x is a nonnegative decimal column)");
+        assert!(column < usize::from(config.chains) * 16,
+            "config.json: col_x column must be in 0..chains*16-1");
+        ("col", format!("Column({column})"), column)
+    };
     assert!(
         [1.0, 3.0, 6.0, 10.0, 12.5, 20.0, 25.0, 30.0, 31.0, 32.0, 33.0, 34.0, 35.0, 40.0, 45.0].contains(&config.dclk_mhz),
         "config.json: dclk_mhz must be 1, 3, 6, 10, 12.5, 20, 25, 30, 31, 32, 33, 34, 35, 40 or 45"
@@ -128,18 +153,19 @@ fn main() {
     println!("cargo:rustc-env=ICND2069_CFG_DCLK_HZ={}", cfg_dclk_hz.round() as u32);
     println!("cargo:rustc-env=ICND2069_GCLK_HZ={gclk_hz}");
     println!("cargo:rustc-env=ICND2069_PWM_WIDTH={}", config.pwm_width);
-    // The image is identical in both modes; only the transfer method changes.
-    println!("cargo:rustc-env=ICND2069_PATTERN=diagonal");
+    let pattern_name = &config.pattern;
+    println!("cargo:rustc-env=ICND2069_PATTERN={pattern_kind}");
+    println!("cargo:rustc-env=ICND2069_COLOR={}", config.color);
     println!("cargo:rustc-env=ICND2069_GRAY_MODE=static");
     println!("cargo:rustc-env=ICND2069_CONTINUOUS_LATCH={}", u8::from(continuous_latch));
     println!("cargo:rustc-env=ICND2069_SHORT_DATA={}", u8::from(continuous_latch));
     println!("cargo:rustc-env=ICND2069_REPEAT_LATCH_GAP={latch_gap}");
-    println!("cargo:rustc-env=ICND2069_TARGET_CHANNEL=0");
+    println!("cargo:rustc-env=ICND2069_TARGET_CHANNEL={target_channel}");
     fs::write(
         out.join("pattern_config.rs"),
         format!(
-            "const PATTERN: protocol::Pattern = protocol::Pattern::Diagonal;\n\
-             const PATTERN_NAME: &str = \"diagonal\";\n\
+            "const PATTERN: protocol::Pattern = protocol::Pattern::{pattern_variant};\n\
+             const PATTERN_NAME: &str = \"{pattern_name}\";\n\
              const GRAY_RANGE: [u16; 2] = {gray:?};\n"
         ),
     ).unwrap();

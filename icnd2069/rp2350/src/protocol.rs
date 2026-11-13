@@ -250,7 +250,11 @@ pub const fn latch_gray_dclks(row: usize) -> usize {
 pub const fn latch_clear_dclks(row: usize) -> usize {
     16 * (CHAIN_COPIES - latch_chip(row))
 }
-/// Enable repeated latches of zero; disabled shifts all 16 channel words.
+pub const COLUMN_PATTERN: bool = match option_env!("ICND2069_PATTERN") {
+    Some(value) => matches!(value.as_bytes(), b"col"),
+    None => false,
+};
+/// Both diagonal and fixed-column patterns permit repeated zero latches.
 pub const CONTINUOUS_LATCH: bool = match option_env!("ICND2069_CONTINUOUS_LATCH") {
     Some(value) => {
         let bytes = value.as_bytes();
@@ -319,10 +323,25 @@ pub const REPEAT_LATCH_GAP: usize = match option_env!("ICND2069_REPEAT_LATCH_GAP
 
 // Each sample maps directly to development-board GP0..18 (hardware/dev_sch.png).
 // RGB1=GP5/4/3, RGB2=GP11/10/9, RGB3=GP2/1/0, RGB4=GP8/7/6.
-// Configuration is color-specific; gray data still describes one image
-// mirrored onto all 12 inputs, not independently addressable RGB planes.
+// Configuration is color-specific; gray data describes one image mirrored
+// onto the selected colors in all four groups.
 pub const RGB_SIN: [u32; 3] = [0x0924, 0x0492, 0x0249];
 pub const SIN: u32 = 0x0fff;
+pub const COLOR: &str = match option_env!("ICND2069_COLOR") {
+    Some(value) => value,
+    None => "rgb",
+};
+/// Gray data only. Register writes and clear operations still address all colors.
+pub const GRAY_SIN: u32 = match COLOR.as_bytes() {
+    b"r" => RGB_SIN[0],
+    b"g" => RGB_SIN[1],
+    b"b" => RGB_SIN[2],
+    b"rg" => RGB_SIN[0] | RGB_SIN[1],
+    b"rb" => RGB_SIN[0] | RGB_SIN[2],
+    b"gb" => RGB_SIN[1] | RGB_SIN[2],
+    b"rgb" => SIN,
+    _ => panic!("color must be r, g, b, rg, rb, gb or rgb"),
+};
 pub const LE: u32 = 1 << 18;
 pub const LCK: u32 = 1 << 16;
 pub const BK: u32 = 1 << 15;
@@ -545,7 +564,7 @@ pub fn update_white(words: &mut [u32], gray: u16) {
                 let offset = t - start;
                 let mask = SIN;
                 words[t] = (words[t] & !mask)
-                    | if offset < 8 && gray & (1 << (7 - offset)) != 0 { mask } else { 0 };
+                    | if offset < 8 && gray & (1 << (7 - offset)) != 0 { GRAY_SIN } else { 0 };
             }
             row_start += DATA_ROW_DCLKS
                 + if target == 0 { REPEAT_LATCH_GAP + 1 } else { 0 };
@@ -561,7 +580,7 @@ pub fn update_white(words: &mut [u32], gray: u16) {
                 let bit = 15 - (t - start) % 16;
                 let mask = SIN;
                 words[t] = (words[t] & !mask)
-                    | if gray & (1 << bit) != 0 { mask } else { 0 };
+                    | if gray & (1 << bit) != 0 { GRAY_SIN } else { 0 };
             }
             start += TRANSFER_DCLKS;
         }
@@ -613,7 +632,7 @@ impl<'a> Waveform<'a> {
         assert!(value <= 255, "continuous latch gray must fit in 8 bits");
         let clocks = latch_gray_dclks(row);
         for t in 0..clocks {
-            let data = if t < 8 && value & (1 << (7 - t)) != 0 { SIN } else { 0 };
+            let data = if t < 8 && value & (1 << (7 - t)) != 0 { GRAY_SIN } else { 0 };
             let latch = if t + 1 == clocks { LE } else { 0 };
             self.sample(PARK | data | latch);
         }
@@ -629,7 +648,7 @@ impl<'a> Waveform<'a> {
             let value = values[chip * CHANNELS + out];
             assert!(value <= MAX_GRAY_INPUT);
             for bit in (0..16).rev() {
-                let data = if value & (1 << bit) != 0 { SIN } else { 0 };
+                let data = if value & (1 << bit) != 0 { GRAY_SIN } else { 0 };
                 self.sample(PARK | data | if chip == 0 && bit == 0 { LE } else { 0 });
             }
         }
@@ -671,6 +690,7 @@ pub fn sweep_frame(frame_index: usize) -> Frame {
 #[derive(Clone, Copy, Debug)]
 pub enum Pattern {
     Diagonal,
+    Column(usize),
     Normal,
 }
 
@@ -681,27 +701,41 @@ pub fn pattern_frame(pattern: Pattern, gray: u16) -> Frame {
 
 /// Normal rotates the full chain-width gradient right by one column per row.
 /// Diagonal keeps column (row % TOTAL_CHANNELS), fading gray[1] to gray[0].
+/// Column fades gray[1] to gray[0] from the first to the last row.
 /// Column = chip * 16 + OUT; chip 0 is nearest the MCU.
 /// Integer interpolation rounds to the nearest gray and preserves endpoints.
 pub fn pattern_frame_range(pattern: Pattern, gray: [u16; 2]) -> Frame {
     assert!(gray.iter().all(|&value| value <= MAX_GRAY_INPUT));
+    if let Pattern::Column(column) = pattern {
+        assert!(column < TOTAL_CHANNELS);
+    }
     let mut frame = [[0; TOTAL_CHANNELS]; ROWS];
     for (row, values) in frame.iter_mut().enumerate() {
         for (out, value) in values.iter_mut().enumerate() {
-            let position = if matches!(pattern, Pattern::Diagonal) {
-                // One nonzero-capable channel per row permits zero repeats.
-                // Top-level gray controls the diagonal as well as full pixels.
-                let diagonal_row = row % TOTAL_CHANNELS;
-                if out != diagonal_row {
-                    continue;
+            let (position, last) = match pattern {
+                Pattern::Diagonal => {
+                    // One nonzero-capable channel per row permits zero repeats.
+                    let diagonal_row = row % TOTAL_CHANNELS;
+                    if out != diagonal_row {
+                        continue;
+                    }
+                    (TOTAL_CHANNELS - 1 - diagonal_row, TOTAL_CHANNELS - 1)
                 }
-                TOTAL_CHANNELS - 1 - diagonal_row
-            } else {
-                (out + TOTAL_CHANNELS - row % TOTAL_CHANNELS) % TOTAL_CHANNELS
-            } as u32;
+                Pattern::Column(column) => {
+                    if out != column {
+                        continue;
+                    }
+                    (ROWS - 1 - row, ROWS - 1)
+                }
+                Pattern::Normal => (
+                    (out + TOTAL_CHANNELS - row % TOTAL_CHANNELS) % TOTAL_CHANNELS,
+                    TOTAL_CHANNELS - 1,
+                ),
+            };
             // Weighted endpoints also support descending ranges without
             // unsigned subtraction. Serial transfer still runs OUT15..OUT0.
-            let last = (TOTAL_CHANNELS - 1) as u32;
+            let position = position as u32;
+            let last = last as u32;
             *value = ((u32::from(gray[0]) * (last - position)
                 + u32::from(gray[1]) * position + last / 2) / last) as u16;
         }

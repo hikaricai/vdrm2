@@ -83,7 +83,9 @@ async fn main(_spawner: Spawner) {
     rtt_target::rprintln!("wave RAM={} bytes", heads.len() * 4 + tail.len() * 4 + row_runs.len() * 4);
     rtt_target::rprintln!("configuration DCLK={} Hz, data/scan DCLK={} Hz",
         protocol::CFG_DCLK_HZ, protocol::DCLK_HZ);
-    rtt_target::rprintln!("RGB1=GP5/4/3, RGB2=GP11/10/9, RGB3=GP2/1/0, RGB4=GP8/7/6 (RGB-specific config, mirrored gray)");
+    rtt_target::rprintln!("RGB1=GP5/4/3, RGB2=GP11/10/9, RGB3=GP2/1/0, RGB4=GP8/7/6");
+    rtt_target::rprintln!("color={}, gray GPIO mask=0x{:03x} (same image on all four groups)",
+        protocol::COLOR, protocol::GRAY_SIN);
     rtt_target::rprintln!("ICND CLK/LAT/ROW=GP19/18/13, RT LCLK/LBK/LDATA=GP16/15/17");
     rtt_target::rprintln!(
         "ROW pulses/frame={} ({} rows x {} sweeps), reg03=0x{:02x}",
@@ -98,6 +100,11 @@ async fn main(_spawner: Spawner) {
     if protocol::CONTINUOUS_LATCH && protocol::DIAGONAL_LATCH {
         rtt_target::rprintln!("diagonal latch: column=row%{}, chip=column/16 (0 nearest MCU), OUT=column%16",
             protocol::TOTAL_CHANNELS);
+    }
+    if protocol::COLUMN_PATTERN {
+        rtt_target::rprintln!("column={} (zero-based), chip={}, OUT={}, gray first/last row={}/{}",
+            protocol::TARGET_CHANNEL, protocol::TARGET_CHANNEL / 16,
+            protocol::TARGET_CHANNEL % 16, GRAY_RANGE[1], GRAY_RANGE[0]);
     }
     if protocol::CONTINUOUS_LATCH {
         rtt_target::rprintln!(

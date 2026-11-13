@@ -3,11 +3,15 @@
     "keep_scan_time": false,
     "config_interval": 1000,
     "chains": 2,
+
+    "color": "r",
+    "pattern_doc": "col_x：第 x 列，x 范围 0..chains*16-1，沿行从 gray[1] 渐变到 gray[0]；diagonal：斜线（默认）。两者均支持 repeat_latch。",
+    "pattern": "diagonal",
     "cfg_dclk_mhz": 1,
     "_dclk_mhz_doc": "单位 MHz；当前恢复 dsview/icnd2069/261024_50m_start_10s.summary.md 记录的实测 DCLK≈12.5 MHz；文件名中的50m是采样率。",
-    "dclk_mhz": 10,
+    "dclk_mhz": 30,
     "_gclk_mhz_doc": "当前恢复抓包 04h=04h、05h=0Ah、06h=01h：按 N=1 计算 GCLK=31.25 MHz，非实测内部频率。12.5/31.25 组合专门保留抓包 M=4/P=10，DCLK/M=3.125 MHz 低于指南范围；其他组合自动精确选参。行周期仍自动核算，最少60 DCLK。",
-    "gclk_mhz": 30,
+    "gclk_mhz": 90,
     "_pwm_width_doc": "恢复 dsview/icnd2069/ICND2069-抓包寄存器汇总.md 中 07h=08h=20h（32），名义 Accelerate Rate=8倍；允许整数4..255。",
     "pwm_width": 32,
     "repeat_latch": {
