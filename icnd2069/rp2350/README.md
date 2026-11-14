@@ -10,7 +10,7 @@ cargo run --release
 
 编译参数全部读取本目录的 [`config.json`](config.json)，修改后 Cargo 自动重新构建。`bash build.sh` 执行同一条命令；只编译使用 `cargo build --release`。
 
-当前配置：**每路 1 颗、54 行、每颗 15 列、1 遍扫描、DCLK 30 MHz、GCLK 90 MHz（按 N=1）、PWM_WIDTH=32、Accelerate Rate 8×**。`07h=08h=20h`，单 group 的理论灰阶容量为 128；8 bit 指串行输入宽度。图像宽度为 `chains×15`，每颗仅 OUT0～OUT14 接 LED，OUT15 始终写零。灰度渐变覆盖有效列。顶层 `gray` 设置灰度范围，两种锁存方式在 0～255 范围内发送相同图案；更高输入值需关闭 `repeat_latch`。旧的 `ICND2069_*` 环境变量不再覆盖 JSON。
+当前配置：**每路配置 6 颗、灰度数据 2 颗、54 行、每颗 15 列、1 遍扫描、DCLK 30 MHz、GCLK 90 MHz（按 N=1）、PWM_WIDTH=32、Accelerate Rate 8×**。`07h=08h=20h`，单 group 的理论灰阶容量为 128；8 bit 指串行输入宽度。图像宽度为 `chains×15`，每颗仅 OUT0～OUT14 接 LED，OUT15 始终写零。灰度渐变覆盖有效列。顶层 `gray` 设置灰度范围，两种锁存方式在 0～255 范围内发送相同图案；更高输入值需关闭 `repeat_latch`。旧的 `ICND2069_*` 环境变量不再覆盖 JSON。
 
 ## config.json 参数
 
@@ -20,7 +20,8 @@ cargo run --release
 | `lines` | `54` | 可选，整数 1～64，省略默认 54；设置图像高度和扫描行数，02h 为 `lines - 1` |
 | `keep_scan_time` | `false` | 可选布尔值，省略为 `false`。开启时将全部 `lines×scan_repeats` 次换行均匀分配到首个 ROW 至 gray 写入结束的窗口；扫描总时间不随遍数增加，平均换行速度随遍数同比增加 |
 | `config_interval` | `1000` | 整数 1～4294967295；第 0、N、2N…帧写完整配置 |
-| `chains` | `1` | 整数 1～8；每条数据线的级联芯片数，组成 `chains×15` 列，各芯片使用相同配置、独立像素 |
+| `chains` | `2` | 整数 1～8；灰度数据的级联芯片数，组成 `chains×15` 列、独立像素 |
+| `cfg_chains` | `6` | 可选，整数 1～8；配置数据的级联芯片数，省略时跟随 `chains`；各芯片使用相同配置 |
 | `pattern` | `"diagonal"` | 可选，`col_x` 点亮指定列，x 从 0 开始，范围 `0..chains*15-1`；该列沿行按 `gray[1] → gray[0]` 渐变，`lines=1` 时取 `gray[1]`。`diagonal` 为斜线，也是省略时的默认值 |
 | `color` | `"rgb"` | 可选，`r`/`g`/`b` 分别仅亮红/绿/蓝；`rg`/`rb`/`gb` 亮对应两色；`rgb` 三色全亮。省略默认 `rgb`，非法值编译报错 |
 | `dclk_mhz` | `30` | 数值 1、3、6、10、12.5、20、25、30、31、32、33、34、35、40、45；1/3 为低速时序实验档，40/45 为超频实验档 |
@@ -34,13 +35,15 @@ cargo run --release
 
 `keep_scan_time=true` 时，扫描结束点与 `DATA_END` 对齐；不能整除的 DCLK 均匀分配，各行周期最多相差 1 DCLK。ROW 高电平仍为首行 12 DCLK、后续 4 DCLK，BK/LCK 脉宽保持 8/2 DCLK。为保留这些脉冲及 PIO 执行间隔，最短行周期必须达到 14 DCLK，遍数过多会编译报错。这一实验模式覆盖按 PWM/GCLK 核算的行周期，可能提前截断显示窗口；不会自动修改 GCLK 或 PWM_WIDTH。关闭或省略该字段时使用原行周期，扫描总时间随遍数增长。
 
-除 `lines`、`color`、`pattern`、`cfg_dclk_mhz`、`gclk_mhz`、`pwm_width`、`keep_scan_time`、`repeat_latch`、其中的 `repeat_latch_gap` 和注释字段外，上表字段必须填写。`repeat_latch: {}` 也会开启连续 latch，间隔默认为 1；已知参数的类型和范围仍会校验。
+除 `lines`、`color`、`pattern`、`cfg_chains`、`cfg_dclk_mhz`、`gclk_mhz`、`pwm_width`、`keep_scan_time`、`repeat_latch`、其中的 `repeat_latch_gap` 和注释字段外，上表字段必须填写。`repeat_latch: {}` 也会开启连续 latch，间隔默认为 1；已知参数的类型和范围仍会校验。
 
 顶层和 `repeat_latch` 内的未知字段均忽略，可用于注释、备用配置和调试记录。例如把 `repeat_latch` 改名为 `_repeat_latch` 即可关闭连续 latch 并保留原配置。`pattern` 为正式配置，仅接受 `col_x` / `diagonal`；旧 `line`、非法格式和越界列号会编译报错。`pattern_doc` / `_pattern` 仍是忽略的说明字段。文件仍需符合 JSON 语法，说明内容写成字段即可。
 
 行数 `ROWS=lines`，每颗芯片协议通道数 `CHANNELS=16` 固定，有效 LED 列数 `LED_CHANNELS=15`，图像宽度 `TOTAL_CHANNELS=chains×15`。OUT15 不占逻辑列，但保留零灰度锁存槽，协议仍按 OUT15→OUT0 发送。`keep_scan_time=false` 时，所有档位均按 RGB 最长显示时序核算行周期，最少 60 DCLK；降低 GCLK 或增加 PWM 宽度时自动延长，必要时降低帧率。02h=`lines - 1`（当前 54 行为 `0x35`），03h=`scan_repeats - 1`。图像大小、灰度写入长度、ROW 脉冲数和 DMA 缓冲随行数自动调整，修改后需重新编译烧录。组合参数仍需满足 512 KiB RAM 容量。
 
 ### DCLK 精确分频
+
+`cfg_chains` 控制配置解锁、45 项寄存器写入和配置锁定的串行长度，每次发送 `16×cfg_chains` bit；启动和周期配置均生效。当前 `cfg_chains=6`、`chains=2`：配置发送 96 bit，灰度仍按 2 颗、30 列生成，灰度清零长度也仍按 `chains`。配置段长度、DMA 跳过边界和帧率计算随之调整。
 
 `cfg_dclk_mhz` 仅用于每个配置帧的寄存器配置段（PRE_ACT、配置解锁、寄存器写入、配置锁定及对齐时钟），启动配置和按 `config_interval` 周期重写均生效。公共 VSYNC/ENABLE 前缀、灰度写入、ROW/RT5990 扫描使用 `dclk_mhz`，普通帧完全跳过慢速段。ICND2069 的 M/P 配置仍按正常数据阶段的 `dclk_mhz` 与 `gclk_mhz` 计算。
 
@@ -199,7 +202,7 @@ probe-rs reset --chip RP235x --protocol swd --speed 1000
 
 GP25 保留给 Pico 2 板载 LED；共地可接排针 3、8、13、18、23、28 或 38 脚。**旧接线需要按此表重接。**
 
-配置按 R/G/B 分别发送，四组中同色使用相同配置。`color` 只选择灰度输出：例如 `r` 向 R1～R4 发送图案灰度，G1～G4/B1～B4 发送零；三色配置、移位清零、DCLK/LE/ROW 时序均保留。连续 latch、完整像素写入和灰度更新均遵循这一选择，四组仍共享同一图案。`chains` 表示每条数据线的级联芯片数，四组 RGB 不需要把它乘以 12。
+配置按 R/G/B 分别发送，四组中同色使用相同配置。`color` 只选择灰度输出：例如 `r` 向 R1～R4 发送图案灰度，G1～G4/B1～B4 发送零；三色配置、移位清零、DCLK/LE/ROW 时序均保留。连续 latch、完整像素写入和灰度更新均遵循这一选择，四组仍共享同一图案。`chains` 和 `cfg_chains` 分别表示每条数据线的灰度与配置级联数，四组 RGB 不需要把它们乘以 12。
 
 ### RGB 配置
 

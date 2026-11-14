@@ -4,8 +4,9 @@
     "keep_scan_time": false,
     "config_interval": 1000,
     "chains": 2,
+    "cfg_chains": 6,
 
-    "color": "r",
+    "color": "rgb",
     "pattern_doc": "每颗使用 OUT0..OUT14，OUT15 未接 LED、写零；col_x：第 x 列，x 范围 0..chains*15-1，沿行从 gray[1] 渐变到 gray[0]；diagonal：斜线（默认）。两者均支持 repeat_latch。",
     "pattern": "diagonal",
     "cfg_dclk_mhz": 1,

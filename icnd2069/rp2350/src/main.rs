@@ -81,8 +81,9 @@ async fn main(_spawner: Spawner) {
         protocol::DCLK_HZ, protocol::FRAME_DCLKS,
     );
     rtt_target::rprintln!("wave RAM={} bytes", heads.len() * 4 + tail.len() * 4 + row_runs.len() * 4);
-    rtt_target::rprintln!("configuration DCLK={} Hz, data/scan DCLK={} Hz",
-        protocol::CFG_DCLK_HZ, protocol::DCLK_HZ);
+    rtt_target::rprintln!("configuration chains={}, DCLK={} Hz; data chains={}, DCLK={} Hz",
+        protocol::CFG_CHAIN_COPIES, protocol::CFG_DCLK_HZ,
+        protocol::CHAIN_COPIES, protocol::DCLK_HZ);
     rtt_target::rprintln!("RGB1=GP5/4/3, RGB2=GP11/10/9, RGB3=GP2/1/0, RGB4=GP8/7/6");
     rtt_target::rprintln!("color={}, gray GPIO mask=0x{:03x} (same image on all four groups)",
         protocol::COLOR, protocol::GRAY_SIN);

@@ -11,6 +11,8 @@ struct Config {
     keep_scan_time: bool,
     config_interval: u32,
     chains: u8,
+    #[serde(default)]
+    cfg_chains: Option<u8>,
     dclk_mhz: f64,
     #[serde(default)]
     cfg_dclk_mhz: Option<f64>,
@@ -84,6 +86,8 @@ fn main() {
     assert!((1..=64).contains(&config.lines), "config.json: lines must be 1..=64");
     assert!(config.config_interval > 0, "config.json: config_interval must be 1..=4294967295");
     assert!((1..=8).contains(&config.chains), "config.json: chains must be 1..=8");
+    let cfg_chains = config.cfg_chains.unwrap_or(config.chains);
+    assert!((1..=8).contains(&cfg_chains), "config.json: cfg_chains must be 1..=8");
     assert!(matches!(config.color.as_str(), "r" | "g" | "b" | "rg" | "rb" | "gb" | "rgb"),
         "config.json: color must be r, g, b, rg, rb, gb or rgb");
     let (pattern_kind, pattern_variant, target_channel) = if config.pattern == "diagonal" {
@@ -157,6 +161,7 @@ fn main() {
     println!("cargo:rustc-env=ICND2069_KEEP_SCAN_TIME={}", u8::from(config.keep_scan_time));
     println!("cargo:rustc-env=ICND2069_CONFIG_INTERVAL={}", config.config_interval);
     println!("cargo:rustc-env=ICND2069_CHAIN_COPIES={}", config.chains);
+    println!("cargo:rustc-env=ICND2069_CFG_CHAIN_COPIES={cfg_chains}");
     println!("cargo:rustc-env=ICND2069_DCLK_MHZ={}", config.dclk_mhz);
     println!("cargo:rustc-env=ICND2069_CFG_DCLK_HZ={}", cfg_dclk_hz.round() as u32);
     println!("cargo:rustc-env=ICND2069_GCLK_HZ={gclk_hz}");

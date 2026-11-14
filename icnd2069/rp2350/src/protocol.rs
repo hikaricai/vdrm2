@@ -240,7 +240,7 @@ pub const BASE_ROW_DCLKS: usize = {
 // the new 16-scan/full-config mode must be measured independently.
 pub const MAX_GRAY_INPUT: u16 = if CONTINUOUS_LATCH { 255 } else { 8192 };
 pub const DEMO_GRAY: u16 = 8192;
-/// Cascaded ICND2069 chips per input; chip 0 is nearest the MCU.
+/// Grayscale ICND2069 chips per input; chip 0 is nearest the MCU.
 pub const CHAIN_COPIES: usize = match option_env!("ICND2069_CHAIN_COPIES") {
     Some(value) => {
         let bytes = value.as_bytes();
@@ -250,6 +250,16 @@ pub const CHAIN_COPIES: usize = match option_env!("ICND2069_CHAIN_COPIES") {
     None => 1,
 };
 pub const TRANSFER_DCLKS: usize = 16 * CHAIN_COPIES;
+/// Configuration cascade length; defaults to the grayscale cascade length.
+pub const CFG_CHAIN_COPIES: usize = {
+    let copies = match option_env!("ICND2069_CFG_CHAIN_COPIES") {
+        Some(value) => unsigned_setting(value) as usize,
+        None => CHAIN_COPIES,
+    };
+    assert!(copies >= 1 && copies <= 8, "cfg_chains must be 1..=8");
+    copies
+};
+pub const CFG_TRANSFER_DCLKS: usize = 16 * CFG_CHAIN_COPIES;
 /// Logical image width excludes each chip's unconnected OUT15.
 pub const TOTAL_CHANNELS: usize = LED_CHANNELS * CHAIN_COPIES;
 // Starting with a cleared chain, shift one gray byte and move it to the
@@ -468,7 +478,7 @@ pub const CONFIG_INTERVAL: u32 = match option_env!("ICND2069_CONFIG_INTERVAL") {
 // One word per clock. Keep the same 34-clock prefix and even clock boundary
 // as the former packed format, so configuration skipping preserves timing.
 pub const COMMON_PREFIX_WORDS: usize = 34;
-pub const CONFIG_END_WORDS: usize = (49 + CONFIG_WRITES * (8 + TRANSFER_DCLKS) + 1) & !1;
+pub const CONFIG_END_WORDS: usize = (49 + CONFIG_WRITES * (8 + CFG_TRANSFER_DCLKS) + 1) & !1;
 pub const CONFIG_SKIP_DCLKS: usize = CONFIG_END_WORDS - COMMON_PREFIX_WORDS;
 /// Full-frame duration in PIO cycles, including slow configuration clocks.
 pub const CONFIG_FRAME_PIO_CYCLES: u64 = FRAME_DCLKS as u64 * PIO_CYCLES_PER_DCLK as u64
@@ -508,7 +518,7 @@ pub const LATCH_EXTRA_DCLKS: usize = {
 // before the next repeated latch, so it is deliberately absent.
 pub const DATA_INTER_ROW_DCLKS: usize = if SHORT_DATA { 0 } else { ROWS - 1 };
 pub const DATA_PAYLOAD_END: usize =
-    49 + CONFIG_WRITES * (8 + TRANSFER_DCLKS)
+    49 + CONFIG_WRITES * (8 + CFG_TRANSFER_DCLKS)
         + DATA_PREFIX_DCLKS + ROWS * DATA_ROW_DCLKS + DATA_INTER_ROW_DCLKS
         + LATCH_EXTRA_DCLKS;
 // Preserve the previous even-clock head boundary and PARK padding.
@@ -564,7 +574,7 @@ pub const GRAY_SWEEP: &[u16] = if CONTINUOUS_LATCH { &[
 pub fn update_white(words: &mut [u32], gray: u16) {
     assert!(gray <= MAX_GRAY_INPUT);
     if SHORT_DATA {
-        let mut row_start = 49 + CONFIG_WRITES * (8 + TRANSFER_DCLKS)
+        let mut row_start = 49 + CONFIG_WRITES * (8 + CFG_TRANSFER_DCLKS)
             + DATA_PREFIX_DCLKS;
         for row in 0..ROWS {
             let target = latch_target(row);
@@ -582,7 +592,7 @@ pub fn update_white(words: &mut [u32], gray: u16) {
         assert_eq!(row_start, DATA_PAYLOAD_END);
         return;
     }
-    let mut start = 49 + CONFIG_WRITES * (8 + TRANSFER_DCLKS);
+    let mut start = 49 + CONFIG_WRITES * (8 + CFG_TRANSFER_DCLKS);
     for row in 0..ROWS {
         for transfer in 0..CHANNELS {
             start += usize::from(row != 0 && transfer == 0);
@@ -636,8 +646,8 @@ impl<'a> Waveform<'a> {
         // The following hold/transfer emits the falling edge. It is not an
         // extra DCLK appended to the command's high interval.
     }
-    fn shift(&mut self, value: u16, le_clocks: usize, gap: usize) {
-        self.shift_rgb([value; 3], le_clocks, gap);
+    fn shift_config(&mut self, value: u16, gap: usize) {
+        self.shift_config_rgb([value; 3], gap);
     }
     // Requires a zeroed shift chain before every gray transfer.
     fn shift_latch_gray(&mut self, value: u16, row: usize) {
@@ -665,12 +675,12 @@ impl<'a> Waveform<'a> {
             }
         }
     }
-    fn shift_rgb(&mut self, values: [u16; 3], le_clocks: usize, gap: usize) {
+    fn shift_config_rgb(&mut self, values: [u16; 3], gap: usize) {
         self.hold(PARK, gap);
-        for copy in 0..CHAIN_COPIES {
+        for copy in 0..CFG_CHAIN_COPIES {
             for bit in (0..16).rev() {
                 let data = rgb_bit(values, bit);
-                let latch = if copy == CHAIN_COPIES - 1 && bit < le_clocks {
+                let latch = if copy == CFG_CHAIN_COPIES - 1 && bit < WR_CFG {
                     LE
                 } else {
                     0
@@ -784,19 +794,19 @@ fn encode_wave(wave: &mut Waveform<'_>, frame: &Frame, rotating: Option<[u16; 3]
     wave.command_at(5, VSYNC);
     wave.command_at(20, ENABLE);
     wave.command_at(34, PRE_ACT);
-    wave.shift(0x00aa, WR_CFG, 9); // first WR_CFG falls at 57+TRANSFER_DCLKS.
-    wave.shift(0x01aa, WR_CFG, 8);
+    wave.shift_config(0x00aa, 9); // first WR_CFG falls at 57+CFG_TRANSFER_DCLKS.
+    wave.shift_config(0x01aa, 8);
     if let Some(value) = rotating {
-        wave.shift_rgb(value, WR_CFG, 8);
+        wave.shift_config_rgb(value, 8);
     } else {
         for &(address, value) in REGISTERS {
-            wave.shift_rgb(config_words(address, value), WR_CFG, 8);
+            wave.shift_config_rgb(config_words(address, value), 8);
         }
     }
-    wave.shift(0x0055, WR_CFG, if rotating.is_some() { 9 } else { 8 });
-    wave.shift(0x0155, WR_CFG, 8);
+    wave.shift_config(0x0055, if rotating.is_some() { 9 } else { 8 });
+    wave.shift_config(0x0155, 8);
     if SHORT_DATA {
-        wave.shift(0, 0, 0);
+        wave.hold(PARK, TRANSFER_DCLKS);
     }
     for (row, values) in frame.iter().enumerate() {
         if SHORT_DATA {
@@ -899,8 +909,8 @@ pub fn update_rotation(words: &mut [u32], value: [u16; 3]) {
     // First transfer starts at 57, with an 8-DCLK gap between transfers.
     // Derive the third word's position for the configured chain length.
     // Only SIN changes. Preserve LE and the overlapping ROW controls.
-    let start = 57 + 2 * (TRANSFER_DCLKS + 8);
-    for t in start..start + TRANSFER_DCLKS {
+    let start = 57 + 2 * (CFG_TRANSFER_DCLKS + 8);
+    for t in start..start + CFG_TRANSFER_DCLKS {
         let bit = 15 - (t - start) % 16;
         let mask = SIN;
         words[t] = (words[t] & !mask) | rgb_bit(value, bit);
