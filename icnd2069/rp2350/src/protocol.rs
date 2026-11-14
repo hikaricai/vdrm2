@@ -129,21 +129,20 @@ pub const CFG_DCLK_HZ: u32 = match option_env!("ICND2069_CFG_DCLK_HZ") {
     Some(value) => unsigned_setting(value),
     None => DCLK_HZ,
 };
-/// Configuration uses an exact, symmetric PIO delay, without changing clk_sys.
-pub const CFG_HALF_CYCLES: u32 = {
+/// Exact 16.8 divider for the same fixed PIO program at configuration speed.
+pub const CFG_CLKDIV_BITS: u32 = {
     assert!(CFG_DCLK_HZ > 0 && CFG_DCLK_HZ <= DCLK_HZ,
         "cfg_dclk_mhz must be positive and no faster than dclk_mhz");
-    let pio_hz = SYS_HZ / PIO_CLKDIV_INT;
-    assert!(pio_hz % (2 * CFG_DCLK_HZ) == 0,
-        "cfg_dclk_mhz needs an integer PIO half-period at the selected dclk_mhz");
-    let half = pio_hz / (2 * CFG_DCLK_HZ);
-    assert!(half <= 512, "cfg_dclk_mhz is too low: maximum half-period is 512 PIO cycles");
-    half
+    assert!(SYS_HZ % (2 * CFG_DCLK_HZ) == 0,
+        "cfg_dclk_mhz needs an integer PIO half-period");
+    let numerator = (SYS_HZ as u64) << 8;
+    let denominator = PIO_CYCLES_PER_DCLK as u64 * CFG_DCLK_HZ as u64;
+    assert!(numerator % denominator == 0,
+        "cfg_dclk_mhz needs an exact 16.8 PIO divider");
+    let bits = numerator / denominator;
+    assert!(bits >= 256 && bits <= 0x00ff_ffff, "cfg_dclk_mhz divider exceeds 65535");
+    bits as u32
 };
-pub const SEPARATE_CFG_DCLK: bool = CFG_HALF_CYCLES * 2 != PIO_CYCLES_PER_DCLK;
-// In the dual-rate PIO program, OUT PC consumes bits 19..31 after GPIO0..18.
-// PC=0 is the normal loop; PC=3 extends this clock's high and low phases.
-pub const CFG_CLOCK_TAG: u32 = 3 << 19;
 /// Zero selects the legacy PLL preset. Cargo emits this from config.json.
 pub const GCLK_TARGET_HZ: u32 = match option_env!("ICND2069_GCLK_HZ") {
     Some(value) => unsigned_setting(value),
@@ -200,45 +199,15 @@ pub const GCLK_HZ_ASSUMING_N1: u32 = {
     }
     (dclk * p / m) as u32
 };
-// Guide p.14-15: ceil((2*0E + 4*07 + 2*0F + 2*0D)/R) + 1 + E,
-// E=2 minimum. Use the longest RGB timing and retain at least 60 DCLK.
+// External scan timing is independent of the chip's PWM/PLL registers.
+// keep_scan_time may instead fit all rows into the gray-loading window.
 // ROW high remains 12 DCLK for the first pulse and four thereafter.
-// Recalculate at every DCLK preset: slower GCLK / wider PWM can require
-// more than 60 DCLK, in which case the complete scan and frame grow too.
-pub const BASE_ROW_DCLKS: usize = {
-    let mut ticks = [0usize; 3];
-    let mut i = 0;
-    while i < REGISTERS.len() {
-        let (address, values) = REGISTERS[i];
-        let (mask, factor) = match address {
-            0x07 => (0xff, 4),
-            0x0d | 0x0e => (0x1f, 2),
-            0x0f => (0x0f, 2),
-            _ => (0, 0),
-        };
-        let mut color = 0;
-        while color < 3 {
-            ticks[color] += (values[color] & mask) as usize * factor;
-            color += 1;
-        }
-        i += 1;
-    }
-    let mut period = 60;
-    let mut color = 0;
-    while color < 3 {
-        let required = (ticks[color] * PLL_M as usize + PLL_P as usize - 1)
-            / PLL_P as usize + 3;
-        if required > period {
-            period = required;
-        }
-        color += 1;
-    }
-    period
-};
+pub const BASE_ROW_DCLKS: usize = 60;
 // Software input limit retained from the saved NOVA image. This is NOT a
 // calibrated PWM full scale. The previous 40-scan capture saturated by 512;
 // the new 16-scan/full-config mode must be measured independently.
 pub const MAX_GRAY_INPUT: u16 = if CONTINUOUS_LATCH { 255 } else { 8192 };
+#[cfg(not(target_os = "none"))]
 pub const DEMO_GRAY: u16 = 8192;
 /// Grayscale ICND2069 chips per input; chip 0 is nearest the MCU.
 pub const CHAIN_COPIES: usize = match option_env!("ICND2069_CHAIN_COPIES") {
@@ -260,6 +229,25 @@ pub const CFG_CHAIN_COPIES: usize = {
     copies
 };
 pub const CFG_TRANSFER_DCLKS: usize = 16 * CFG_CHAIN_COPIES;
+/// Extra zero-valued 16-bit chip equivalents before each WR_CFG.
+pub const CFG_PRE_CLR_DCLKS: usize = {
+    let chains = match option_env!("ICND2069_CFG_PRE_CLR_CHAINS") {
+        Some(value) => unsigned_setting(value) as usize,
+        None => 0,
+    };
+    assert!(chains <= 64, "cfg_pre_clr_chains must be 0..=64");
+    chains * 16
+};
+pub const CFG_WRITE_DCLKS: usize = CFG_PRE_CLR_DCLKS + CFG_TRANSFER_DCLKS;
+/// Whether the configuration frame may issue VSYNC and scan.
+pub const ROW_ON_CFG: bool = match option_env!("ICND2069_ROW_ON_CFG") {
+    Some(value) => match value.as_bytes() {
+        b"0" => false,
+        b"1" => true,
+        _ => panic!("row_on_cfg must be boolean"),
+    },
+    None => false,
+};
 /// Logical image width excludes each chip's unconnected OUT15.
 pub const TOTAL_CHANNELS: usize = LED_CHANNELS * CHAIN_COPIES;
 // Starting with a cleared chain, shift one gray byte and move it to the
@@ -270,6 +258,7 @@ pub const fn latch_gray_dclks(row: usize) -> usize {
 pub const fn latch_clear_dclks(row: usize) -> usize {
     16 * (CHAIN_COPIES - latch_chip(row))
 }
+#[cfg(not(target_os = "none"))]
 pub const COLUMN_PATTERN: bool = match option_env!("ICND2069_PATTERN") {
     Some(value) => matches!(value.as_bytes(), b"col"),
     None => false,
@@ -366,7 +355,8 @@ pub const LE: u32 = 1 << 18;
 pub const LCK: u32 = 1 << 16;
 pub const BK: u32 = 1 << 15;
 pub const DIN: u32 = 1 << 17;
-// GP12/14 are unused; GP13 is zero here because sticky SM1 owns ROW.
+pub const ROW: u32 = 1 << 13;
+// GP12/14 are unused; GP13 ROW is part of the same GPIO word as LE/data.
 // DCLK on GP19 is driven separately by side-set.
 // The reference's six channels do not measure RT5990 DIN/LCK/BK.
 // Preserve the existing board assumptions; do not claim measured parity.
@@ -390,7 +380,7 @@ const fn select_bit(selected: bool) -> u32 {
 pub const PARK: u32 = blank(false) | select_bit(false);
 pub const VSYNC: usize = 3;
 pub const WR_CFG: usize = 5;
-pub const ENABLE: usize = 11;
+pub const EN_OP: usize = 11;
 pub const PRE_ACT: usize = 14;
 
 // R/G/B values from dsview/icnd2069/ICND2069-抓包寄存器汇总.md (B/C).
@@ -478,20 +468,28 @@ pub const CONFIG_INTERVAL: u32 = match option_env!("ICND2069_CONFIG_INTERVAL") {
 // One word per clock. Keep the same 34-clock prefix and even clock boundary
 // as the former packed format, so configuration skipping preserves timing.
 pub const COMMON_PREFIX_WORDS: usize = 34;
-pub const CONFIG_END_WORDS: usize = (49 + CONFIG_WRITES * (8 + CFG_TRANSFER_DCLKS) + 1) & !1;
+/// Suppress the display-buffer switch during a configuration-only frame.
+/// Keep all prefix clocks so both DMA streams retain their original timing.
+#[cfg(not(target_os = "none"))]
+pub static CONFIG_IDLE_PREFIX: [u32; COMMON_PREFIX_WORDS] = [PARK; COMMON_PREFIX_WORDS];
+/// Physical RT5990 chain, independent of the configured ICND2069 scan rows.
+pub const RT5990_CLEAR_ROWS: usize = 160;
+/// Two setup clocks, 160 LCK pulses (two high/two low), two trailing clocks.
+/// SIN/LE also stay zero here; each ICND2069 write has its own extra preclear.
+pub const RT5990_CLEAR_DCLKS: usize = 4 + RT5990_CLEAR_ROWS * 4;
+pub const CONFIG_COMMAND_START: usize = COMMON_PREFIX_WORDS + RT5990_CLEAR_DCLKS;
+pub const DATA_START: usize = CONFIG_COMMAND_START + 29
+    + CONFIG_WRITES * (8 + CFG_WRITE_DCLKS);
+pub const CONFIG_END_WORDS: usize = (DATA_START + 1) & !1;
 pub const CONFIG_SKIP_DCLKS: usize = CONFIG_END_WORDS - COMMON_PREFIX_WORDS;
 /// Full-frame duration in PIO cycles, including slow configuration clocks.
+#[cfg(not(target_os = "none"))]
 pub const CONFIG_FRAME_PIO_CYCLES: u64 = FRAME_DCLKS as u64 * PIO_CYCLES_PER_DCLK as u64
-    + CONFIG_SKIP_DCLKS as u64 * (2 * CFG_HALF_CYCLES - PIO_CYCLES_PER_DCLK) as u64;
+    + CONFIG_END_WORDS as u64
+        * (SYS_HZ / PIO_CLKDIV_INT / CFG_DCLK_HZ - PIO_CYCLES_PER_DCLK) as u64;
+#[cfg(not(target_os = "none"))]
 pub const NORMAL_FRAME_PIO_CYCLES: u64 =
     NORMAL_FRAME_DCLKS as u64 * PIO_CYCLES_PER_DCLK as u64;
-pub const fn clock_tag(clock: usize) -> u32 {
-    if SEPARATE_CFG_DCLK && clock >= COMMON_PREFIX_WORDS && clock < CONFIG_END_WORDS {
-        CFG_CLOCK_TAG
-    } else {
-        0
-    }
-}
 pub const DATA_ROW_DCLKS: usize = if SHORT_DATA {
     TRANSFER_DCLKS + 8 + (CHANNELS - 2) * (REPEAT_LATCH_GAP + 1)
 } else {
@@ -518,7 +516,7 @@ pub const LATCH_EXTRA_DCLKS: usize = {
 // before the next repeated latch, so it is deliberately absent.
 pub const DATA_INTER_ROW_DCLKS: usize = if SHORT_DATA { 0 } else { ROWS - 1 };
 pub const DATA_PAYLOAD_END: usize =
-    49 + CONFIG_WRITES * (8 + CFG_TRANSFER_DCLKS)
+    DATA_START
         + DATA_PREFIX_DCLKS + ROWS * DATA_ROW_DCLKS + DATA_INTER_ROW_DCLKS
         + LATCH_EXTRA_DCLKS;
 // Preserve the previous even-clock head boundary and PARK padding.
@@ -549,9 +547,15 @@ pub const FRAME_DCLKS: usize = (
 ) & !1;
 pub const FRAME_WORDS: usize = FRAME_DCLKS;
 pub const NORMAL_FRAME_DCLKS: usize = FRAME_DCLKS - CONFIG_SKIP_DCLKS;
+#[cfg(not(target_os = "none"))]
 pub const HEAD_WORDS: usize = DATA_END;
+#[cfg(not(target_os = "none"))]
 pub const TAIL_WORDS: usize = FRAME_WORDS - HEAD_WORDS;
+#[cfg(not(target_os = "none"))]
 pub const ROW_RUN_COUNT: usize = GROUPS * ROWS * 2 + 1;
+#[cfg(not(target_os = "none"))]
+pub const CONFIG_ROW_RUN_COUNT: usize = if ROW_ON_CFG { 0 } else { ROW_RUN_COUNT };
+#[cfg(not(target_os = "none"))]
 pub const VSYNC_FALL: usize = 8;
 pub const fn row_start(index: usize) -> usize {
     FIRST_ROW + index * SCAN_DCLKS / (GROUPS * ROWS)
@@ -564,6 +568,7 @@ pub const fn row_period(index: usize) -> usize {
 }
 
 /// Full-write sweep is uniform across all pixels; latch mode keeps its sweep.
+#[cfg(not(target_os = "none"))]
 pub const GRAY_SWEEP: &[u16] = if CONTINUOUS_LATCH { &[
     0, 31, 63, 95, 127, 159, 191, 223, 255,
 ] } else { &[
@@ -571,11 +576,11 @@ pub const GRAY_SWEEP: &[u16] = if CONTINUOUS_LATCH { &[
 ] };
 
 /// Patch only the gray-data SIN bits in a buffer not currently used by DMA.
+#[cfg(not(target_os = "none"))]
 pub fn update_white(words: &mut [u32], gray: u16) {
     assert!(gray <= MAX_GRAY_INPUT);
     if SHORT_DATA {
-        let mut row_start = 49 + CONFIG_WRITES * (8 + CFG_TRANSFER_DCLKS)
-            + DATA_PREFIX_DCLKS;
+        let mut row_start = DATA_START + DATA_PREFIX_DCLKS;
         for row in 0..ROWS {
             let target = latch_target(row);
             let before_target = (CHANNELS - 1 - target) * (REPEAT_LATCH_GAP + 1);
@@ -592,7 +597,7 @@ pub fn update_white(words: &mut [u32], gray: u16) {
         assert_eq!(row_start, DATA_PAYLOAD_END);
         return;
     }
-    let mut start = 49 + CONFIG_WRITES * (8 + CFG_TRANSFER_DCLKS);
+    let mut start = DATA_START;
     for row in 0..ROWS {
         for transfer in 0..CHANNELS {
             start += usize::from(row != 0 && transfer == 0);
@@ -619,6 +624,7 @@ impl<'a> Waveform<'a> {
     pub fn new(words: &'a mut [u32]) -> Self {
         Self { words, tail: &mut [], clocks: 0 }
     }
+    #[cfg(not(target_os = "none"))]
     pub fn split(words: &'a mut [u32], tail: &'a mut [u32]) -> Self {
         Self { words, tail, clocks: 0 }
     }
@@ -631,7 +637,7 @@ impl<'a> Waveform<'a> {
     }
     pub fn sample(&mut self, pins: u32) {
         let clock = self.clocks;
-        *self.word_mut(clock) = pins | clock_tag(clock);
+        *self.word_mut(clock) = pins;
         self.clocks += 1;
     }
     pub fn hold(&mut self, pins: u32, clocks: usize) {
@@ -676,7 +682,7 @@ impl<'a> Waveform<'a> {
         }
     }
     fn shift_config_rgb(&mut self, values: [u16; 3], gap: usize) {
-        self.hold(PARK, gap);
+        self.hold(PARK, gap + CFG_PRE_CLR_DCLKS);
         for copy in 0..CFG_CHAIN_COPIES {
             for bit in (0..16).rev() {
                 let data = rgb_bit(values, bit);
@@ -693,6 +699,7 @@ impl<'a> Waveform<'a> {
 pub type Frame = [[u16; TOTAL_CHANNELS]; ROWS];
 
 /// Keep the moving diagonal or the fixed selected channel for latch mode.
+#[cfg(not(target_os = "none"))]
 pub fn target_frame(mut frame: Frame) -> Frame {
     for (row, values) in frame.iter_mut().enumerate() {
         for (out, value) in values.iter_mut().enumerate() {
@@ -705,11 +712,14 @@ pub fn target_frame(mut frame: Frame) -> Frame {
 }
 
 /// Uniform gray throughout a frame; advance one gray level per frame.
+#[cfg(not(target_os = "none"))]
 pub fn sweep_frame(frame_index: usize) -> Frame {
     [[GRAY_SWEEP[frame_index % GRAY_SWEEP.len()]; TOTAL_CHANNELS]; ROWS]
 }
 
 #[derive(Clone, Copy, Debug)]
+// The build selects one variant, while the encoder supports every pattern.
+#[allow(dead_code)]
 pub enum Pattern {
     Diagonal,
     Column(usize),
@@ -717,6 +727,7 @@ pub enum Pattern {
 }
 
 /// Logical row/channel masks; only SIN data changes, never scan timing.
+#[cfg(not(target_os = "none"))]
 pub fn pattern_frame(pattern: Pattern, gray: u16) -> Frame {
     pattern_frame_range(pattern, [gray; 2])
 }
@@ -782,6 +793,7 @@ pub fn encode_with_config(words: &mut [u32], frame: &Frame, rotating: Option<[u1
 
 /// Each gray has its own input head; all frames share an identical scan tail.
 /// Both slices must be initialized before DMA starts and then stay immutable.
+#[cfg(not(target_os = "none"))]
 pub fn encode_split(head: &mut [u32], tail: &mut [u32], frame: &Frame) {
     assert_eq!(DATA_END % 2, 0);
     assert_eq!(head.len(), HEAD_WORDS);
@@ -790,11 +802,22 @@ pub fn encode_split(head: &mut [u32], tail: &mut [u32], frame: &Frame) {
 }
 
 fn encode_wave(wave: &mut Waveform<'_>, frame: &Frame, rotating: Option<[u16; 3]>) -> usize {
-    // Exact rising-edge coordinates from the reference: falls 8, 31, 48.
     wave.command_at(5, VSYNC);
-    wave.command_at(20, ENABLE);
-    wave.command_at(34, PRE_ACT);
-    wave.shift_config(0x00aa, 9); // first WR_CFG falls at 57+CFG_TRANSFER_DCLKS.
+    wave.hold(PARK, COMMON_PREFIX_WORDS - wave.clocks);
+    // LCK shifts the RT5990 chain; ICND2069 ROW stays low throughout.
+    // Blank while flushing old selections, with DIN, SIN and LE held low.
+    let clear = blank(true) | select_bit(false);
+    wave.hold(clear, 2);
+    for _ in 0..RT5990_CLEAR_ROWS {
+        wave.hold(clear | LCK, 2);
+        wave.hold(clear, 2);
+    }
+    wave.hold(clear, 2);
+    // Both clearing and EN_OP belong to the skipped configuration segment.
+    // Enable before PRE_ACT so it cannot cancel configuration access.
+    wave.command_at(CONFIG_COMMAND_START, EN_OP);
+    wave.command_at(CONFIG_COMMAND_START + 14, PRE_ACT);
+    wave.shift_config(0x00aa, 9);
     wave.shift_config(0x01aa, 8);
     if let Some(value) = rotating {
         wave.shift_config_rgb(value, 8);
@@ -856,8 +879,11 @@ fn encode_wave(wave: &mut Waveform<'_>, frame: &Frame, rotating: Option<[u16; 3]
             if (start - 4..start - 2).contains(&t) {
                 row_pins |= LCK;
             }
-            // ROW is generated separately by SM1, not in SM0's pin word.
-            let mask = BK | DIN | LCK;
+            let width = if i == 0 { 12 } else { 4 };
+            if (start..start + width).contains(&t) {
+                row_pins |= ROW;
+            }
+            let mask = BK | DIN | LCK | ROW;
             let word = wave.word_mut(t);
             *word = (*word & !mask) | row_pins;
         }
@@ -866,6 +892,7 @@ fn encode_wave(wave: &mut Waveform<'_>, frame: &Frame, rotating: Option<[u16; 3]
     FRAME_WORDS
 }
 
+#[cfg(not(target_os = "none"))]
 pub fn encode_row_runs(words: &mut [u32; ROW_RUN_COUNT]) {
     // SM1 counts the same DCLK IRQ events as SM0. Edge at clock t follows
     // its IRQ, so the corresponding run boundary is t+1. Derive the pulse
@@ -887,6 +914,16 @@ pub fn encode_row_runs(words: &mut [u32; ROW_RUN_COUNT]) {
     words[ROW_RUN_COUNT - 1] = ((FRAME_DCLKS - position - 1) as u32) << 1;
 }
 
+/// Keep every run duration and DMA/FIFO cadence, but hold ROW low all frame.
+#[cfg(not(target_os = "none"))]
+pub fn encode_config_row_runs(words: &mut [u32], normal: &[u32; ROW_RUN_COUNT]) {
+    assert_eq!(words.len(), CONFIG_ROW_RUN_COUNT);
+    for (word, &run) in words.iter_mut().zip(normal) {
+        *word = run & !1;
+    }
+}
+
+#[cfg(not(target_os = "none"))]
 pub fn rotation_word(index: usize) -> [u16; 3] {
     match index % (REGISTERS.len() + 2) {
         0 => [0x0055; 3],
@@ -898,6 +935,7 @@ pub fn rotation_word(index: usize) -> [u16; 3] {
     }
 }
 
+#[cfg(not(target_os = "none"))]
 pub fn startup_reset(words: &mut [u32]) {
     // Diagnostic only: extend the first LE pulse from 3 to 9 rising edges.
     for t in 8..14 {
@@ -905,11 +943,12 @@ pub fn startup_reset(words: &mut [u32]) {
     }
 }
 
+#[cfg(not(target_os = "none"))]
 pub fn update_rotation(words: &mut [u32], value: [u16; 3]) {
-    // First transfer starts at 57, with an 8-DCLK gap between transfers.
+    // First configuration word follows EN_OP, PRE_ACT and their gaps (37 clocks).
     // Derive the third word's position for the configured chain length.
     // Only SIN changes. Preserve LE and the overlapping ROW controls.
-    let start = 57 + 2 * (CFG_TRANSFER_DCLKS + 8);
+    let start = CONFIG_COMMAND_START + 37 + CFG_PRE_CLR_DCLKS + 2 * (CFG_WRITE_DCLKS + 8);
     for t in start..start + CFG_TRANSFER_DCLKS {
         let bit = 15 - (t - start) % 16;
         let mask = SIN;
