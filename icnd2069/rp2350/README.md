@@ -10,7 +10,7 @@ cargo run --release
 
 编译参数全部读取本目录的 [`config.json`](config.json)，修改后 Cargo 自动重新构建。`bash build.sh` 执行同一条命令；只编译使用 `cargo build --release`。
 
-当前驱动只使用 **PIO0/SM0 + DMA0**。LE、SIN、ROW 和 RT5990 引脚来自同一个 GPIO 数据字，DCLK 用 side-set 输出。一个发送块结束后，等待最后一个时钟完成、停 PIO，再改分频发送下一块；没有双 DMA bank、描述符链或独立 ROW 状态机。普通帧是一块，配置帧是慢速配置块和正常速度灰度块。帧间有明确的 DCLK 低电平停顿。
+当前驱动只使用 **PIO0/SM0 + DMA0**。LE、SIN、ROW 和 RT5990 引脚来自同一个 GPIO 数据字，DCLK 用 side-set 输出。同频率帧之间不停 PIO，FIFO 空时补零并保持 DCLK；只在真正切换分频时停车。普通帧是一块，配置帧是慢速配置块和包含清零、灰度的连续高速块。
 
 启动及周期配置帧依次执行 RT5990 清空 160 行、`EN_OP(11)`、PRE_ACT、49 条带额外清零的 WR_CFG 和灰度 DATA_LATCH。每条 WR_CFG 的配置数据前均发送 `cfg_pre_clr_chains×16` 个额外零。RT5990 清空时 DIN=0，LCK 发 160 个高/低各 2 DCLK 的脉冲，BK 保持消隐；加上首尾各 2 DCLK，共 644 个配置时钟（1 MHz 时为 644 µs）。160 行为物理链长度，独立于 `lines`、`chains`、`cfg_pre_clr_chains` 和 `cfg_chains`。`row_on_cfg=false`（默认）时，上一帧写完后进入配置帧，不发 VSYNC，整帧 ROW 保持低；下一普通帧才恢复 VSYNC 和扫描。true 时配置帧保留 VSYNC 和配置完成后的扫描。没有发送 `DIS_OP(12)`；板上表现待实测。
 
@@ -48,6 +48,19 @@ cargo run --release
 行数 `ROWS=lines`，每颗芯片协议通道数 `CHANNELS=16` 固定，有效 LED 列数 `LED_CHANNELS=15`，图像宽度 `TOTAL_CHANNELS=chains×15`。OUT15 不占逻辑列，但保留零灰度锁存槽，协议仍按 OUT15→OUT0 发送。`keep_scan_time=false` 时，行周期固定为 60 DCLK；PWM/PLL 寄存器不再参与外部行周期和帧长度计算。02h=`lines - 1`（当前 54 行为 `0x35`），03h=`scan_repeats - 1`。图像大小、灰度写入长度、ROW 脉冲数和 DMA 缓冲随行数自动调整，修改后需重新编译烧录。组合参数仍需满足 512 KiB RAM 容量。
 
 ### DCLK 精确分频
+
+完整高速档位为 **1、3、6、10、12.5、20、25、30、31、32、33、34、
+35、40、45 MHz**，原档位均保留。40/45 MHz 对应 RP2350 系统
+160/180 MHz 超频预设；其余档位系统时钟不超过 150 MHz。
+`config.json` 的 `_dclk_mhz_doc` 已恢复完整列表。
+`python3 tools/check_dclk.py --presets` 可核验全部档位，分别检查
+配置速度跟随高速和 1 MHz 配置；省略显式 GCLK 时采用原 PLL 预设。
+
+高速档位与配置速度需要配对。例如 **30/20 MHz** 使用系统 120 MHz，
+配置 PIO 分频 1.5，半周期正好 3 个系统周期；**25/20 MHz** 使用
+系统 150 MHz，半周期为 3.75 个系统周期，不符合均匀时钟约束。
+25 MHz 高速可用 12.5 或 25 MHz 配置；要求 20 MHz 配置可用
+20 或 30 MHz 高速。显式 `gclk_mhz` 还需满足相应 M/P 的精确选参条件。
 
 `cfg_pre_clr_chains` 控制每条小配置（WR_CFG）前的额外清零级联数量：每次先保持 SIN/LE 为 0，发送 `16×cfg_pre_clr_chains` 个零，再发送 `16×cfg_chains` bit 配置数据。配置解锁、45 项寄存器写入和配置锁定均适用，共 49 次额外清零。原有间隔仍保留，首条 9 DCLK、其余 8 DCLK；不再在整组开头单独额外清零。例如两个字段均为 2：每条先清零 32 CLK，再写两颗共 32 bit，常规 WR_CFG 间隔为 `8+32+32=72 DCLK`，1 MHz 下为 72 µs。RT5990 的 160 行清空仍独立保留在 EN_OP 前。
 
