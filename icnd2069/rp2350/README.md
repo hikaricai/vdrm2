@@ -243,6 +243,25 @@ PIO 每个 DCLK 使用一个 32 位 DMA 样本，低 19 位覆盖 GP0～GP18（G
 
 ## 当前时序概览
 
+配置锁回后，以 `cfg_dclk_mhz` 再发送
+`max(chains, cfg_chains) × 16` 个零时钟，LE/ROW 均低。
+随后切换到 `dclk_mhz`，通过独立的 SRAM 零缓冲再发同样数量的零时钟，
+再发送完整灰度帧；下一普通帧的 VSYNC 才切换显示缓冲。
+偶数块边界的 PARK 补齐和原有灰度前导清零仍保留。
+普通帧不发送这两个新增清零块；配置理论 FPS 已计入两段清零。
+
+启动时打印 `theoretical FPS: avg=..., normal=..., config=...`。`normal`
+仅按普通帧时钟数计算，排除配置帧；`config` 包含慢速配置块和灰度块，
+`avg` 按 `config_interval` 加权。理论值均不包含块间软件停顿。
+每五秒打印 `measured FPS`：`normal` 用普通帧的完整主循环时间累计，
+剔除整个配置帧，包含软件停顿；`avg` 包含所有帧及配置耗时。
+若 `config_interval=1`，没有普通帧样本，实测 `normal` 显示 `N/A`。
+
+2026-11-14，20 MHz 数据 / 1 MHz 配置、`cfg_chains=2`、
+`cfg_pre_clr_chains=0`、54 行、1 遍、`config_interval=1000`：
+启动理论 `normal=5316.32、config=350.34、avg=5242.02 FPS`；
+一次五秒窗口的实测 `normal=5171.29、avg=5099.37 FPS`。
+
 2026-11-14 单 PIO/单 DMA 最终版实测：30 MHz 普通帧发送 3762 个时钟，活动时长 125.4 µs；约 5.14 µs 的块间边沿间隔使完整普通帧周期为 130.498～130.508 µs。配置时 1 MHz，每个配置块 2668 clocks；配置帧无 VSYNC/ROW，下一普通帧恢复。30 秒 RTT 运行中及退出 RTT 后抓包均通过，详见 [本轮实测](../captures/experiments/20261114_single_pio/README.md)。
 
 BK（GP16）使用原有 DCLK/PIO 指令时序。配置、数据区与帧间为低电平；每个 ROW 前 BK 只拉高 **8 个完整 DCLK**，默认 12.5 MHz 下为 640 ns。启动也保持低，避免 DSView 中首个 BK 脉冲宽于其他行。

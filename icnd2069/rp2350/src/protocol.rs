@@ -229,6 +229,13 @@ pub const CFG_CHAIN_COPIES: usize = {
     copies
 };
 pub const CFG_TRANSFER_DCLKS: usize = 16 * CFG_CHAIN_COPIES;
+/// Flush all configured/data shift registers after locking configuration.
+/// LE stays low: these zeros do not latch an image or switch display buffers.
+pub const CFG_POST_CLR_DCLKS: usize = if CFG_TRANSFER_DCLKS > TRANSFER_DCLKS {
+    CFG_TRANSFER_DCLKS
+} else {
+    TRANSFER_DCLKS
+};
 /// Extra zero-valued 16-bit chip equivalents before each WR_CFG.
 pub const CFG_PRE_CLR_DCLKS: usize = {
     let chains = match option_env!("ICND2069_CFG_PRE_CLR_CHAINS") {
@@ -479,12 +486,12 @@ pub const RT5990_CLEAR_ROWS: usize = 160;
 pub const RT5990_CLEAR_DCLKS: usize = 4 + RT5990_CLEAR_ROWS * 4;
 pub const CONFIG_COMMAND_START: usize = COMMON_PREFIX_WORDS + RT5990_CLEAR_DCLKS;
 pub const DATA_START: usize = CONFIG_COMMAND_START + 29
-    + CONFIG_WRITES * (8 + CFG_WRITE_DCLKS);
+    + CONFIG_WRITES * (8 + CFG_WRITE_DCLKS) + CFG_POST_CLR_DCLKS;
 pub const CONFIG_END_WORDS: usize = (DATA_START + 1) & !1;
 pub const CONFIG_SKIP_DCLKS: usize = CONFIG_END_WORDS - COMMON_PREFIX_WORDS;
 /// Full-frame duration in PIO cycles, including slow configuration clocks.
 #[cfg(not(target_os = "none"))]
-pub const CONFIG_FRAME_PIO_CYCLES: u64 = FRAME_DCLKS as u64 * PIO_CYCLES_PER_DCLK as u64
+pub const CONFIG_FRAME_PIO_CYCLES: u64 = (FRAME_DCLKS + CFG_POST_CLR_DCLKS) as u64 * PIO_CYCLES_PER_DCLK as u64
     + CONFIG_END_WORDS as u64
         * (SYS_HZ / PIO_CLKDIV_INT / CFG_DCLK_HZ - PIO_CYCLES_PER_DCLK) as u64;
 #[cfg(not(target_os = "none"))]
@@ -828,6 +835,7 @@ fn encode_wave(wave: &mut Waveform<'_>, frame: &Frame, rotating: Option<[u16; 3]
     }
     wave.shift_config(0x0055, if rotating.is_some() { 9 } else { 8 });
     wave.shift_config(0x0155, 8);
+    wave.hold(PARK, CFG_POST_CLR_DCLKS);
     if SHORT_DATA {
         wave.hold(PARK, TRANSFER_DCLKS);
     }

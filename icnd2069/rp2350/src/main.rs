@@ -17,6 +17,14 @@ static CONFIG_FRAME: ConstStaticCell<[u32; protocol::FRAME_WORDS]> =
     ConstStaticCell::new([0; protocol::FRAME_WORDS]);
 static NORMAL_FRAME: ConstStaticCell<[u32; protocol::NORMAL_FRAME_DCLKS]> =
     ConstStaticCell::new([0; protocol::NORMAL_FRAME_DCLKS]);
+static CONFIG_FAST_CLEAR: ConstStaticCell<[u32; protocol::CFG_POST_CLR_DCLKS]> =
+    ConstStaticCell::new([protocol::PARK; protocol::CFG_POST_CLR_DCLKS]);
+
+/// Hundredths of FPS, without floating point or scaling the full numerator.
+fn fps_x100(clock_hz: u64, frames: u64, ticks: u64) -> u64 {
+    let count = clock_hz * frames;
+    (count / ticks) * 100 + ((count % ticks) * 100 + ticks / 2) / ticks
+}
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
@@ -44,6 +52,7 @@ async fn main(_spawner: Spawner) {
     );
     let configuration = CONFIG_FRAME.take();
     let normal = NORMAL_FRAME.take();
+    let fast_clear = CONFIG_FAST_CLEAR.take();
     {
         // Keep the temporary image out of the async task arena.
         let image = protocol::pattern_frame_range(PATTERN, GRAY_RANGE);
@@ -73,8 +82,27 @@ async fn main(_spawner: Spawner) {
     rtt_target::rprintln!("configuration={} slow clocks; WR_CFG={}, preclear={} clocks/write, RT5990 clear={} rows",
         protocol::CONFIG_END_WORDS, protocol::CONFIG_WRITES,
         protocol::CFG_PRE_CLR_DCLKS, protocol::RT5990_CLEAR_ROWS);
+    rtt_target::rprintln!("after configuration: {} slow zero clocks, {} fast zero clocks, complete grayscale frame, then VSYNC; clear LE/ROW LOW",
+        protocol::CFG_POST_CLR_DCLKS, fast_clear.len());
     rtt_target::rprintln!("GPIO DCLK/LE/ROW=19/18/13; RT LCK/BK/DIN=16/15/17; wave RAM={} bytes",
-        (configuration.len() + normal.len()) * 4);
+        (configuration.len() + normal.len() + fast_clear.len()) * 4);
+    let fast_cycles = u64::from(protocol::SYS_HZ / protocol::DCLK_HZ);
+    let normal_cycles = normal.len() as u64 * fast_cycles;
+    let config_cycles = protocol::CONFIG_END_WORDS as u64
+        * u64::from(protocol::SYS_HZ / protocol::CFG_DCLK_HZ)
+        + (fast_clear.len() + configuration.len() - protocol::CONFIG_END_WORDS) as u64 * fast_cycles;
+    let interval = u64::from(protocol::CONFIG_INTERVAL);
+    let normal_fps = fps_x100(u64::from(protocol::SYS_HZ), 1, normal_cycles);
+    let config_fps = fps_x100(u64::from(protocol::SYS_HZ), 1, config_cycles);
+    let average_fps = fps_x100(u64::from(protocol::SYS_HZ), interval,
+        (interval - 1) * normal_cycles + config_cycles);
+    rtt_target::rprintln!(
+        "theoretical FPS: avg={}.{:02}, normal={}.{:02}, config={}.{:02}",
+        average_fps / 100, average_fps % 100,
+        normal_fps / 100, normal_fps % 100,
+        config_fps / 100, config_fps % 100,
+    );
+    rtt_target::rprintln!("normal FPS excludes configuration frames; theoretical FPS excludes software gaps");
     if protocol::GCLK_HZ_ASSUMING_N1 >= 100_000_000 {
         rtt_target::rprintln!("PLL experiment: GCLK={} Hz exceeds guide's strict <100 MHz limit",
             protocol::GCLK_HZ_ASSUMING_N1);
@@ -83,18 +111,52 @@ async fn main(_spawner: Spawner) {
     let mut cursor = scheduler::Cursor::new(protocol::CONFIG_INTERVAL, 1);
     let mut frames = 0u32;
     let mut report = Instant::now();
+    let mut report_frames = 0u32;
+    let mut previous_start = report;
+    let mut previous_normal = false;
+    let mut normal_frames = 0u64;
+    let mut normal_ticks = 0u64;
     loop {
-        if cursor.next().0 {
+        // One timestamp per frame. Account the preceding complete frame,
+        // including software gaps, only when it was not a configuration frame.
+        let start = Instant::now();
+        if previous_normal {
+            normal_frames += 1;
+            normal_ticks += start.duration_since(previous_start).as_ticks();
+        }
+        previous_start = start;
+        let report_elapsed = start.duration_since(report);
+        if report_elapsed.as_secs() >= 5 {
+            let average_fps = fps_x100(embassy_time::TICK_HZ,
+                u64::from(frames.wrapping_sub(report_frames)), report_elapsed.as_ticks());
+            if normal_frames != 0 && normal_ticks != 0 {
+                let normal_fps = fps_x100(embassy_time::TICK_HZ, normal_frames, normal_ticks);
+                rtt_target::rprintln!(
+                    "measured FPS: normal={}.{:02} (config frames excluded), avg={}.{:02}, frames={}",
+                    normal_fps / 100, normal_fps % 100,
+                    average_fps / 100, average_fps % 100, frames,
+                );
+            } else {
+                rtt_target::rprintln!(
+                    "measured FPS: normal=N/A (no normal frames), avg={}.{:02}, frames={}",
+                    average_fps / 100, average_fps % 100, frames,
+                );
+            }
+            normal_frames = 0;
+            normal_ticks = 0;
+            report_frames = frames;
+            report = start;
+            led.toggle();
+        }
+        let configure = cursor.next().0;
+        previous_normal = !configure;
+        if configure {
             driver.send(&configuration[..protocol::CONFIG_END_WORDS], true).await;
+            driver.send(fast_clear, false).await;
             driver.send(&configuration[protocol::CONFIG_END_WORDS..], false).await;
         } else {
             driver.send(normal, false).await;
         }
         frames = frames.wrapping_add(1);
-        if report.elapsed().as_secs() >= 5 {
-            rtt_target::rprintln!("running: frames={}, single DMA; PIO stopped LOW at block boundaries", frames);
-            report = Instant::now();
-            led.toggle();
-        }
     }
 }
