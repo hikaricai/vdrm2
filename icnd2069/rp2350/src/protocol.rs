@@ -51,6 +51,8 @@ pub const DCLK_HZ: u32 = match option_env!("ICND2069_DCLK_MHZ") {
         b"12.5" => 12_500_000,
         b"20" => 20_000_000,
         b"25" => 25_000_000,
+        b"26" => 26_000_000,
+        b"28" => 28_000_000,
         b"30" => 30_000_000,
         b"31" => 31_000_000,
         b"32" => 32_000_000,
@@ -59,23 +61,26 @@ pub const DCLK_HZ: u32 = match option_env!("ICND2069_DCLK_MHZ") {
         b"35" => 35_000_000,
         b"40" => 40_000_000,
         b"45" => 45_000_000,
-        _ => panic!("ICND2069_DCLK_MHZ must be 1, 3, 6, 10, 12.5, 20, 25, 30, 31, 32, 33, 34, 35, 40 or 45"),
+        _ => panic!("ICND2069_DCLK_MHZ must be 1, 3, 6, 10, 12.5, 20, 25, 26, 28, 30, 31, 32, 33, 34, 35, 40 or 45"),
     },
     None => 12_500_000,
 };
-pub const PIO_CYCLES_PER_DCLK: u32 = if DCLK_HZ >= 30_000_000 { 4 } else { 6 };
+pub const PIO_CYCLES_PER_DCLK: u32 = if DCLK_HZ >= 26_000_000 { 4 } else { 6 };
 pub const SYS_HZ: u32 = match DCLK_HZ {
-    // Every supported preset >=30 MHz uses divider 1, four cycles/DCLK.
-    30_000_000..=45_000_000 => DCLK_HZ * 4,
+    // Every supported preset >=26 MHz uses divider 1, four cycles/DCLK.
+    26_000_000..=45_000_000 => DCLK_HZ * 4,
     10_000_000 | 20_000_000 => 120_000_000,
     // Six PIO cycles/DCLK: integer dividers 8 and 4 respectively.
     3_000_000 | 6_000_000 => 144_000_000,
     _ => 150_000_000,
 };
 // Pico 2's 12 MHz crystal feeds the integer system PLL (refdiv=1).
+// 104/112 MHz use /3/3 to keep their VCO above 750 MHz.
 // 124 MHz cannot use /3/2: its VCO would be 744 MHz, below 750 MHz.
 // Use 1488 MHz /4/3 instead. Keep the standard 1500 MHz /5/2 at 150 MHz.
 pub const SYS_PLL_FBDIV: u16 = match SYS_HZ {
+    104_000_000 => 78,
+    112_000_000 => 84,
     120_000_000 => 80,
     124_000_000 => 124,
     150_000_000 => 125,
@@ -86,7 +91,10 @@ pub const SYS_PLL_POST_DIV1: u8 = match SYS_HZ {
     150_000_000 => 5,
     _ => 3,
 };
-pub const SYS_PLL_POST_DIV2: u8 = if SYS_HZ == 124_000_000 { 3 } else { 2 };
+pub const SYS_PLL_POST_DIV2: u8 = match SYS_HZ {
+    104_000_000 | 112_000_000 | 124_000_000 => 3,
+    _ => 2,
+};
 /// Compile-time proof of an exact PLL ratio and zero fractional PIO divider.
 pub const PIO_CLKDIV_INT: u32 = {
     let vco = 12_000_000u64 * SYS_PLL_FBDIV as u64;
@@ -108,7 +116,7 @@ pub const PIO_CLKDIV_INT: u32 = {
 const LEGACY_PLL_MP: (u8, u8) = match DCLK_HZ {
     1_000_000 | 3_000_000 | 6_000_000 => (1, 10),
     10_000_000 | 12_500_000 => (2, 12),
-    20_000_000 | 25_000_000 => (3, 15),
+    20_000_000 | 25_000_000 | 26_000_000 | 28_000_000 => (3, 15),
     30_000_000..=35_000_000 => (4, 20),
     40_000_000 | 45_000_000 => (5, 25),
     _ => panic!("missing ICND2069 PLL preset"),

@@ -107,8 +107,8 @@ fn main() {
         ("col", format!("Column({column})"), column)
     };
     assert!(
-        [1.0, 3.0, 6.0, 10.0, 12.5, 20.0, 25.0, 30.0, 31.0, 32.0, 33.0, 34.0, 35.0, 40.0, 45.0].contains(&config.dclk_mhz),
-        "config.json: dclk_mhz must be 1, 3, 6, 10, 12.5, 20, 25, 30, 31, 32, 33, 34, 35, 40 or 45"
+        [1.0, 3.0, 6.0, 10.0, 12.5, 20.0, 25.0, 26.0, 28.0, 30.0, 31.0, 32.0, 33.0, 34.0, 35.0, 40.0, 45.0].contains(&config.dclk_mhz),
+        "config.json: dclk_mhz must be 1, 3, 6, 10, 12.5, 20, 25, 26, 28, 30, 31, 32, 33, 34, 35, 40 or 45"
     );
     assert!(config.pwm_width >= 4,
         "config.json: pwm_width must be 4..=255; current RGB reg0C requires 4*pwm_width > 13");
