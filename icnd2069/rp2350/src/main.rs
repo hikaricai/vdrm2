@@ -40,12 +40,9 @@ async fn main(_spawner: Spawner) {
     let mut driver = driver::Driver::new(
         p.PIO0, p.DMA_CH0,
         driver::Pins {
-            r1: p.PIN_5, g1: p.PIN_4, b1: p.PIN_3,
-            r2: p.PIN_11, g2: p.PIN_10, b2: p.PIN_9,
-            r3: p.PIN_2, g3: p.PIN_1, b3: p.PIN_0,
-            r4: p.PIN_8, g4: p.PIN_7, b4: p.PIN_6,
-            dclk: p.PIN_19, le: p.PIN_18, row: p.PIN_13,
-            lck: p.PIN_16, lbk: p.PIN_15, ldata: p.PIN_17,
+            sin: p.PIN_13,
+            dclk: p.PIN_15, le: p.PIN_10, row: p.PIN_22,
+            lck: p.PIN_16, lbk: p.PIN_18, ldata: p.PIN_20,
         },
     );
     let configuration = CONFIG_FRAME.take();

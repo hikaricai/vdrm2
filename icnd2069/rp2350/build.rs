@@ -102,8 +102,8 @@ fn main() {
             .filter(|value| !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit()))
             .and_then(|value| value.parse::<usize>().ok())
             .expect("config.json: pattern must be diagonal or col_x (x is a nonnegative decimal column)");
-        assert!(column < usize::from(config.chains) * 15,
-            "config.json: col_x column must be in 0..chains*15-1 (OUT15 is unconnected)");
+        assert!(column < usize::from(config.chains) * 16,
+            "config.json: col_x column must be in 0..chains*16-1");
         ("col", format!("Column({column})"), column)
     };
     assert!(

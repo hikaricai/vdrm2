@@ -2,8 +2,7 @@ use embassy_rp::{
     bind_interrupts,
     gpio::Level,
     peripherals::{
-        DMA_CH0, PIN_0, PIN_1, PIN_2, PIN_3, PIN_4, PIN_5, PIN_6, PIN_7, PIN_8,
-        PIN_9, PIN_10, PIN_11, PIN_13, PIN_15, PIN_16, PIN_17, PIN_18, PIN_19, PIO0,
+        DMA_CH0, PIN_10, PIN_13, PIN_15, PIN_16, PIN_18, PIN_20, PIN_22, PIO0,
     },
     pio::{self, Common, Pio, ShiftConfig, StateMachine},
     Peripheral, PeripheralRef,
@@ -17,24 +16,13 @@ bind_interrupts!(struct Irqs {
 });
 
 pub struct Pins {
-    pub r1: PIN_5,
-    pub g1: PIN_4,
-    pub b1: PIN_3,
-    pub r2: PIN_11,
-    pub g2: PIN_10,
-    pub b2: PIN_9,
-    pub r3: PIN_2,
-    pub g3: PIN_1,
-    pub b3: PIN_0,
-    pub r4: PIN_8,
-    pub g4: PIN_7,
-    pub b4: PIN_6,
-    pub dclk: PIN_19,
-    pub le: PIN_18,
-    pub row: PIN_13,
+    pub sin: PIN_13,
+    pub dclk: PIN_15,
+    pub le: PIN_10,
+    pub row: PIN_22,
     pub lck: PIN_16,
-    pub lbk: PIN_15,
-    pub ldata: PIN_17,
+    pub lbk: PIN_18,
+    pub ldata: PIN_20,
 }
 
 /// One pin word drives data, LE, ROW and RT5990; side-set drives DCLK.
@@ -50,18 +38,7 @@ pub struct Driver {
 impl Driver {
     pub fn new(pio: PIO0, dma: DMA_CH0, pins: Pins) -> Self {
         let Pio { mut common, sm0: mut sm, .. } = Pio::new(pio, Irqs);
-        let r1 = common.make_pio_pin(pins.r1);
-        let g1 = common.make_pio_pin(pins.g1);
-        let b1 = common.make_pio_pin(pins.b1);
-        let r2 = common.make_pio_pin(pins.r2);
-        let g2 = common.make_pio_pin(pins.g2);
-        let b2 = common.make_pio_pin(pins.b2);
-        let r3 = common.make_pio_pin(pins.r3);
-        let g3 = common.make_pio_pin(pins.g3);
-        let b3 = common.make_pio_pin(pins.b3);
-        let r4 = common.make_pio_pin(pins.r4);
-        let g4 = common.make_pio_pin(pins.g4);
-        let b4 = common.make_pio_pin(pins.b4);
+        let sin = common.make_pio_pin(pins.sin);
         let le = common.make_pio_pin(pins.le);
         let row = common.make_pio_pin(pins.row);
         let dclk = common.make_pio_pin(pins.dclk);
@@ -76,18 +53,18 @@ impl Driver {
         cfg.fifo_join = pio::FifoJoin::TxOnly;
         cfg.shift_out = ShiftConfig {
             auto_fill: false,
-            threshold: 19,
+            threshold: protocol::PIO_OUT_COUNT,
             direction: pio::ShiftDirection::Right,
         };
         let mut pin_cfg = cfg.get_pins();
         pin_cfg.out_base = 0;
-        pin_cfg.out_count = 19;
-        // Only the owned pins are muxed; GP12/14 remain unused.
+        pin_cfg.out_count = protocol::PIO_OUT_COUNT;
+        // Only the seven connected pins are muxed. Side-set owns DCLK;
+        // the GPIO word keeps its GP15 bit low.
         unsafe { cfg.set_pins(pin_cfg); }
         sm.set_config(&cfg);
         let all = [
-            &r1, &g1, &b1, &r2, &g2, &b2, &r3, &g3, &b3, &r4, &g4, &b4,
-            &le, &row, &lck, &bk, &din, &dclk,
+            &sin, &le, &row, &lck, &bk, &din, &dclk,
         ];
         sm.set_pins(Level::Low, &all);
         if !protocol::DIN_ONE_SELECTS {

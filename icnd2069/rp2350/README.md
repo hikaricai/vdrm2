@@ -10,6 +10,26 @@ cargo run --release
 
 编译参数全部读取本目录的 [`config.json`](config.json)，修改后 Cargo 自动重新构建。`bash build.sh` 执行同一条命令；只编译使用 `cargo build --release`。
 
+## 当前开发板接线（2026-11-14）
+
+当前固件对应 [`SCH_Schematic3_2026-10-24.pdf`](../hardware/SCH_Schematic3_2026-10-24.pdf)，单颗 ICND2069、单颗 RT5990，16×16 点阵，OUT0～OUT15 全部接列线。
+
+| 信号 | Pico GPIO | 原理图网络 |
+|---|---|---|
+| SIN | GP13 | R1 |
+| DCLK | GP15 | CLK |
+| LE | GP10 | LAT |
+| ROW | GP22 | GCLK |
+| RT5990 DIN | GP20 | C |
+| RT5990 LCK | GP16 | A |
+| RT5990 BK | GP18 | B |
+
+`chains=1`、`cfg_chains=1`、`lines=16`、`color="r"`；只有一根 SIN，使用参考 R 配置值，`rgb` 与 `r` 输出相同，`g`/`b` 没有对应数据线。逻辑宽度为 `chains×16`，单颗允许 `col_0`～`col_15`。RT5990 配置前清空 16 行，共 68 DCLK。PIO 输出覆盖 GP0～GP22，只接管表中七根线；DCLK 由 side-set 控制，GPIO 数据字中 GP15 位始终为零。仍使用单 PIO、单 DMA，同频帧之间保持连续时钟。
+
+下面保留的是此前 `dev_sch.png` 四组 RGB 板的参数说明及调试记录；其中 15 列、160 行清空、四组 RGB 接线和“当前值”不适用于上述单颗开发板，以本节和 `config.json` 为准。
+
+## 此前四组 RGB 板记录
+
 当前驱动只使用 **PIO0/SM0 + DMA0**。LE、SIN、ROW 和 RT5990 引脚来自同一个 GPIO 数据字，DCLK 用 side-set 输出。同频率帧之间不停 PIO，FIFO 空时补零并保持 DCLK；只在真正切换分频时停车。普通帧是一块，配置帧是慢速配置块和包含清零、灰度的连续高速块。
 
 启动及周期配置帧依次执行 RT5990 清空 160 行、`EN_OP(11)`、PRE_ACT、49 条带额外清零的 WR_CFG 和灰度 DATA_LATCH。每条 WR_CFG 的配置数据前均发送 `cfg_pre_clr_chains×16` 个额外零。RT5990 清空时 DIN=0，LCK 发 160 个高/低各 2 DCLK 的脉冲，BK 保持消隐；加上首尾各 2 DCLK，共 644 个配置时钟（1 MHz 时为 644 µs）。160 行为物理链长度，独立于 `lines`、`chains`、`cfg_pre_clr_chains` 和 `cfg_chains`。`row_on_cfg=false`（默认）时，上一帧写完后进入配置帧，不发 VSYNC，整帧 ROW 保持低；下一普通帧才恢复 VSYNC 和扫描。true 时配置帧保留 VSYNC 和配置完成后的扫描。没有发送 `DIS_OP(12)`；板上表现待实测。

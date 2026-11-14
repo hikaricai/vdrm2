@@ -12,8 +12,8 @@ pub const ROWS: usize = {
     rows
 };
 pub const CHANNELS: usize = 16;
-/// Only OUT0..OUT14 connect to LEDs; OUT15 still has a zero-valued wire slot.
-pub const LED_CHANNELS: usize = 15;
+/// The single-chip test board connects all OUT0..OUT15 to COL0..COL15.
+pub const LED_CHANNELS: usize = 16;
 /// Number of complete ROWS-row sweeps per frame; build-time variable, default 1.
 pub const SCAN_REPEATS: usize = match option_env!("ICND2069_SCAN_REPEATS") {
     Some(value) => {
@@ -263,7 +263,7 @@ pub const ROW_ON_CFG: bool = match option_env!("ICND2069_ROW_ON_CFG") {
     },
     None => false,
 };
-/// Logical image width excludes each chip's unconnected OUT15.
+/// Logical image width includes all connected outputs.
 pub const TOTAL_CHANNELS: usize = LED_CHANNELS * CHAIN_COPIES;
 // Starting with a cleared chain, shift one gray byte and move it to the
 // selected chip. Clearing afterwards only needs to flush that byte out.
@@ -310,7 +310,7 @@ pub const fn latch_target(row: usize) -> usize {
 pub const fn latch_chip(row: usize) -> usize {
     latch_pixel(row) / LED_CHANNELS
 }
-/// Logical column (chip * 15 + OUT). Latch order remains OUT15 through OUT0.
+/// Logical column (chip * LED_CHANNELS + OUT). Latch order is OUT15 through OUT0.
 pub const TARGET_CHANNEL: usize = match option_env!("ICND2069_TARGET_CHANNEL") {
     Some(value) => {
         let bytes = value.as_bytes();
@@ -345,12 +345,11 @@ pub const REPEAT_LATCH_GAP: usize = match option_env!("ICND2069_REPEAT_LATCH_GAP
     None => 1,
 };
 
-// Each sample maps directly to development-board GP0..18 (hardware/dev_sch.png).
-// RGB1=GP5/4/3, RGB2=GP11/10/9, RGB3=GP2/1/0, RGB4=GP8/7/6.
-// Configuration is color-specific; gray data describes one image mirrored
-// onto the selected colors in all four groups.
-pub const RGB_SIN: [u32; 3] = [0x0924, 0x0492, 0x0249];
-pub const SIN: u32 = 0x0fff;
+// SCH_Schematic3_2026-10-24.pdf: a single SIN on the old R1 network.
+// Use the reference R register values; there are no G/B data inputs.
+pub const PIO_OUT_COUNT: u8 = 23;
+pub const SIN: u32 = 1 << 13;
+pub const RGB_SIN: [u32; 3] = [SIN, 0, 0];
 pub const COLOR: &str = match option_env!("ICND2069_COLOR") {
     Some(value) => value,
     None => "rgb",
@@ -366,13 +365,12 @@ pub const GRAY_SIN: u32 = match COLOR.as_bytes() {
     b"rgb" => SIN,
     _ => panic!("color must be r, g, b, rg, rb, gb or rgb"),
 };
-pub const LE: u32 = 1 << 18;
+pub const LE: u32 = 1 << 10;
 pub const LCK: u32 = 1 << 16;
-pub const BK: u32 = 1 << 15;
-pub const DIN: u32 = 1 << 17;
-pub const ROW: u32 = 1 << 13;
-// GP12/14 are unused; GP13 ROW is part of the same GPIO word as LE/data.
-// DCLK on GP19 is driven separately by side-set.
+pub const BK: u32 = 1 << 18;
+pub const DIN: u32 = 1 << 20;
+pub const ROW: u32 = 1 << 22;
+// DCLK on GP15 is driven by side-set. All waveform words keep that bit low.
 // The reference's six channels do not measure RT5990 DIN/LCK/BK.
 // Preserve the existing board assumptions; do not claim measured parity.
 pub const BK_ACTIVE_HIGH: bool = true;
@@ -488,8 +486,8 @@ pub const COMMON_PREFIX_WORDS: usize = 34;
 #[cfg(not(target_os = "none"))]
 pub static CONFIG_IDLE_PREFIX: [u32; COMMON_PREFIX_WORDS] = [PARK; COMMON_PREFIX_WORDS];
 /// Physical RT5990 chain, independent of the configured ICND2069 scan rows.
-pub const RT5990_CLEAR_ROWS: usize = 160;
-/// Two setup clocks, 160 LCK pulses (two high/two low), two trailing clocks.
+pub const RT5990_CLEAR_ROWS: usize = 16;
+/// Two setup clocks, 16 LCK pulses (two high/two low), two trailing clocks.
 /// SIN/LE also stay zero here; each ICND2069 write has its own extra preclear.
 pub const RT5990_CLEAR_DCLKS: usize = 4 + RT5990_CLEAR_ROWS * 4;
 pub const CONFIG_COMMAND_START: usize = COMMON_PREFIX_WORDS + RT5990_CLEAR_DCLKS;
@@ -616,8 +614,7 @@ pub fn update_white(words: &mut [u32], gray: u16) {
     for row in 0..ROWS {
         for transfer in 0..CHANNELS {
             start += usize::from(row != 0 && transfer == 0);
-            // OUT15 is the first wire slot and must stay black.
-            let value = if transfer == 0 { 0 } else { gray };
+            let value = gray;
             for t in start..start + TRANSFER_DCLKS {
                 let bit = 15 - (t - start) % 16;
                 let mask = SIN;
@@ -750,7 +747,7 @@ pub fn pattern_frame(pattern: Pattern, gray: u16) -> Frame {
 /// Normal rotates the full chain-width gradient right by one column per row.
 /// Diagonal keeps column (row % TOTAL_CHANNELS), fading gray[1] to gray[0].
 /// Column fades gray[1] to gray[0] from the first to the last row.
-/// Column = chip * 15 + OUT; chip 0 is nearest the MCU.
+/// Column = chip * LED_CHANNELS + OUT; chip 0 is nearest the MCU.
 /// Integer interpolation rounds to the nearest gray and preserves endpoints.
 pub fn pattern_frame_range(pattern: Pattern, gray: [u16; 2]) -> Frame {
     assert!(gray.iter().all(|&value| value <= MAX_GRAY_INPUT));
