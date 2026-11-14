@@ -8,10 +8,10 @@
     "cfg_chains": 4,
     "row_on_cfg": false,
 
-    "color": "rgb",
+    "color": "gb",
     "pattern_doc": "每颗使用 OUT0..OUT14，OUT15 未接 LED、写零；col_x：第 x 列，x 范围 0..chains*15-1，沿行从 gray[1] 渐变到 gray[0]；diagonal：斜线（默认）。两者均支持 repeat_latch。",
     "pattern": "diagonal",
-    "cfg_dclk_mhz": 10,
+    "cfg_dclk_mhz": 20,
     "_dclk_mhz_doc": "单位 MHz；当前恢复 dsview/icnd2069/261024_50m_start_10s.summary.md 记录的实测 DCLK≈12.5 MHz；文件名中的50m是采样率。",
     "dclk_mhz": 30,
     "_gclk_mhz_doc": "按 dclk_mhz/gclk_mhz 精确选取 PLL M/P，GCLK 按 N=1 计算，非实测内部频率。12.5/31.25 组合保留抓包 M=4/P=10，DCLK/M=3.125 MHz 低于指南范围。keep_scan_time=false 时行周期固定60 DCLK，不随 PLL/PWM 寄存器调整。",

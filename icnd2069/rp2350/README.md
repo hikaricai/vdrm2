@@ -55,13 +55,16 @@ cargo run --release
 
 `cfg_dclk_mhz` 用于配置帧的前缀、RT5990 清空及寄存器配置段（EN_OP、PRE_ACT、解锁、寄存器写入、锁定及对齐时钟）。配置块完成后停 PIO，切回 `dclk_mhz` 发送灰度。普通帧全部使用 `dclk_mhz`。ICND2069 的 M/P 配置仍按正常数据阶段的 `dclk_mhz` 与 `gclk_mhz` 计算。
 
-固定 PIO 程序只有 PULL、OUT PINS、NOP 三条指令。PULL 缺数据时 DCLK 保持低；OUT 在低电平内更新 LE/SIN/ROW。当前 30 MHz 普通速度、1 MHz 配置速度下，配置建立时间实测 250～254 ns；普通高速路径建立时间为一个 PIO 周期，仍需注意高速电气裕量。
+固定 PIO 程序在启动时执行一次 `SET X,0`，随后只循环
+`PULL NOBLOCK、OUT PINS、NOP` 三条指令。FIFO 空时 PULL 取 X=0，
+保持 SIN/LE/ROW 低，DCLK 继续运行；OUT 在低电平内更新管脚。
+普通高速路径建立时间为一个 PIO 周期，仍需注意高速电气裕量。
 
 例如当前 30 MHz / 1 MHz：系统时钟 120 MHz，同一程序每 DCLK 4 个 PIO 周期；普通分频为 1，配置分频为 30。频率切换只改状态机分频，不再使用 GPIO 字高位或 OUT PC 跳转。
 
 配置速度要求半周期对称且分频能精确表示；不可精确生成的组合会编译报错。RTT 打印两种速度和分频，每五秒打印帧计数。1 MHz 配置阶段低于芯片指南的 PLL 输入范围，切回正常速度后的锁定与显示效果需实测。
 
-验证命令：`cargo build --release --locked`，随后运行 `python3 tools/check_dclk.py` 和 `python3 tools/check_chain_width.py`。前者检查实际三条 PIO 指令、低电平停车、分频比例、GPIO 中的 ROW 与配置门控；仍需用实际抓包验证发送块内是否断供及芯片输出。
+验证命令：`cargo build --release --locked`，随后运行 `python3 tools/check_dclk.py` 和 `python3 tools/check_chain_width.py`。前者检查一次性 X=0 初始化、非阻塞 PULL、三指令循环、分频比例、GPIO 中的 ROW 与配置门控；仍需用实际抓包核验帧边界连续时钟、指令计数及芯片输出。
 
 所有档位均满足 `DCLK = 系统时钟 / PIO 整数分频 / 每 DCLK 指令周期数`。PIO 分频器的小数部分固定为 0，高低电平各占一半周期；编译期校验系统 PLL 的 VCO 范围、输出频率和 PIO 整除关系，不允许用近似分数分频凑频率。
 
@@ -85,7 +88,14 @@ cargo run --release
 
 31 MHz 使用系统 PLL `12 MHz × 124 / 4 / 3 = 124 MHz`，VCO 为 1488 MHz，避免使用低于合法范围的 744 MHz VCO。32/33/34 MHz 分别使用 `12 MHz × 64/66/68 / 3 / 2`。
 
-绝对频率仍受晶振和 PLL 影响。每个发送块结束时，固件等 DMA 写完、FIFO 排空及最后一个 DCLK 完成，然后关闭 PIO。PULL 在块尾等待是预期行为，TXSTALL 标志用于确认发送完成，不再把每个正常块尾报告为缺数告警。块内断供需从抓包中检查连续 DCLK 及每块完整时钟数。
+绝对频率仍受晶振和 PLL 影响。同频率发送只等 DMA 写入完成，
+不排空 FIFO、不停 PIO、不重置分频；下一帧继续使用同一 DMA。
+CPU 尚未提交下一帧时，PIO 输出零字补齐空闲时间，CLK 不会断开。
+只有实际切换分频才等待 FIFO 清空，在 PARK 尾部停状态机并强制 DCLK 低，
+跳回一次性初始化入口、修改分频、预填 FIFO 后恢复。
+不再依赖阻塞 PULL 的 TXSTALL 标志判断发送完成。
+普通帧仍含相同数量的数据字，但帧间可能多出零时钟，
+理论 FPS 不计这段软件空闲时间，实测 FPS 会计入。
 
 2026-11-07 全档位核验：15 个 JSON 档位全部通过主机 PLL/PIO 精确比例、分频小数部分为零及 RGB/灰度/ROW 波形检查；31/32/33/34 MHz 和当前 30 MHz 的 RP2350 release 构建通过。本轮未烧录，TXSTALL 检测和实际边沿均待上板验证。
 
@@ -243,10 +253,16 @@ PIO 每个 DCLK 使用一个 32 位 DMA 样本，低 19 位覆盖 GP0～GP18（G
 
 ## 当前时序概览
 
+2026-11-14 22:43 起，普通帧之间不再停 PIO；FIFO 空时补零并继续 DCLK，
+仅实际切换分频时停车。实际检查 382 个完整帧，
+帧尾到下一 VSYNC 的周期为采样量化后的 32/40 ns，无原约 5.47 µs 停顿。
+详见 [连续帧实测](../captures/experiments/20261114_continuous_frames/README.md)。
+
 配置锁回后，以 `cfg_dclk_mhz` 再发送
 `max(chains, cfg_chains) × 16` 个零时钟，LE/ROW 均低。
-随后切换到 `dclk_mhz`，通过独立的 SRAM 零缓冲再发同样数量的零时钟，
-再发送完整灰度帧；下一普通帧的 VSYNC 才切换显示缓冲。
+随后切换到 `dclk_mhz`，在同一个连续 SRAM/DMA 高速块中，
+先发同样数量的零时钟，再发送完整灰度帧，中间不停止 PIO；
+下一普通帧的 VSYNC 才切换显示缓冲。
 偶数块边界的 PARK 补齐和原有灰度前导清零仍保留。
 普通帧不发送这两个新增清零块；配置理论 FPS 已计入两段清零。
 

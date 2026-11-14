@@ -42,6 +42,9 @@ pub struct Driver {
     sm: StateMachine<'static, PIO0, 0>,
     dma: PeripheralRef<'static, DMA_CH0>,
     _common: Common<'static, PIO0>,
+    divider: u32,
+    running: bool,
+    program_origin: u8,
 }
 
 impl Driver {
@@ -91,10 +94,15 @@ impl Driver {
             sm.set_pins(Level::High, &[&din]);
         }
         sm.set_pin_dirs(pio::Direction::Out, &all);
-        Self { sm, dma: dma.into_ref(), _common: common }
+        Self {
+            sm, dma: dma.into_ref(), _common: common,
+            divider: protocol::PIO_CLKDIV_INT << 8,
+            running: false, program_origin: loaded.origin,
+        }
     }
 
-    /// Stop at a completed block with DCLK/LE/ROW low, then change divider.
+    /// Same-rate blocks keep DCLK running; empty FIFO emits PARK words.
+    /// Only a rate change drains the parking tail and stops the SM.
     pub async fn send(&mut self, words: &[u32], configuration: bool) {
         assert!(!words.is_empty());
         assert_eq!(words[words.len() - 1] & (protocol::LE | protocol::ROW), 0);
@@ -103,27 +111,35 @@ impl Driver {
         } else {
             protocol::PIO_CLKDIV_INT << 8
         };
-        self.sm.set_clock_divider(U24F8::from_bits(divider));
-        self.sm.clkdiv_restart();
-        let _ = self.sm.tx().stalled();
+        let start = !self.running || self.divider != divider;
+        if start {
+            if self.running {
+                while !self.sm.tx().empty() {
+                    core::hint::spin_loop();
+                }
+                // All queued trailing words are PARK. No active latch/ROW
+                // can be cut short while stopping for the divider change.
+                self.sm.set_enable(false);
+            }
+            self.sm.restart();
+            // JMP to the one-time SET X,0, with side-set LOW. Forced
+            // instructions execute while disabled, parking DCLK before
+            // changing divider; startup then reinitializes the idle word.
+            unsafe { self.sm.exec_instr(self.program_origin as u16); }
+            self.sm.set_clock_divider(U24F8::from_bits(divider));
+            self.sm.clkdiv_restart();
+            self.divider = divider;
+        }
         let transfer = self.sm.tx().dma_push(self.dma.reborrow(), words, false);
         // The transfer borrows TX. CTRL/FLEVEL are independent registers;
         // this driver exclusively owns SM0 and DMA0.
-        while embassy_rp::pac::PIO0.flevel().read().0 & 0xf < words.len().min(8) as u32 {
-            core::hint::spin_loop();
+        if start {
+            while embassy_rp::pac::PIO0.flevel().read().0 & 0xf < words.len().min(8) as u32 {
+                core::hint::spin_loop();
+            }
+            embassy_rp::pac::PIO0.ctrl().write(|w| w.set_sm_enable(1));
+            self.running = true;
         }
-        embassy_rp::pac::PIO0.ctrl().write(|w| w.set_sm_enable(1));
         transfer.await;
-        // DMA completion only means FIFO writes are done. Wait until the
-        // final pin word and its DCLK pulse finish. PULL then waits LOW.
-        while !self.sm.tx().empty() {
-            core::hint::spin_loop();
-        }
-        // Discard an earlier underrun flag before observing the final PULL.
-        let _ = self.sm.tx().stalled();
-        while !self.sm.tx().stalled() {
-            core::hint::spin_loop();
-        }
-        self.sm.set_enable(false);
     }
 }

@@ -13,12 +13,10 @@ use embassy_time::{Instant, Timer};
 use panic_rtt_target as _;
 use static_cell::ConstStaticCell;
 
-static CONFIG_FRAME: ConstStaticCell<[u32; protocol::FRAME_WORDS]> =
-    ConstStaticCell::new([0; protocol::FRAME_WORDS]);
+static CONFIG_FRAME: ConstStaticCell<[u32; protocol::FRAME_WORDS + protocol::CFG_POST_CLR_DCLKS]> =
+    ConstStaticCell::new([0; protocol::FRAME_WORDS + protocol::CFG_POST_CLR_DCLKS]);
 static NORMAL_FRAME: ConstStaticCell<[u32; protocol::NORMAL_FRAME_DCLKS]> =
     ConstStaticCell::new([0; protocol::NORMAL_FRAME_DCLKS]);
-static CONFIG_FAST_CLEAR: ConstStaticCell<[u32; protocol::CFG_POST_CLR_DCLKS]> =
-    ConstStaticCell::new([protocol::PARK; protocol::CFG_POST_CLR_DCLKS]);
 
 /// Hundredths of FPS, without floating point or scaling the full numerator.
 fn fps_x100(clock_hz: u64, frames: u64, ticks: u64) -> u64 {
@@ -52,23 +50,28 @@ async fn main(_spawner: Spawner) {
     );
     let configuration = CONFIG_FRAME.take();
     let normal = NORMAL_FRAME.take();
-    let fast_clear = CONFIG_FAST_CLEAR.take();
     {
         // Keep the temporary image out of the async task arena.
         let image = protocol::pattern_frame_range(PATTERN, GRAY_RANGE);
-        protocol::encode_frame(configuration, &image);
+        protocol::encode_frame(&mut configuration[..protocol::FRAME_WORDS], &image);
     }
     normal[..protocol::COMMON_PREFIX_WORDS]
         .copy_from_slice(&configuration[..protocol::COMMON_PREFIX_WORDS]);
     normal[protocol::COMMON_PREFIX_WORDS..]
-        .copy_from_slice(&configuration[protocol::CONFIG_END_WORDS..]);
+        .copy_from_slice(&configuration[protocol::CONFIG_END_WORDS..protocol::FRAME_WORDS]);
+    // Insert the fast clear once at startup. Its zeros and grayscale tail
+    // then share one contiguous DMA transfer, with no PIO stop between them.
+    configuration.copy_within(protocol::CONFIG_END_WORDS..protocol::FRAME_WORDS,
+        protocol::CONFIG_END_WORDS + protocol::CFG_POST_CLR_DCLKS);
+    configuration[protocol::CONFIG_END_WORDS
+        ..protocol::CONFIG_END_WORDS + protocol::CFG_POST_CLR_DCLKS].fill(protocol::PARK);
     if !protocol::ROW_ON_CFG {
         configuration[..protocol::COMMON_PREFIX_WORDS].fill(protocol::PARK);
         for word in configuration.iter_mut() {
             *word &= !protocol::ROW;
         }
     }
-    rtt_target::rprintln!("ICND2069: single PIO SM0 + DMA0; stop LOW between blocks, change divider while stopped");
+    rtt_target::rprintln!("ICND2069: single PIO SM0 + DMA0; continuous idle-zero DCLK, stop LOW only for divider changes");
     rtt_target::rprintln!("chains={}, cfg_chains={}, lines={}, scan_repeats={}, row_on_cfg={}",
         protocol::CHAIN_COPIES, protocol::CFG_CHAIN_COPIES, protocol::ROWS,
         protocol::SCAN_REPEATS, protocol::ROW_ON_CFG);
@@ -77,20 +80,20 @@ async fn main(_spawner: Spawner) {
         protocol::PIO_CLKDIV_INT << 8, protocol::CFG_CLKDIV_BITS);
     rtt_target::rprintln!("pattern={}, color={}, gray={:?}, config_interval={}",
         PATTERN_NAME, protocol::COLOR, GRAY_RANGE, protocol::CONFIG_INTERVAL);
-    rtt_target::rprintln!("normal={} clocks, ROW={} pulses at {} clocks/row; software gaps between blocks",
+    rtt_target::rprintln!("normal={} data clocks, ROW={} pulses at {} clocks/row; idle-zero clocks between frames",
         normal.len(), protocol::ROWS * protocol::SCAN_REPEATS, protocol::ROW_DCLKS);
     rtt_target::rprintln!("configuration={} slow clocks; WR_CFG={}, preclear={} clocks/write, RT5990 clear={} rows",
         protocol::CONFIG_END_WORDS, protocol::CONFIG_WRITES,
         protocol::CFG_PRE_CLR_DCLKS, protocol::RT5990_CLEAR_ROWS);
     rtt_target::rprintln!("after configuration: {} slow zero clocks, {} fast zero clocks, complete grayscale frame, then VSYNC; clear LE/ROW LOW",
-        protocol::CFG_POST_CLR_DCLKS, fast_clear.len());
+        protocol::CFG_POST_CLR_DCLKS, protocol::CFG_POST_CLR_DCLKS);
     rtt_target::rprintln!("GPIO DCLK/LE/ROW=19/18/13; RT LCK/BK/DIN=16/15/17; wave RAM={} bytes",
-        (configuration.len() + normal.len() + fast_clear.len()) * 4);
+        (configuration.len() + normal.len()) * 4);
     let fast_cycles = u64::from(protocol::SYS_HZ / protocol::DCLK_HZ);
     let normal_cycles = normal.len() as u64 * fast_cycles;
     let config_cycles = protocol::CONFIG_END_WORDS as u64
         * u64::from(protocol::SYS_HZ / protocol::CFG_DCLK_HZ)
-        + (fast_clear.len() + configuration.len() - protocol::CONFIG_END_WORDS) as u64 * fast_cycles;
+        + (configuration.len() - protocol::CONFIG_END_WORDS) as u64 * fast_cycles;
     let interval = u64::from(protocol::CONFIG_INTERVAL);
     let normal_fps = fps_x100(u64::from(protocol::SYS_HZ), 1, normal_cycles);
     let config_fps = fps_x100(u64::from(protocol::SYS_HZ), 1, config_cycles);
@@ -152,7 +155,6 @@ async fn main(_spawner: Spawner) {
         previous_normal = !configure;
         if configure {
             driver.send(&configuration[..protocol::CONFIG_END_WORDS], true).await;
-            driver.send(fast_clear, false).await;
             driver.send(&configuration[protocol::CONFIG_END_WORDS..], false).await;
         } else {
             driver.send(normal, false).await;
