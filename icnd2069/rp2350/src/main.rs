@@ -98,13 +98,13 @@ async fn main(_spawner: Spawner) {
         protocol::DATA_ROW_DCLKS,
     );
     if protocol::CONTINUOUS_LATCH && protocol::DIAGONAL_LATCH {
-        rtt_target::rprintln!("diagonal latch: column=row%{}, chip=column/16 (0 nearest MCU), OUT=column%16",
-            protocol::TOTAL_CHANNELS);
+        rtt_target::rprintln!("diagonal latch: column=row%{}, chip=column/{} (0 nearest MCU), OUT=column%{}; OUT15=0",
+            protocol::TOTAL_CHANNELS, protocol::LED_CHANNELS, protocol::LED_CHANNELS);
     }
     if protocol::COLUMN_PATTERN {
         rtt_target::rprintln!("column={} (zero-based), chip={}, OUT={}, gray first/last row={}/{}",
-            protocol::TARGET_CHANNEL, protocol::TARGET_CHANNEL / 16,
-            protocol::TARGET_CHANNEL % 16, GRAY_RANGE[1], GRAY_RANGE[0]);
+            protocol::TARGET_CHANNEL, protocol::TARGET_CHANNEL / protocol::LED_CHANNELS,
+            protocol::TARGET_CHANNEL % protocol::LED_CHANNELS, GRAY_RANGE[1], GRAY_RANGE[0]);
     }
     if protocol::CONTINUOUS_LATCH {
         rtt_target::rprintln!(

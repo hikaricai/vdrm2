@@ -1,11 +1,12 @@
 {
     "scan_repeats": 1,
+    "lines": 54,
     "keep_scan_time": false,
     "config_interval": 1000,
     "chains": 2,
 
     "color": "r",
-    "pattern_doc": "col_x：第 x 列，x 范围 0..chains*16-1，沿行从 gray[1] 渐变到 gray[0]；diagonal：斜线（默认）。两者均支持 repeat_latch。",
+    "pattern_doc": "每颗使用 OUT0..OUT14，OUT15 未接 LED、写零；col_x：第 x 列，x 范围 0..chains*15-1，沿行从 gray[1] 渐变到 gray[0]；diagonal：斜线（默认）。两者均支持 repeat_latch。",
     "pattern": "diagonal",
     "cfg_dclk_mhz": 1,
     "_dclk_mhz_doc": "单位 MHz；当前恢复 dsview/icnd2069/261024_50m_start_10s.summary.md 记录的实测 DCLK≈12.5 MHz；文件名中的50m是采样率。",
@@ -17,5 +18,5 @@
     "repeat_latch": {
         "repeat_latch_gap": 1
     },
-    "gray": [0, 255]
+    "gray": [255, 255]
 }

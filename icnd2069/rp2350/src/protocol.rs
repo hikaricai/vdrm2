@@ -1,11 +1,20 @@
-//! ICND2069 54-scan image and full configuration using fixed DCLK timing.
+//! ICND2069 configurable-scan image and full configuration using fixed DCLK timing.
 //! Each u32 describes pins for one DCLK rising-edge transfer.
 //! Reference: captures/reference/nova_to_devboard_100m_2s.dsl and the startup summary.
 
-/// ICND2069 register 02h is programmed as 53, selecting 54 scan rows.
-pub const ROWS: usize = 54;
+/// Scan rows from config.json; register 02h receives ROWS - 1.
+pub const ROWS: usize = {
+    let rows = match option_env!("ICND2069_LINES") {
+        Some(value) => unsigned_setting(value) as usize,
+        None => 54,
+    };
+    assert!(rows >= 1 && rows <= 64, "lines must be 1..=64");
+    rows
+};
 pub const CHANNELS: usize = 16;
-/// Number of complete 54-row sweeps per frame; build-time variable, default 1.
+/// Only OUT0..OUT14 connect to LEDs; OUT15 still has a zero-valued wire slot.
+pub const LED_CHANNELS: usize = 15;
+/// Number of complete ROWS-row sweeps per frame; build-time variable, default 1.
 pub const SCAN_REPEATS: usize = match option_env!("ICND2069_SCAN_REPEATS") {
     Some(value) => {
         let bytes = value.as_bytes();
@@ -241,7 +250,8 @@ pub const CHAIN_COPIES: usize = match option_env!("ICND2069_CHAIN_COPIES") {
     None => 1,
 };
 pub const TRANSFER_DCLKS: usize = 16 * CHAIN_COPIES;
-pub const TOTAL_CHANNELS: usize = CHANNELS * CHAIN_COPIES;
+/// Logical image width excludes each chip's unconnected OUT15.
+pub const TOTAL_CHANNELS: usize = LED_CHANNELS * CHAIN_COPIES;
 // Starting with a cleared chain, shift one gray byte and move it to the
 // selected chip. Clearing afterwards only needs to flush that byte out.
 pub const fn latch_gray_dclks(row: usize) -> usize {
@@ -281,12 +291,12 @@ pub const fn latch_pixel(row: usize) -> usize {
     if DIAGONAL_LATCH { row % TOTAL_CHANNELS } else { TARGET_CHANNEL }
 }
 pub const fn latch_target(row: usize) -> usize {
-    latch_pixel(row) % CHANNELS
+    latch_pixel(row) % LED_CHANNELS
 }
 pub const fn latch_chip(row: usize) -> usize {
-    latch_pixel(row) / CHANNELS
+    latch_pixel(row) / LED_CHANNELS
 }
-/// Logical column (chip * 16 + OUT). Latch order remains OUT15 through OUT0.
+/// Logical column (chip * 15 + OUT). Latch order remains OUT15 through OUT0.
 pub const TARGET_CHANNEL: usize = match option_env!("ICND2069_TARGET_CHANNEL") {
     Some(value) => {
         let bytes = value.as_bytes();
@@ -576,16 +586,18 @@ pub fn update_white(words: &mut [u32], gray: u16) {
     for row in 0..ROWS {
         for transfer in 0..CHANNELS {
             start += usize::from(row != 0 && transfer == 0);
+            // OUT15 is the first wire slot and must stay black.
+            let value = if transfer == 0 { 0 } else { gray };
             for t in start..start + TRANSFER_DCLKS {
                 let bit = 15 - (t - start) % 16;
                 let mask = SIN;
                 words[t] = (words[t] & !mask)
-                    | if gray & (1 << bit) != 0 { GRAY_SIN } else { 0 };
+                    | if value & (1 << bit) != 0 { GRAY_SIN } else { 0 };
             }
             start += TRANSFER_DCLKS;
         }
     }
-    assert_eq!(start, DATA_END);
+    assert_eq!(start, DATA_PAYLOAD_END);
 }
 
 pub struct Waveform<'a> {
@@ -645,7 +657,7 @@ impl<'a> Waveform<'a> {
         self.hold(PARK, gap);
         // Farthest chip first; the last serial word remains nearest SIN.
         for chip in (0..CHAIN_COPIES).rev() {
-            let value = values[chip * CHANNELS + out];
+            let value = if out < LED_CHANNELS { values[chip * LED_CHANNELS + out] } else { 0 };
             assert!(value <= MAX_GRAY_INPUT);
             for bit in (0..16).rev() {
                 let data = if value & (1 << bit) != 0 { GRAY_SIN } else { 0 };
@@ -702,7 +714,7 @@ pub fn pattern_frame(pattern: Pattern, gray: u16) -> Frame {
 /// Normal rotates the full chain-width gradient right by one column per row.
 /// Diagonal keeps column (row % TOTAL_CHANNELS), fading gray[1] to gray[0].
 /// Column fades gray[1] to gray[0] from the first to the last row.
-/// Column = chip * 16 + OUT; chip 0 is nearest the MCU.
+/// Column = chip * 15 + OUT; chip 0 is nearest the MCU.
 /// Integer interpolation rounds to the nearest gray and preserves endpoints.
 pub fn pattern_frame_range(pattern: Pattern, gray: [u16; 2]) -> Frame {
     assert!(gray.iter().all(|&value| value <= MAX_GRAY_INPUT));
@@ -723,6 +735,11 @@ pub fn pattern_frame_range(pattern: Pattern, gray: [u16; 2]) -> Frame {
                 }
                 Pattern::Column(column) => {
                     if out != column {
+                        continue;
+                    }
+                    // A single row is the first endpoint of the column.
+                    if ROWS == 1 {
+                        *value = gray[1];
                         continue;
                     }
                     (ROWS - 1 - row, ROWS - 1)
@@ -819,7 +836,7 @@ fn encode_wave(wave: &mut Waveform<'_>, frame: &Frame, rotating: Option<[u16; 3]
     wave.hold(PARK, FRAME_DCLKS - wave.clocks);
 
     // Overlay independently running ROW on the serialized command/data bus.
-    // GROUPS complete sweeps x 54 rows; distribute fractional periods in DCLK.
+    // GROUPS complete sweeps x ROWS rows; distribute fractional periods in DCLK.
     let mut start = FIRST_ROW;
     for i in 0..GROUPS * ROWS {
         let period = row_period(i);

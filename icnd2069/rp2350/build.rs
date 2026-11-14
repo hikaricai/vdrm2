@@ -5,6 +5,8 @@ use std::{env, fs, path::PathBuf};
 // Unknown fields are ignored so renamed options and debug notes can stay.
 struct Config {
     scan_repeats: u8,
+    #[serde(default = "default_lines")]
+    lines: u8,
     #[serde(default)]
     keep_scan_time: bool,
     config_interval: u32,
@@ -27,6 +29,10 @@ struct Config {
 
 fn default_pattern() -> String {
     "diagonal".into()
+}
+
+fn default_lines() -> u8 {
+    54
 }
 
 fn default_color() -> String {
@@ -75,6 +81,7 @@ fn main() {
     let json = fs::read_to_string(&path).expect("cannot read config.json");
     let config: Config = serde_json::from_str(&json).expect("invalid config.json");
     assert!((1..=64).contains(&config.scan_repeats), "config.json: scan_repeats must be 1..=64");
+    assert!((1..=64).contains(&config.lines), "config.json: lines must be 1..=64");
     assert!(config.config_interval > 0, "config.json: config_interval must be 1..=4294967295");
     assert!((1..=8).contains(&config.chains), "config.json: chains must be 1..=8");
     assert!(matches!(config.color.as_str(), "r" | "g" | "b" | "rg" | "rb" | "gb" | "rgb"),
@@ -86,8 +93,8 @@ fn main() {
             .filter(|value| !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit()))
             .and_then(|value| value.parse::<usize>().ok())
             .expect("config.json: pattern must be diagonal or col_x (x is a nonnegative decimal column)");
-        assert!(column < usize::from(config.chains) * 16,
-            "config.json: col_x column must be in 0..chains*16-1");
+        assert!(column < usize::from(config.chains) * 15,
+            "config.json: col_x column must be in 0..chains*15-1 (OUT15 is unconnected)");
         ("col", format!("Column({column})"), column)
     };
     assert!(
@@ -146,6 +153,7 @@ fn main() {
     // Internal compiler inputs for protocol.rs and host waveform tools.
     // Always emit every value, so old shell exports cannot override JSON.
     println!("cargo:rustc-env=ICND2069_SCAN_REPEATS={}", config.scan_repeats);
+    println!("cargo:rustc-env=ICND2069_LINES={}", config.lines);
     println!("cargo:rustc-env=ICND2069_KEEP_SCAN_TIME={}", u8::from(config.keep_scan_time));
     println!("cargo:rustc-env=ICND2069_CONFIG_INTERVAL={}", config.config_interval);
     println!("cargo:rustc-env=ICND2069_CHAIN_COPIES={}", config.chains);
