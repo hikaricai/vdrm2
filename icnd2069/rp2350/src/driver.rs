@@ -76,12 +76,12 @@ impl Driver {
         cfg.fifo_join = pio::FifoJoin::TxOnly;
         cfg.shift_out = ShiftConfig {
             auto_fill: false,
-            threshold: 19,
+            threshold: protocol::PIO_OUT_COUNT,
             direction: pio::ShiftDirection::Right,
         };
         let mut pin_cfg = cfg.get_pins();
         pin_cfg.out_base = 0;
-        pin_cfg.out_count = 19;
+        pin_cfg.out_count = protocol::PIO_OUT_COUNT;
         // Only the owned pins are muxed; GP12/14 remain unused.
         unsafe { cfg.set_pins(pin_cfg); }
         sm.set_config(&cfg);

@@ -346,6 +346,7 @@ pub const REPEAT_LATCH_GAP: usize = match option_env!("ICND2069_REPEAT_LATCH_GAP
 };
 
 // Each sample maps directly to development-board GP0..18 (hardware/dev_sch.png).
+pub const PIO_OUT_COUNT: u8 = 19;
 // RGB1=GP5/4/3, RGB2=GP11/10/9, RGB3=GP2/1/0, RGB4=GP8/7/6.
 // Configuration is color-specific; gray data describes one image mirrored
 // onto the selected colors in all four groups.
