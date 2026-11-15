@@ -71,5 +71,10 @@ SECTIONS {
 
 } INSERT AFTER .uninit;
 
+/* .end_block moves the location counter to FLASH before link.x defines
+ * these symbols. Keep the heap and stack boundaries at the end of RAM data. */
+__sheap = __euninit;
+_stack_end = __euninit;
+
 PROVIDE(start_to_end = __end_block_addr - __start_block_addr);
 PROVIDE(end_to_start = __start_block_addr - __end_block_addr);

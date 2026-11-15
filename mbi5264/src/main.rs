@@ -320,9 +320,10 @@ async fn main(spawner: Spawner) {
     paint_stack();
     rtt_target::rprintln!("stack peak {} B", stack_high_water());
     //
-    test_screen(&mut cmd_pio, &mut line, &mut led_pin).await;
+    // test_screen(&mut cmd_pio, &mut line, &mut led_pin).await;
+    test_screen_line(&mut cmd_pio, &mut line, &mut led_pin).await;
     // must return to run test_screen
-    // return;
+    return;
 
     // rtt_target::rprintln!("first sync_signal");
     // let mut cmd_iter = core::iter::repeat(UMINI_CMDS.iter()).flatten();
@@ -474,7 +475,7 @@ async fn test_screen_line(
     let mut parser = encoder::ColorParser::new(&mut buf);
     let mut coloum: [crate::RGBH; crate::IMG_HEIGHT] = [[255, 255, 255, 0]; crate::IMG_HEIGHT];
     for i in 0..crate::IMG_HEIGHT {
-        // let h = i % 16;
+        let h = i % 16;
         let h = 8;
         let line = i % 64;
         let gray = line as u8 * 4 + 3;
