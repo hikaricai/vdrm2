@@ -476,7 +476,7 @@ async fn test_screen_line(
     let mut coloum: [crate::RGBH; crate::IMG_HEIGHT] = [[255, 255, 255, 0]; crate::IMG_HEIGHT];
     for i in 0..crate::IMG_HEIGHT {
         let h = i % 16;
-        let h = 8;
+        // let h = 8;
         let line = i % 64;
         let gray = line as u8 * 4 + 3;
         let b = if gray < 64 { gray + 30 } else { gray };
