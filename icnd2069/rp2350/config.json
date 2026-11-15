@@ -3,9 +3,9 @@
     "lines": 54,
     "keep_scan_time": false,
     "config_interval": 1000,
-    "chains": 2,
+    "chains": 3,
     "cfg_pre_clr_chains": 0,
-    "cfg_chains": 4,
+    "cfg_chains": 3,
     "row_on_cfg": false,
 
     "color": "rgb",
