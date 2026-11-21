@@ -13,6 +13,8 @@ struct Config {
     chains: u8,
     #[serde(default)]
     cfg_chains: Option<u8>,
+    #[serde(default = "default_cpld_addresses")]
+    cpld_addresses: [u8; 3],
     #[serde(default)]
     cfg_pre_clr_chains: u8,
     #[serde(default)]
@@ -37,6 +39,10 @@ struct Config {
 
 fn default_pattern() -> String {
     "diagonal".into()
+}
+
+fn default_cpld_addresses() -> [u8; 3] {
+    [7; 3]
 }
 
 fn default_lines() -> u8 {
@@ -91,9 +97,11 @@ fn main() {
     assert!((1..=64).contains(&config.scan_repeats), "config.json: scan_repeats must be 1..=64");
     assert!((1..=64).contains(&config.lines), "config.json: lines must be 1..=64");
     assert!(config.config_interval > 0, "config.json: config_interval must be 1..=4294967295");
-    assert!((1..=8).contains(&config.chains), "config.json: chains must be 1..=8");
+    assert_eq!(config.chains, 2, "config.json: this board requires chains=2");
     let cfg_chains = config.cfg_chains.unwrap_or(config.chains);
-    assert!((1..=8).contains(&cfg_chains), "config.json: cfg_chains must be 1..=8");
+    assert_eq!(cfg_chains, 2, "config.json: this board requires cfg_chains=2");
+    assert!(config.cpld_addresses.iter().all(|&a| a <= 7),
+        "config.json: cpld_addresses must contain three addresses in 0..=7");
     assert!(config.cfg_pre_clr_chains <= 64, "config.json: cfg_pre_clr_chains must be 0..=64");
     assert!(matches!(config.color.as_str(), "r" | "g" | "b" | "rg" | "rb" | "gb" | "rgb"),
         "config.json: color must be r, g, b, rg, rb, gb or rgb");
@@ -169,6 +177,9 @@ fn main() {
     println!("cargo:rustc-env=ICND2069_CONFIG_INTERVAL={}", config.config_interval);
     println!("cargo:rustc-env=ICND2069_CHAIN_COPIES={}", config.chains);
     println!("cargo:rustc-env=ICND2069_CFG_CHAIN_COPIES={cfg_chains}");
+    for (bank, address) in config.cpld_addresses.iter().enumerate() {
+        println!("cargo:rustc-env=ICND2069_CPLD_ADDRESS_{}={address}", bank + 1);
+    }
     println!("cargo:rustc-env=ICND2069_CFG_PRE_CLR_CHAINS={}", config.cfg_pre_clr_chains);
     println!("cargo:rustc-env=ICND2069_ROW_ON_CFG={}", u8::from(config.row_on_cfg));
     println!("cargo:rustc-env=ICND2069_DISABLE_RT5990={}", u8::from(config.disable_rt5990));

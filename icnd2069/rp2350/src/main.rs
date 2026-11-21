@@ -40,12 +40,12 @@ async fn main(_spawner: Spawner) {
     let mut driver = driver::Driver::new(
         p.PIO0, p.DMA_CH0,
         driver::Pins {
-            r1: p.PIN_5, g1: p.PIN_4, b1: p.PIN_3,
-            r2: p.PIN_11, g2: p.PIN_10, b2: p.PIN_9,
-            r3: p.PIN_2, g3: p.PIN_1, b3: p.PIN_0,
-            r4: p.PIN_8, g4: p.PIN_7, b4: p.PIN_6,
-            dclk: p.PIN_19, le: p.PIN_18, row: p.PIN_13,
-            lck: p.PIN_16, lbk: p.PIN_15, ldata: p.PIN_17,
+            r1: p.PIN_0, g1: p.PIN_1, b1: p.PIN_2, sel1: p.PIN_3,
+            r2: p.PIN_4, g2: p.PIN_5, b2: p.PIN_6, sel2: p.PIN_7,
+            r3: p.PIN_8, g3: p.PIN_9, b3: p.PIN_10, sel3: p.PIN_11,
+            lat1: p.PIN_12, lat2: p.PIN_13, lat3: p.PIN_14,
+            dclk: p.PIN_15, row: p.PIN_22,
+            lck: p.PIN_16, lbk: p.PIN_18, ldata: p.PIN_20,
         },
     );
     let configuration = CONFIG_FRAME.take();
@@ -53,23 +53,7 @@ async fn main(_spawner: Spawner) {
     {
         // Keep the temporary image out of the async task arena.
         let image = protocol::pattern_frame_range(PATTERN, GRAY_RANGE);
-        protocol::encode_frame(&mut configuration[..protocol::FRAME_WORDS], &image);
-    }
-    normal[..protocol::COMMON_PREFIX_WORDS]
-        .copy_from_slice(&configuration[..protocol::COMMON_PREFIX_WORDS]);
-    normal[protocol::COMMON_PREFIX_WORDS..]
-        .copy_from_slice(&configuration[protocol::CONFIG_END_WORDS..protocol::FRAME_WORDS]);
-    // Insert the fast clear once at startup. Its zeros and grayscale tail
-    // then share one contiguous DMA transfer, with no PIO stop between them.
-    configuration.copy_within(protocol::CONFIG_END_WORDS..protocol::FRAME_WORDS,
-        protocol::CONFIG_END_WORDS + protocol::CFG_POST_CLR_DCLKS);
-    configuration[protocol::CONFIG_END_WORDS
-        ..protocol::CONFIG_END_WORDS + protocol::CFG_POST_CLR_DCLKS].fill(protocol::PARK);
-    if !protocol::ROW_ON_CFG {
-        configuration[..protocol::COMMON_PREFIX_WORDS].fill(protocol::PARK);
-        for word in configuration.iter_mut() {
-            *word &= !protocol::ROW;
-        }
+        protocol::prepare_frames(configuration, normal, &image);
     }
     rtt_target::rprintln!("ICND2069: single PIO SM0 + DMA0; continuous idle-zero DCLK, stop LOW only for divider changes");
     rtt_target::rprintln!("chains={}, cfg_chains={}, lines={}, scan_repeats={}, row_on_cfg={}",
@@ -89,7 +73,9 @@ async fn main(_spawner: Spawner) {
         protocol::CFG_PRE_CLR_DCLKS, protocol::RT5990_CLEAR_ROWS);
     rtt_target::rprintln!("after configuration: {} slow zero clocks, {} fast zero clocks, complete grayscale frame, then VSYNC; clear LE/ROW LOW",
         protocol::CFG_POST_CLR_DCLKS, protocol::CFG_POST_CLR_DCLKS);
-    rtt_target::rprintln!("GPIO DCLK/LE/ROW=19/18/13; RT LCK/BK/DIN=16/15/17; wave RAM={} bytes",
+    rtt_target::rprintln!("CPLD data addresses={:?}; configuration broadcasts to all six outputs",
+        protocol::CPLD_ADDRESSES);
+    rtt_target::rprintln!("GPIO CLK/LAT1/LAT2/LAT3/ROW=15/12/13/14/22; RT LCK/BK/DIN=16/18/20; wave RAM={} bytes",
         (configuration.len() + normal.len()) * 4);
     let fast_cycles = u64::from(protocol::SYS_HZ / protocol::DCLK_HZ);
     let normal_cycles = normal.len() as u64 * fast_cycles;

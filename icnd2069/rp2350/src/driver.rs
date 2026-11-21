@@ -3,7 +3,8 @@ use embassy_rp::{
     gpio::{Level, Output},
     peripherals::{
         DMA_CH0, PIN_0, PIN_1, PIN_2, PIN_3, PIN_4, PIN_5, PIN_6, PIN_7, PIN_8,
-        PIN_9, PIN_10, PIN_11, PIN_13, PIN_15, PIN_16, PIN_17, PIN_18, PIN_19, PIO0,
+        PIN_9, PIN_10, PIN_11, PIN_12, PIN_13, PIN_14, PIN_15, PIN_16,
+        PIN_18, PIN_20, PIN_22, PIO0,
     },
     pio::{self, Common, Pio, ShiftConfig, StateMachine},
     Peripheral, PeripheralRef,
@@ -17,24 +18,26 @@ bind_interrupts!(struct Irqs {
 });
 
 pub struct Pins {
-    pub r1: PIN_5,
-    pub g1: PIN_4,
-    pub b1: PIN_3,
-    pub r2: PIN_11,
-    pub g2: PIN_10,
-    pub b2: PIN_9,
-    pub r3: PIN_2,
-    pub g3: PIN_1,
-    pub b3: PIN_0,
-    pub r4: PIN_8,
-    pub g4: PIN_7,
-    pub b4: PIN_6,
-    pub dclk: PIN_19,
-    pub le: PIN_18,
-    pub row: PIN_13,
+    pub r1: PIN_0,
+    pub g1: PIN_1,
+    pub b1: PIN_2,
+    pub sel1: PIN_3,
+    pub r2: PIN_4,
+    pub g2: PIN_5,
+    pub b2: PIN_6,
+    pub sel2: PIN_7,
+    pub r3: PIN_8,
+    pub g3: PIN_9,
+    pub b3: PIN_10,
+    pub sel3: PIN_11,
+    pub lat1: PIN_12,
+    pub lat2: PIN_13,
+    pub lat3: PIN_14,
+    pub dclk: PIN_15,
+    pub row: PIN_22,
     pub lck: PIN_16,
-    pub lbk: PIN_15,
-    pub ldata: PIN_17,
+    pub lbk: PIN_18,
+    pub ldata: PIN_20,
 }
 
 /// One pin word drives data, LE, ROW and RT5990; side-set drives DCLK.
@@ -67,10 +70,12 @@ impl Driver {
         let r3 = common.make_pio_pin(pins.r3);
         let g3 = common.make_pio_pin(pins.g3);
         let b3 = common.make_pio_pin(pins.b3);
-        let r4 = common.make_pio_pin(pins.r4);
-        let g4 = common.make_pio_pin(pins.g4);
-        let b4 = common.make_pio_pin(pins.b4);
-        let le = common.make_pio_pin(pins.le);
+        let sel1 = common.make_pio_pin(pins.sel1);
+        let sel2 = common.make_pio_pin(pins.sel2);
+        let sel3 = common.make_pio_pin(pins.sel3);
+        let lat1 = common.make_pio_pin(pins.lat1);
+        let lat2 = common.make_pio_pin(pins.lat2);
+        let lat3 = common.make_pio_pin(pins.lat3);
         let row = common.make_pio_pin(pins.row);
         let dclk = common.make_pio_pin(pins.dclk);
         let lck = common.make_pio_pin(pins.lck);
@@ -90,12 +95,12 @@ impl Driver {
         let mut pin_cfg = cfg.get_pins();
         pin_cfg.out_base = 0;
         pin_cfg.out_count = protocol::PIO_OUT_COUNT;
-        // Only the owned pins are muxed; GP12/14 remain unused.
+        // GP17/19/21 remain unowned despite the contiguous OUT range.
         unsafe { cfg.set_pins(pin_cfg); }
         sm.set_config(&cfg);
         let all = [
-            &r1, &g1, &b1, &r2, &g2, &b2, &r3, &g3, &b3, &r4, &g4, &b4,
-            &le, &row, &lck, &din, &dclk,
+            &r1, &g1, &b1, &r2, &g2, &b2, &r3, &g3, &b3,
+            &sel1, &sel2, &sel3, &lat1, &lat2, &lat3, &row, &lck, &din, &dclk,
         ];
         sm.set_pins(Level::Low, &all);
         if let Some(bk) = &bk {

@@ -1,4 +1,4 @@
-# ICND2069 / RP2350：JSON 配置、可调扫描行数
+# ICND2069 / RP2350 + CPLD：固定两颗级联
 
 ## 先烧录
 
@@ -14,7 +14,7 @@ cargo run --release
 
 启动及周期配置帧依次执行 RT5990 清空 160 行、`EN_OP(11)`、PRE_ACT、49 条带额外清零的 WR_CFG 和灰度 DATA_LATCH。每条 WR_CFG 的配置数据前均发送 `cfg_pre_clr_chains×16` 个额外零。RT5990 清空时 DIN=0，LCK 发 160 个高/低各 2 DCLK 的脉冲，BK 保持消隐；加上首尾各 2 DCLK，共 644 个配置时钟（1 MHz 时为 644 µs）。160 行为物理链长度，独立于 `lines`、`chains`、`cfg_pre_clr_chains` 和 `cfg_chains`。`row_on_cfg=false`（默认）时，上一帧写完后进入配置帧，不发 VSYNC，整帧 ROW 保持低；下一普通帧才恢复 VSYNC 和扫描。true 时配置帧保留 VSYNC 和配置完成后的扫描。没有发送 `DIS_OP(12)`；板上表现待实测。
 
-当前配置：**每路配置 2 颗、灰度数据 2 颗、54 行、每颗 15 列、1 遍扫描、DCLK 30 MHz、GCLK 90 MHz（按 N=1）、PWM_WIDTH=32、Accelerate Rate 8×**。`07h=08h=20h`，单 group 的理论灰阶容量为 128；8 bit 指串行输入宽度。图像宽度为 `chains×15`，每颗仅 OUT0～OUT14 接 LED，OUT15 始终写零。灰度渐变覆盖有效列。顶层 `gray` 设置灰度范围，两种锁存方式在 0～255 范围内发送相同图案；更高输入值需关闭 `repeat_latch`。旧的 `ICND2069_*` 环境变量不再覆盖 JSON。
+当前配置：**每路固定配置/灰度各 2 颗、54 行、每颗 15 列、1 遍扫描、DCLK 30 MHz、配置 10 MHz、GCLK 120 MHz（按 N=1，超指南范围的实验值）、PWM_WIDTH=32、Accelerate Rate 8×**。`07h=08h=20h`，单 group 的理论灰阶容量为 128；8 bit 指串行输入宽度。图像宽度为 30 列，每颗仅 OUT0～OUT14 接 LED，OUT15 始终写零。灰度渐变覆盖有效列。顶层 `gray` 设置灰度范围，两种锁存方式在 0～255 范围内发送相同图案；更高输入值需关闭 `repeat_latch`。旧的 `ICND2069_*` 环境变量不再覆盖 JSON。
 
 ## config.json 参数
 
@@ -23,16 +23,17 @@ cargo run --release
 | `scan_repeats` | `1` | 整数 1～64；每帧 ROW 数为 `lines × 遍数`，03h 为 `遍数 - 1` |
 | `lines` | `54` | 可选，整数 1～64，省略默认 54；设置图像高度和扫描行数，02h 为 `lines - 1` |
 | `keep_scan_time` | `false` | 可选布尔值，省略为 `false`。开启时将全部 `lines×scan_repeats` 次换行均匀分配到首个 ROW 至 gray 写入结束的窗口；扫描总时间不随遍数增加，平均换行速度随遍数同比增加 |
-| `config_interval` | `100` | 整数 1～4294967295；第 0、N、2N…帧写完整配置 |
-| `chains` | `2` | 整数 1～8；灰度数据的级联芯片数，组成 `chains×15` 列、独立像素 |
+| `config_interval` | `10000` | 整数 1～4294967295；第 0、N、2N…帧写完整配置 |
+| `chains` | `2` | 新板固定两颗级联，其他值编译报错；30 列独立像素 |
 | `cfg_pre_clr_chains` | `0` | 可选整数 0～64，省略为 0；每条 WR_CFG 前额外清零的等效级联数量，每颗 16 个 DCLK；0 表示不额外清零 |
-| `cfg_chains` | `2` | 可选，整数 1～8；配置数据的级联芯片数，省略时跟随 `chains`；各芯片使用相同配置 |
+| `cfg_chains` | `2` | 可选，固定 2；省略跟随 `chains`，其他值编译报错 |
+| `cpld_addresses` | `[7, 7, 7]` | 可选，三组独立地址；0～5 单路、6/7 广播，默认广播；配置始终广播 |
 | `row_on_cfg` | `false` | 可选布尔值，省略为 false；false 表示整个配置帧不发 VSYNC 和 ROW，true 保留配置帧 VSYNC 及配置完成后的扫描；普通帧照常发送 |
 | `pattern` | `"diagonal"` | 可选，`col_x` 点亮指定列，x 从 0 开始，范围 `0..chains*15-1`；该列沿行按 `gray[1] → gray[0]` 渐变，`lines=1` 时取 `gray[1]`。`diagonal` 为斜线，也是省略时的默认值 |
-| `color` | `"r"` | 可选，`r`/`g`/`b` 分别仅亮红/绿/蓝；`rg`/`rb`/`gb` 亮对应两色；`rgb` 三色全亮。省略默认 `rgb`，非法值编译报错 |
+| `color` | `"rgb"` | 可选，`r`/`g`/`b` 分别仅亮红/绿/蓝；`rg`/`rb`/`gb` 亮对应两色；`rgb` 三色全亮。省略默认 `rgb`，非法值编译报错 |
 | `dclk_mhz` | `30` | 数值 1、3、6、10、12.5、20、25、26、28、30、31、32、33、34、35、40、45；1/3 为低速时序实验档，40/45 为超频实验档 |
-| `cfg_dclk_mhz` | `1` | 可选，配置块 DCLK MHz；省略跟随 `dclk_mhz`。正数且不高于 `dclk_mhz`，要求对称半周期和精确的 16.8 PIO 分频，分频不超过 65535 |
-| `gclk_mhz` | `90` | 可选，目标内部 GCLK MHz，按 N=1 自动精确选择 M/P；必须 >25 MHz，>=100 MHz 允许作实验并提示；不能精确生成则报错；省略恢复旧 PLL 预设 |
+| `cfg_dclk_mhz` | `10` | 可选，配置块 DCLK MHz；省略跟随 `dclk_mhz`。正数且不高于 `dclk_mhz`，要求对称半周期和精确的 16.8 PIO 分频，分频不超过 65535 |
+| `gclk_mhz` | `120` | 可选，目标内部 GCLK MHz，按 N=1 自动精确选择 M/P；必须 >25 MHz，>=100 MHz 允许作实验并提示；不能精确生成则报错；省略恢复旧 PLL 预设 |
 | `pwm_width` | `32` | 可选，整数 4～255，省略默认 16；只写入 07h/08h，名义倍率为 `256/pwm_width`，不改变外部行周期或帧长度 |
 | `_dclk_mhz_doc` | 频率说明 | 注释字段示例，按未知字段忽略，不参与编译参数选择 |
 | `gray` | `[0, 255]` | 必填；两个整数分别为渐变起点、终点，也接受单个整数；连续 latch 为 0～255，完整写入为 0～8192；越界编译报错 |
@@ -41,7 +42,7 @@ cargo run --release
 
 `keep_scan_time=true` 时，扫描结束点与 `DATA_END` 对齐；不能整除的 DCLK 均匀分配，各行周期最多相差 1 DCLK。ROW 高电平仍为首行 12 DCLK、后续 4 DCLK，BK/LCK 脉宽保持 8/2 DCLK。为保留这些脉冲及 PIO 执行间隔，最短行周期必须达到 14 DCLK，遍数过多会编译报错。这一实验模式覆盖固定 60 DCLK 的基础行周期，不会自动修改 GCLK 或 PWM_WIDTH。关闭或省略该字段时，每行固定 60 DCLK，扫描总时间随遍数增长。
 
-除 `lines`、`color`、`pattern`、`cfg_pre_clr_chains`、`cfg_chains`、`row_on_cfg`、`cfg_dclk_mhz`、`gclk_mhz`、`pwm_width`、`keep_scan_time`、`repeat_latch`、其中的 `repeat_latch_gap` 和注释字段外，上表字段必须填写。`repeat_latch: {}` 也会开启连续 latch，间隔默认为 1；已知参数的类型和范围仍会校验。
+除 `lines`、`color`、`pattern`、`cfg_pre_clr_chains`、`cfg_chains`、`cpld_addresses`、`row_on_cfg`、`cfg_dclk_mhz`、`gclk_mhz`、`pwm_width`、`keep_scan_time`、`repeat_latch`、其中的 `repeat_latch_gap` 和注释字段外，上表字段必须填写。`repeat_latch: {}` 也会开启连续 latch，间隔默认为 1；已知参数的类型和范围仍会校验。
 
 顶层和 `repeat_latch` 内的未知字段均忽略，可用于注释、备用配置和调试记录。例如把 `repeat_latch` 改名为 `_repeat_latch` 即可关闭连续 latch 并保留原配置。`pattern` 为正式配置，仅接受 `col_x` / `diagonal`；旧 `line`、非法格式和越界列号会编译报错。`pattern_doc` / `_pattern` 仍是忽略的说明字段。文件仍需符合 JSON 语法，说明内容写成字段即可。
 
@@ -67,20 +68,23 @@ cargo run --release
 
 `cfg_pre_clr_chains` 控制每条小配置（WR_CFG）前的额外清零级联数量：每次先保持 SIN/LE 为 0，发送 `16×cfg_pre_clr_chains` 个零，再发送 `16×cfg_chains` bit 配置数据。配置解锁、45 项寄存器写入和配置锁定均适用，共 49 次额外清零。原有间隔仍保留，首条 9 DCLK、其余 8 DCLK；不再在整组开头单独额外清零。例如两个字段均为 2：每条先清零 32 CLK，再写两颗共 32 bit，常规 WR_CFG 间隔为 `8+32+32=72 DCLK`，1 MHz 下为 72 µs。RT5990 的 160 行清空仍独立保留在 EN_OP 前。
 
-`row_on_cfg` 控制配置帧的 VSYNC 和 ICND2069 ROW（GP13），不取消 RT5990 清空脉冲。false 时，配置帧前缀填 PARK，整个配置帧的 GPIO 字清除 ROW 位；true 时保留配置帧 VSYNC 和配置完成后的 ROW。普通帧缓冲始终保留 VSYNC 和扫描。若 `config_interval=1` 且 `row_on_cfg=false`，每帧都是配置帧，因此持续不发 VSYNC 和 ROW。
+`row_on_cfg` 控制配置帧的 VSYNC 和 ICND2069 ROW（GP22），不取消 RT5990 清空脉冲。false 时，保留前缀的八时钟广播选址，将其余前缀填 PARK，并清除整帧 ROW；true 时保留配置帧 VSYNC 和配置完成后的 ROW。普通帧缓冲始终保留 VSYNC 和扫描。若 `config_interval=1` 且 `row_on_cfg=false`，每帧都是配置帧，因此持续不发 VSYNC 和 ROW。
 
 `cfg_dclk_mhz` 用于配置帧的前缀、RT5990 清空及寄存器配置段（EN_OP、PRE_ACT、解锁、寄存器写入、锁定及对齐时钟）。配置块完成后停 PIO，切回 `dclk_mhz` 发送灰度。普通帧全部使用 `dclk_mhz`。ICND2069 的 M/P 配置仍按正常数据阶段的 `dclk_mhz` 与 `gclk_mhz` 计算。
 
 固定 PIO 程序在启动时执行一次 `SET X,0`，随后只循环
 `PULL NOBLOCK、OUT PINS、NOP` 三条指令。FIFO 空时 PULL 取 X=0，
-保持 SIN/LE/ROW 低，DCLK 继续运行；OUT 在低电平内更新管脚。
-普通高速路径建立时间为一个 PIO 周期，仍需注意高速电气裕量。
+保持 SIN/SEL/LE/ROW 低，DCLK 继续运行；OUT 在高电平内更新管脚。
+CPLD 在随后的下降沿采样 RGB，ICND2069 在下一上升沿读取该字。
+SEL 同样在下一上升沿采样，LAT/ROW 与该字保持一致。
+30 MHz 下 RP→CPLD 下降沿建立窗口约 8.33 ns，CPLD→ICND 上升沿
+窗口约 16.67 ns；这两个窗口还要扣除器件延迟、飞线延迟和芯片建立时间。
 
-例如当前 30 MHz / 1 MHz：系统时钟 120 MHz，同一程序每 DCLK 4 个 PIO 周期；普通分频为 1，配置分频为 30。频率切换只改状态机分频，不再使用 GPIO 字高位或 OUT PC 跳转。
+例如当前 30 MHz / 10 MHz：系统时钟 120 MHz，同一程序每 DCLK 4 个 PIO 周期；普通分频为 1，配置分频为 3。频率切换只改状态机分频，不再使用 GPIO 字高位或 OUT PC 跳转。
 
 配置速度要求半周期对称且分频能精确表示；不可精确生成的组合会编译报错。RTT 打印两种速度和分频，每五秒打印帧计数。1 MHz 配置阶段低于芯片指南的 PLL 输入范围，切回正常速度后的锁定与显示效果需实测。
 
-验证命令：`cargo build --release --locked`，随后运行 `python3 tools/check_dclk.py` 和 `python3 tools/check_chain_width.py`。前者检查一次性 X=0 初始化、非阻塞 PULL、三指令循环、分频比例、GPIO 中的 ROW 与配置门控；仍需用实际抓包核验帧边界连续时钟、指令计数及芯片输出。
+验证命令：`cargo build --release --locked`，随后运行 `python3 tools/check_dclk.py`、`python3 tools/check_chain_width.py` 和 `python3 tools/check_cpld.py`。最后一个需要 `iverilog`/`vvp`，将固件实际 DMA 缓冲送入 CPLD RTL，在 ICND2069 上升沿采样时刻逐位核对全部 54 路 SIN，覆盖广播、独立地址、周期配置、空闲补零及两种灰度写入。逻辑仿真不包含电气延迟，实际帧边界及输出需抓包验证。
 
 所有档位均满足 `DCLK = 系统时钟 / PIO 整数分频 / 每 DCLK 指令周期数`。PIO 分频器的小数部分固定为 0，高低电平各占一半周期；编译期校验系统 PLL 的 VCO 范围、输出频率和 PIO 整除关系，不允许用近似分数分频凑频率。
 
@@ -201,7 +205,7 @@ CPU 尚未提交下一帧时，PIO 输出零字补齐空闲时间，CLK 不会�
 第 31 行：列  0 → 芯片0 OUT0， gray=255
 ```
 
-`[255, 0]` 使斜线灰度从 0 递增到 255；`255` 或 `[255, 255]` 表示斜线上每个选中像素都为 255，其余像素仍为零。四组 RGB 中由 `color` 选中的颜色同步显示同一幅宽图，未选颜色写零灰度；链内各芯片分别显示自己的 15 列。W>lines 时，一帧只走过前 lines 列，渐变仍按 W 列计算。串行锁存仍按 OUT15→OUT0；改变灰度不改变帧时序，切换锁存方式会改变输入时长及理论 FPS。
+`[255, 0]` 使斜线灰度从 0 递增到 255；`255` 或 `[255, 255]` 表示斜线上每个选中像素都为 255，其余像素仍为零。三组 RGB 中由 `color` 选中的颜色同步显示同一幅宽图，未选颜色写零灰度；链内各芯片分别显示自己的 15 列。W>lines 时，一帧只走过前 lines 列，渐变仍按 W 列计算。串行锁存仍按 OUT15→OUT0；改变灰度不改变帧时序，切换锁存方式会改变输入时长及理论 FPS。
 
 图案由 `pattern` 选择固定列或斜线。`gray=0` 或 `[0, 0]` 为全黑；保留 `repeat_latch` 时灰度上限为 255，省略时完整写入上限为 8192，都不是经过亮度标定的满亮值。
 
@@ -227,24 +231,41 @@ probe-rs reset --chip RP235x --protocol swd --speed 1000
 
 ## Pico 2 引脚接线
 
-四组 RGB 共 12 路数据，控制信号共用。所有信号都在 Pico 2 排针上，GPIO 编号与排针脚号对应如下：
+接线依据 [RP2350 板原理图](../docs/SCH_Schematic4_2026-11-21.pdf) 和
+[CPLD/面板原理图](../../lcmxo2/project/icnd2069/SCH_Schematic5_2026-11-21.pdf)。
+三组 RGB/SEL 输入 CPLD，三组 LAT 直接送面板，CLK 共用：
 
 | 信号 | GPIO（R / G / B 顺序） | Pico 2 排针脚号 |
 |---|---|---|
 | R1 / G1 / B1 | GP0 / GP1 / GP2 | 1 / 2 / 4 |
-| R2 / G2 / B2 | GP3 / GP4 / GP5 | 5 / 6 / 7 |
-| R3 / G3 / B3 | GP6 / GP7 / GP8 | 9 / 10 / 11 |
-| R4 / G4 / B4 | GP9 / GP10 / GP11 | 12 / 14 / 15 |
-| ICND2069 DCLK | GP12 | 16 |
-| ICND2069 LE / LAT | GP13 | 17 |
-| ICND2069 ROW（旧 GCLK 网络） | GP14 | 19 |
-| RT5990 LCK | GP15 | 20 |
-| RT5990 BK | GP16 | 21 |
-| RT5990 DIN（行选择数据） | GP17 | 22 |
+| SEL1 | GP3 | 5 |
+| R2 / G2 / B2 | GP4 / GP5 / GP6 | 6 / 7 / 9 |
+| SEL2 | GP7 | 10 |
+| R3 / G3 / B3 | GP8 / GP9 / GP10 | 11 / 12 / 14 |
+| SEL3 | GP11 | 15 |
+| LAT1 / LAT2 / LAT3 | GP12 / GP13 / GP14 | 16 / 17 / 19 |
+| ICND2069 DCLK / CPLD CLK | GP15 | 20 |
+| RT5990 LCK | GP16 | 21 |
+| RT5990 BK | GP18 | 24 |
+| RT5990 DIN / LDATA | GP20 | 26 |
+| ICND2069 ROW（旧 GCLK 网络） | GP22 | 29 |
 
 GP25 保留给 Pico 2 板载 LED；共地可接排针 3、8、13、18、23、28 或 38 脚。**旧接线需要按此表重接。**
 
-配置按 R/G/B 分别发送，四组中同色使用相同配置。`color` 只选择灰度输出：例如 `r` 向 R1～R4 发送图案灰度，G1～G4/B1～B4 发送零；三色配置、移位清零、DCLK/LE/ROW 时序均保留。连续 latch、完整像素写入和灰度更新均遵循这一选择，四组仍共享同一图案。`chains` 和 `cfg_chains` 分别表示每条数据线的灰度与配置级联数，四组 RGB 不需要把它们乘以 12。
+GP17/19/21 未被 PIO 占用，GP28 SYNC 暂未使用。LAT1～3 同步输出
+同一命令；三组 RGB 共享 30 列图像，`color` 只控制灰度颜色，配置仍分色
+写入全部输出。每条 SIN 固定两颗 ICND2069，CPLD 只扩展 IO。
+
+SEL 每组发送 `a2 a1 a0 0 1 1 1 1`，MSB 先发，总共 8 CLK。
+地址 0～5 对应后缀 1/3/5/7/9/11，6/7 广播。原理图 U3→面板 U2
+使用每组地址 0 和 3，即 R11/R17、R21/R27、R31/R37 及对应 G/B。
+默认 `[7,7,7]` 同时驱动这些输出；例如 `[0,3,0]` 分别选第 1/2/3 组
+的地址 0/3/0。当前没有逐地址独立图像调度。
+
+配置帧前八个 CLK 强制广播；普通帧前八个 CLK 设置 `cpld_addresses`。
+原有 34 CLK 前缀不变，VSYNC 移到索引 13～15（零基）。
+配置后的高速 32 CLK 清零段最后八个 CLK 恢复数据地址，RGB/LAT 保持零。
+SEL 在数据和空闲期间为零，因此地址不会误锁存；普通帧长度不增加。
 
 ### RGB 配置
 
@@ -267,11 +288,24 @@ GP25 保留给 Pico 2 板载 LED；共地可接排针 3、8、13、18、23、28 
 
 2026-11-07 主机验证：`tools/check_config_interval.rs` 逐路解码 GP0～11，直接读取上述抓包表核对 45 个配置地址及 8 项颜色差异，并检查全级联、配置刷新、轮转配置和灰度更新。它与 `tools/check_diagonal_latch.rs` 均通过默认配置、25 MHz／6 颗（连续 latch 开/关）、8 颗／64 遍扫描的核验。默认及 25 MHz／6 颗 static 固件 release 构建通过；本轮未烧录。
 
-PIO 每个 DCLK 使用一个 32 位 DMA 样本，低 19 位覆盖 GP0～GP18（GP12/14 未使用），包括 GP13 ROW；DCLK 由 side-set 输出。所有信号由 SM0 同源输出。
+PIO 每个 DCLK 使用一个 32 位 DMA 样本，OUT 宽度为 23 位，覆盖 GP0～22；
+GP15 DCLK 使用 side-set，GP17/19/21 未复用到 PIO。所有信号由 SM0 同源输出。
 
-两种锁存方式都在启动时生成普通帧和配置帧两个不变缓冲，由 DMA0 顺序发送。当前总波形 RAM 为 40632 字节。
+两种锁存方式都在启动时生成普通帧和配置帧两个不变缓冲，由 DMA0 顺序发送。
 
 ## 当前时序概览
+
+2026-11-21 新板适配通过 release 构建和实际 DMA→CPLD RTL 联动仿真：
+四组场景共核对 257,056 个 DCLK 的全部 54 路输出，覆盖地址
+`[7,7,7]`、`[0,3,7]`、`[3,0,6]`、`[5,2,1]`，两颗级联、
+两种写入、选色、ROW 门控、周期配置和空闲时钟。本轮未烧录。
+逻辑通过不代表飞线在 30 MHz 下满足电气时序；CPLD 原构建的内部频率
+报告也不能替代上述两个外部半周期路径的验证。
+下面的硬件抓包数值来自此前直接连接版本。
+
+当前 JSON 普通帧仍为 **3762 DCLK / 125.4 µs**，理论普通帧
+**7974.48 FPS**；计入每 10000 帧一次的 10 MHz 配置后，
+理论平均 **7972.77 FPS**，均不包含软件间隔。
 
 2026-11-14 22:43 起，普通帧之间不再停 PIO；FIFO 空时补零并继续 DCLK，
 仅实际切换分频时停车。实际检查 382 个完整帧，
@@ -300,9 +334,9 @@ PIO 每个 DCLK 使用一个 32 位 DMA 样本，低 19 位覆盖 GP0～GP18（G
 
 2026-11-14 单 PIO/单 DMA 最终版实测：30 MHz 普通帧发送 3762 个时钟，活动时长 125.4 µs；约 5.14 µs 的块间边沿间隔使完整普通帧周期为 130.498～130.508 µs。配置时 1 MHz，每个配置块 2668 clocks；配置帧无 VSYNC/ROW，下一普通帧恢复。30 秒 RTT 运行中及退出 RTT 后抓包均通过，详见 [本轮实测](../captures/experiments/20261114_single_pio/README.md)。
 
-BK（GP16）使用原有 DCLK/PIO 指令时序。配置、数据区与帧间为低电平；每个 ROW 前 BK 只拉高 **8 个完整 DCLK**，默认 12.5 MHz 下为 640 ns。启动也保持低，避免 DSView 中首个 BK 脉冲宽于其他行。
+BK（GP18）使用原有 DCLK/PIO 指令时序。每个 ROW 前 BK 只拉高 **8 个完整 DCLK**，当前 30 MHz 下约 266.67 ns；RT5990 清空期间也保持消隐。其他时段为低。
 
-`02h=lines-1`，当前 54 扫对应 `0x35`。斜线令 `x = 行号 % W`（`W=chains×15`），第 x 列写入 `round((gray[0]×x + gray[1]×(W-1-x))/(W-1))`，其余列及 OUT15 为 0。当前单颗、54 行包含三个完整的 15 列渐变周期及下一周期的前 9 行。
+`02h=lines-1`，当前 54 扫对应 `0x35`。斜线令 `x = 行号 % W`（`W=30`），第 x 列写入 `round((gray[0]×x + gray[1]×(W-1-x))/(W-1))`，其余列及 OUT15 为 0。54 行包含一个完整的 30 列渐变周期及下一周期的前 24 行。
 
 ## 历史调试与验证记录
 
@@ -375,7 +409,9 @@ OUT0/OUT1 对应**上一帧发送的灰度**。验证必须错开一帧：发送
 
 ## DSView 与验证工具（历史接线）
 
-以下抓包使用旧 GPIO 分配。新接线采集时 CH0～3 应分别接 GP12（DCLK）、GP0（R1，或其他 RGB 数据脚）、GP13（LE）、GP14（ROW）；解码器的分析仪通道编号不变。
+以下抓包使用旧 GPIO 分配。新接线 CH0～3 应接 GP15（DCLK）、
+面板端的 CPLD R11（SIN，观察 CPLD 后的数据）、GP12（LAT1）、GP22（ROW）。
+要分析选址，可另外采集 GP3/7/11；解码器的分析仪通道编号不变。
 
 2026-11-01 当前波形输入核验：[原始抓包](../captures/reference/dsview/DSLogic%20U2Pro16-la-261101-001023.dsl)，100 MHz、实际时长 10.00448 ms、门限 1 V，仅分析 CH0～3。16 个完整普通帧，每帧 256 个灰度字一致，覆盖完整 11 档循环；周期 600.31～600.32 µs。每帧同行相邻 DATA_LATCH 间隔 24 CLK（240 次），跨行间隔 25 CLK（15 次）；LAT 高期间均只有 1 个 CLK 上升沿。ROW 每帧 16 次，周期通常 81 CLK，少数边沿的采样位置造成计数 80/82，未据此增加时序补偿。
 
@@ -386,8 +422,8 @@ OUT0/OUT1 对应**上一帧发送的灰度**。验证必须错开一帧：发送
 | 分析仪 | 信号 | GPIO |
 |---|---|---|
 | CH0 | CLK | GP15 |
-| CH1 | DATA/SIN | GP13 |
-| CH2 | LAT/LE | GP10 |
+| CH1 | DATA/SIN | CPLD 输出 R11 |
+| CH2 | LAT1/LE | GP12 |
 | CH3 | OE/ROW（旧 GCLK 网络） | GP22 |
 | CH4 | OUT0 | — |
 | CH5 | OUT1 | — |

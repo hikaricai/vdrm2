@@ -220,11 +220,11 @@ pub const DEMO_GRAY: u16 = 8192;
 /// Grayscale ICND2069 chips per input; chip 0 is nearest the MCU.
 pub const CHAIN_COPIES: usize = match option_env!("ICND2069_CHAIN_COPIES") {
     Some(value) => {
-        let bytes = value.as_bytes();
-        assert!(bytes.len() == 1 && bytes[0] >= b'1' && bytes[0] <= b'8');
-        (bytes[0] - b'0') as usize
+        let copies = unsigned_setting(value) as usize;
+        assert!(copies == 2, "this board requires chains=2");
+        copies
     }
-    None => 1,
+    None => 2,
 };
 pub const TRANSFER_DCLKS: usize = 16 * CHAIN_COPIES;
 /// Configuration cascade length; defaults to the grayscale cascade length.
@@ -233,7 +233,7 @@ pub const CFG_CHAIN_COPIES: usize = {
         Some(value) => unsigned_setting(value) as usize,
         None => CHAIN_COPIES,
     };
-    assert!(copies >= 1 && copies <= 8, "cfg_chains must be 1..=8");
+    assert!(copies == 2, "this board requires cfg_chains=2");
     copies
 };
 pub const CFG_TRANSFER_DCLKS: usize = 16 * CFG_CHAIN_COPIES;
@@ -345,13 +345,41 @@ pub const REPEAT_LATCH_GAP: usize = match option_env!("ICND2069_REPEAT_LATCH_GAP
     None => 1,
 };
 
-// Each sample maps directly to development-board GP0..18 (hardware/dev_sch.png).
-pub const PIO_OUT_COUNT: u8 = 19;
-// RGB1=GP5/4/3, RGB2=GP11/10/9, RGB3=GP2/1/0, RGB4=GP8/7/6.
+// SCH_Schematic4_2026-11-21: three RGB/SEL banks, three LAT, shared CLK.
+pub const PIO_OUT_COUNT: u8 = 23;
+// RGB1=GP0/1/2, RGB2=GP4/5/6, RGB3=GP8/9/10.
 // Configuration is color-specific; gray data describes one image mirrored
-// onto the selected colors in all four groups.
-pub const RGB_SIN: [u32; 3] = [0x0924, 0x0492, 0x0249];
-pub const SIN: u32 = 0x0fff;
+// onto the selected colors in all three banks.
+pub const RGB_SIN: [u32; 3] = [0x0111, 0x0222, 0x0444];
+pub const SIN: u32 = 0x0777;
+pub const SEL: u32 = (1 << 3) | (1 << 7) | (1 << 11);
+pub const CPLD_SELECT_DCLKS: usize = 8;
+const fn cpld_address(value: Option<&str>) -> u8 {
+    let address = match value {
+        Some(value) => unsigned_setting(value),
+        None => 7,
+    };
+    assert!(address <= 7, "CPLD address must be 0..=7");
+    address as u8
+}
+pub const CPLD_ADDRESSES: [u8; 3] = [
+    cpld_address(option_env!("ICND2069_CPLD_ADDRESS_1")),
+    cpld_address(option_env!("ICND2069_CPLD_ADDRESS_2")),
+    cpld_address(option_env!("ICND2069_CPLD_ADDRESS_3")),
+];
+/// MSB-first aaa0_1111. RGB/LAT stay zero while the address is latched.
+pub fn select_cpld(words: &mut [u32], addresses: [u8; 3]) {
+    assert_eq!(words.len(), CPLD_SELECT_DCLKS);
+    assert!(addresses.iter().all(|&address| address <= 7));
+    for (bit, word) in words.iter_mut().enumerate() {
+        *word = PARK & !SEL;
+        for (bank, &address) in addresses.iter().enumerate() {
+            if ((address << 5) | 0x0f) & (1 << (7 - bit)) != 0 {
+                *word |= 1 << (bank * 4 + 3);
+            }
+        }
+    }
+}
 pub const COLOR: &str = match option_env!("ICND2069_COLOR") {
     Some(value) => value,
     None => "rgb",
@@ -367,13 +395,12 @@ pub const GRAY_SIN: u32 = match COLOR.as_bytes() {
     b"rgb" => SIN,
     _ => panic!("color must be r, g, b, rg, rb, gb or rgb"),
 };
-pub const LE: u32 = 1 << 18;
+pub const LE: u32 = (1 << 12) | (1 << 13) | (1 << 14);
 pub const LCK: u32 = 1 << 16;
-pub const BK: u32 = 1 << 15;
-pub const DIN: u32 = 1 << 17;
-pub const ROW: u32 = 1 << 13;
-// GP12/14 are unused; GP13 ROW is part of the same GPIO word as LE/data.
-// DCLK on GP19 is driven separately by side-set.
+pub const BK: u32 = 1 << 18;
+pub const DIN: u32 = 1 << 20;
+pub const ROW: u32 = 1 << 22;
+// CLK on GP15 is driven separately by side-set; GP17/19/21 are unowned.
 // The reference's six channels do not measure RT5990 DIN/LCK/BK.
 // Preserve the existing board assumptions; do not claim measured parity.
 pub const BK_ACTIVE_HIGH: bool = true;
@@ -496,7 +523,17 @@ pub const COMMON_PREFIX_WORDS: usize = 34;
 /// Suppress the display-buffer switch during a configuration-only frame.
 /// Keep all prefix clocks so both DMA streams retain their original timing.
 #[cfg(not(target_os = "none"))]
-pub static CONFIG_IDLE_PREFIX: [u32; COMMON_PREFIX_WORDS] = [PARK; COMMON_PREFIX_WORDS];
+pub static CONFIG_IDLE_PREFIX: [u32; COMMON_PREFIX_WORDS] = {
+    let mut words = [PARK; COMMON_PREFIX_WORDS];
+    let mut bit = 0;
+    while bit < CPLD_SELECT_DCLKS {
+        if 0xef & (1 << (7 - bit)) != 0 {
+            words[bit] |= SEL;
+        }
+        bit += 1;
+    }
+    words
+};
 /// Physical RT5990 chain, independent of the configured ICND2069 scan rows.
 pub const RT5990_CLEAR_ROWS: usize = 160;
 /// Two setup clocks, 160 LCK pulses (two high/two low), two trailing clocks.
@@ -581,7 +618,29 @@ pub const ROW_RUN_COUNT: usize = GROUPS * ROWS * 2 + 1;
 #[cfg(not(target_os = "none"))]
 pub const CONFIG_ROW_RUN_COUNT: usize = if ROW_ON_CFG { 0 } else { ROW_RUN_COUNT };
 #[cfg(not(target_os = "none"))]
-pub const VSYNC_FALL: usize = 8;
+pub const VSYNC_FALL: usize = 16;
+/// Build the exact DMA buffers, including broadcast configuration and the
+/// fast zero flush that restores each bank's data destination.
+pub fn prepare_frames(configuration: &mut [u32], normal: &mut [u32], image: &Frame) {
+    assert_eq!(configuration.len(), FRAME_WORDS + CFG_POST_CLR_DCLKS);
+    assert_eq!(normal.len(), NORMAL_FRAME_DCLKS);
+    encode_frame(&mut configuration[..FRAME_WORDS], image);
+    normal[..COMMON_PREFIX_WORDS].copy_from_slice(&configuration[..COMMON_PREFIX_WORDS]);
+    normal[COMMON_PREFIX_WORDS..].copy_from_slice(&configuration[CONFIG_END_WORDS..FRAME_WORDS]);
+    select_cpld(&mut normal[..CPLD_SELECT_DCLKS], CPLD_ADDRESSES);
+    configuration.copy_within(CONFIG_END_WORDS..FRAME_WORDS,
+        CONFIG_END_WORDS + CFG_POST_CLR_DCLKS);
+    let select_end = CONFIG_END_WORDS + CFG_POST_CLR_DCLKS;
+    configuration[CONFIG_END_WORDS..select_end].fill(PARK);
+    select_cpld(&mut configuration[select_end - CPLD_SELECT_DCLKS..select_end], CPLD_ADDRESSES);
+    if !ROW_ON_CFG {
+        configuration[CPLD_SELECT_DCLKS..COMMON_PREFIX_WORDS].fill(PARK);
+        for word in configuration {
+            *word &= !ROW;
+        }
+    }
+}
+
 pub const fn row_start(index: usize) -> usize {
     FIRST_ROW + index * SCAN_DCLKS / (GROUPS * ROWS)
 }
@@ -827,7 +886,12 @@ pub fn encode_split(head: &mut [u32], tail: &mut [u32], frame: &Frame) {
 }
 
 fn encode_wave(wave: &mut Waveform<'_>, frame: &Frame, rotating: Option<[u16; 3]>) -> usize {
-    wave.command_at(5, VSYNC);
+    let mut selection = [PARK; CPLD_SELECT_DCLKS];
+    select_cpld(&mut selection, [7; 3]);
+    for word in selection {
+        wave.hold(word, 1);
+    }
+    wave.command_at(13, VSYNC);
     wave.hold(PARK, COMMON_PREFIX_WORDS - wave.clocks);
     // LCK shifts the RT5990 chain; ICND2069 ROW stays low throughout.
     // Blank while flushing old selections, with DIN, SIN and LE held low.
