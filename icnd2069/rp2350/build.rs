@@ -17,6 +17,8 @@ struct Config {
     cfg_pre_clr_chains: u8,
     #[serde(default)]
     row_on_cfg: bool,
+    #[serde(default)]
+    disable_rt5990: bool,
     dclk_mhz: f64,
     #[serde(default)]
     cfg_dclk_mhz: Option<f64>,
@@ -169,6 +171,7 @@ fn main() {
     println!("cargo:rustc-env=ICND2069_CFG_CHAIN_COPIES={cfg_chains}");
     println!("cargo:rustc-env=ICND2069_CFG_PRE_CLR_CHAINS={}", config.cfg_pre_clr_chains);
     println!("cargo:rustc-env=ICND2069_ROW_ON_CFG={}", u8::from(config.row_on_cfg));
+    println!("cargo:rustc-env=ICND2069_DISABLE_RT5990={}", u8::from(config.disable_rt5990));
     println!("cargo:rustc-env=ICND2069_DCLK_MHZ={}", config.dclk_mhz);
     println!("cargo:rustc-env=ICND2069_CFG_DCLK_HZ={}", cfg_dclk_hz.round() as u32);
     println!("cargo:rustc-env=ICND2069_GCLK_HZ={gclk_hz}");

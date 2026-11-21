@@ -378,15 +378,24 @@ pub const ROW: u32 = 1 << 13;
 // Preserve the existing board assumptions; do not claim measured parity.
 pub const BK_ACTIVE_HIGH: bool = true;
 pub const DIN_ONE_SELECTS: bool = true;
+pub const DISABLE_RT5990: bool = match option_env!("ICND2069_DISABLE_RT5990") {
+    Some(value) => match value.as_bytes() {
+        b"0" => false,
+        b"1" => true,
+        _ => panic!("disable_rt5990 must be boolean"),
+    },
+    None => false,
+};
 const fn blank(on: bool) -> u32 {
-    if on == BK_ACTIVE_HIGH {
+    // In disabled mode BK is held by SIO, including PIO idle gaps.
+    if !DISABLE_RT5990 && on == BK_ACTIVE_HIGH {
         BK
     } else {
         0
     }
 }
 const fn select_bit(selected: bool) -> u32 {
-    if selected == DIN_ONE_SELECTS {
+    if !DISABLE_RT5990 && selected == DIN_ONE_SELECTS {
         DIN
     } else {
         0
@@ -825,7 +834,7 @@ fn encode_wave(wave: &mut Waveform<'_>, frame: &Frame, rotating: Option<[u16; 3]
     let clear = blank(true) | select_bit(false);
     wave.hold(clear, 2);
     for _ in 0..RT5990_CLEAR_ROWS {
-        wave.hold(clear | LCK, 2);
+        wave.hold(clear | if DISABLE_RT5990 { 0 } else { LCK }, 2);
         wave.hold(clear, 2);
     }
     wave.hold(clear, 2);
@@ -893,7 +902,7 @@ fn encode_wave(wave: &mut Waveform<'_>, frame: &Frame, rotating: Option<[u16; 3]
         for t in start - 8..start + period - 8 {
             let mut row_pins = blank(t < start);
             row_pins |= select_bit(i % ROWS == 0 && t < start + 2);
-            if (start - 4..start - 2).contains(&t) {
+            if !DISABLE_RT5990 && (start - 4..start - 2).contains(&t) {
                 row_pins |= LCK;
             }
             let width = if i == 0 { 12 } else { 4 };

@@ -1,6 +1,6 @@
 use embassy_rp::{
     bind_interrupts,
-    gpio::Level,
+    gpio::{Level, Output},
     peripherals::{
         DMA_CH0, PIN_0, PIN_1, PIN_2, PIN_3, PIN_4, PIN_5, PIN_6, PIN_7, PIN_8,
         PIN_9, PIN_10, PIN_11, PIN_13, PIN_15, PIN_16, PIN_17, PIN_18, PIN_19, PIO0,
@@ -45,10 +45,18 @@ pub struct Driver {
     divider: u32,
     running: bool,
     program_origin: u8,
+    _blank: Option<Output<'static>>,
 }
 
 impl Driver {
     pub fn new(pio: PIO0, dma: DMA_CH0, pins: Pins) -> Self {
+        // Keep BK asserted even while PIO emits idle zeros or changes divider.
+        let (blank, bk_pin) = if protocol::DISABLE_RT5990 {
+            let level = if protocol::BK_ACTIVE_HIGH { Level::High } else { Level::Low };
+            (Some(Output::new(pins.lbk, level)), None)
+        } else {
+            (None, Some(pins.lbk))
+        };
         let Pio { mut common, sm0: mut sm, .. } = Pio::new(pio, Irqs);
         let r1 = common.make_pio_pin(pins.r1);
         let g1 = common.make_pio_pin(pins.g1);
@@ -66,7 +74,7 @@ impl Driver {
         let row = common.make_pio_pin(pins.row);
         let dclk = common.make_pio_pin(pins.dclk);
         let lck = common.make_pio_pin(pins.lck);
-        let bk = common.make_pio_pin(pins.lbk);
+        let bk = bk_pin.map(|pin| common.make_pio_pin(pin));
         let din = common.make_pio_pin(pins.ldata);
         let loaded = common.load_program(&crate::dclk_program::fixed_rate(
             protocol::PIO_CYCLES_PER_DCLK));
@@ -87,17 +95,21 @@ impl Driver {
         sm.set_config(&cfg);
         let all = [
             &r1, &g1, &b1, &r2, &g2, &b2, &r3, &g3, &b3, &r4, &g4, &b4,
-            &le, &row, &lck, &bk, &din, &dclk,
+            &le, &row, &lck, &din, &dclk,
         ];
         sm.set_pins(Level::Low, &all);
-        if !protocol::DIN_ONE_SELECTS {
+        if let Some(bk) = &bk {
+            sm.set_pins(Level::Low, &[bk]);
+            sm.set_pin_dirs(pio::Direction::Out, &[bk]);
+        }
+        if !protocol::DISABLE_RT5990 && !protocol::DIN_ONE_SELECTS {
             sm.set_pins(Level::High, &[&din]);
         }
         sm.set_pin_dirs(pio::Direction::Out, &all);
         Self {
             sm, dma: dma.into_ref(), _common: common,
             divider: protocol::PIO_CLKDIV_INT << 8,
-            running: false, program_origin: loaded.origin,
+            running: false, program_origin: loaded.origin, _blank: blank,
         }
     }
 

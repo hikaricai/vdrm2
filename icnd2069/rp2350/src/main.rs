@@ -75,6 +75,8 @@ async fn main(_spawner: Spawner) {
     rtt_target::rprintln!("chains={}, cfg_chains={}, lines={}, scan_repeats={}, row_on_cfg={}",
         protocol::CHAIN_COPIES, protocol::CFG_CHAIN_COPIES, protocol::ROWS,
         protocol::SCAN_REPEATS, protocol::ROW_ON_CFG);
+    rtt_target::rprintln!("disable_rt5990={}; BK blank level={}, DIN/LCK held LOW when disabled",
+        protocol::DISABLE_RT5990, u8::from(protocol::BK_ACTIVE_HIGH));
     rtt_target::rprintln!("DCLK={} Hz, cfg DCLK={} Hz; normal/config dividers={}/256, {}/256",
         protocol::DCLK_HZ, protocol::CFG_DCLK_HZ,
         protocol::PIO_CLKDIV_INT << 8, protocol::CFG_CLKDIV_BITS);
