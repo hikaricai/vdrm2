@@ -30,9 +30,9 @@ module led (
             decoder select_output (.a(address), .v(rgb[channel]), .o(decoded));
             // Preserve the source project's current-edge, dual-edge sampling.
             // All six destinations hold between edges (no direct-path exception).
-            always_ff @(posedge main_clock)
+            always_ff @(negedge main_clock)
                 decoded_pos <= decoded;
-            assign routed[bank][channel] = decoded_pos;
+            assign routed[bank][channel] = decoded;
         end
     end
 endmodule
