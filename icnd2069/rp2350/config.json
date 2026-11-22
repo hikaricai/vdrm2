@@ -8,7 +8,7 @@
     "cfg_chains": 4,
     "cfg_pin_drive_strength": "4mA",
     "_cfg_pin_drive_strength_doc": "写配置块时的 GPIO 驱动强度：可选 2mA、4mA、8mA、12mA，省略跟随 pin_drive_strength。启动即使用该档位，配置块及其尾部清零结束后恢复 pin_drive_strength；即使配置与灰度 DCLK 相同也会停车切换。统一作用于全部 21 个输出引脚（含 GP17 DCLK2）；不是 LED 恒流值。",
-    "pin_drive_strength": "8mA",
+    "pin_drive_strength": "12mA",
     "_pin_drive_strength_doc": "灰度和普通帧的 GPIO 驱动强度：可选 2mA、4mA、8mA、12mA，省略默认 4mA；RP2350 无 10mA 档。统一应用于 RGB/SEL/LAT/CLK/ROW/LCK/BK/DIN 全部输出引脚，包括禁用行扫描时由 SIO 控制的 BK；配置块使用 cfg_pin_drive_strength。这是 GPIO 输出能力档位，不是 LED 恒流值。",
     "pin_slew_rate": "slow",
     "_pin_slew_rate_doc": "GPIO 输出边沿速度：可选 slow、fast，省略默认 slow。统一应用于上述全部输出引脚；fast 使用更快的上升/下降沿，slow 放缓边沿。该参数不改变 DCLK 频率，也不是引脚间时钟偏斜（skew）设置。",
