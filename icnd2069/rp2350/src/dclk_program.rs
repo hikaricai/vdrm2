@@ -13,11 +13,11 @@ pub fn fixed_rate(cycles: u32) -> Program<32> {
     let mut target = asm.label();
     let mut source = asm.label();
     asm.bind(&mut target);
-    // Prepare RGB/SEL/LAT during HIGH. CPLD publishes RGB at the falling
-    // edge; the next rising edge clocks that same word into ICND2069.
-    asm.pull_with_delay_and_side_set(false, false, (half - 2) as u8, 1);
-    asm.out_with_side_set(OutDestination::PINS, crate::protocol::PIO_OUT_COUNT, 1);
-    asm.nop_with_delay_and_side_set((half - 1) as u8, 0);
+    // Update OUT pins on the falling edge. The next rising edge samples
+    // the word halfway between consecutive OUT updates.
+    asm.pull_with_delay_and_side_set(false, false, (half - 1) as u8, 1);
+    asm.out_with_side_set(OutDestination::PINS, crate::protocol::PIO_OUT_COUNT, 0);
+    asm.nop_with_delay_and_side_set((half - 2) as u8, 0);
     asm.bind(&mut source);
     asm.assemble_with_wrap(source, target)
 }

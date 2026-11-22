@@ -30,23 +30,38 @@ fn main() {
     let half = PIO_CYCLES_PER_DCLK / 2;
     let pull = program.code[1];
     let out = program.code[2];
-    let high = program.code[3];
+    let low = program.code[3];
     assert_eq!(pull >> 13, 4); // PULL
     assert_ne!(pull & 0x80, 0);
     assert_eq!(pull & 0x20, 0, "empty FIFO must copy X=0 without stopping DCLK");
-    assert_eq!(pull & 0x1000, 0x1000, "prepare data with DCLK high");
-    assert_eq!(((pull >> 8) & 15) + 1, half as u16 - 1);
+    assert_eq!(pull & 0x1000, 0x1000, "PULL holds DCLK high for half a period");
+    assert_eq!(((pull >> 8) & 15) + 1, half as u16);
     assert_eq!(out >> 13, 3);
     assert_eq!(out & 31, 23);
-    assert_eq!(out & 0x1000, 0x1000);
-    assert_eq!(high & 0x1000, 0);
-    assert_eq!(((high >> 8) & 15) + 1, half as u16);
+    assert_eq!(out & 0x1000, 0, "DATA must update on the falling edge");
+    assert_eq!((out >> 8) & 15, 0);
+    assert_eq!(low & 0x1000, 0);
+    assert_eq!(((low >> 8) & 15) + 1, half as u16 - 1);
+    // Derive the sample window from the emitted instruction delays.
+    let instruction_cycles = |word: u16| u32::from((word >> 8) & 15) + 1;
+    let data_phase = instruction_cycles(pull);
+    let period = program.code[1..].iter().map(|&word| instruction_cycles(word)).sum::<u32>();
+    assert_eq!(period, PIO_CYCLES_PER_DCLK);
+    assert_eq!(data_phase * 2, period, "rising edge must center each DATA/LAT word");
     for (hz, divider) in [
         (DCLK_HZ, PIO_CLKDIV_INT << 8),
         (CFG_DCLK_HZ, CFG_CLKDIV_BITS),
     ] {
         assert_eq!(u64::from(hz) * u64::from(divider) * u64::from(PIO_CYCLES_PER_DCLK),
             u64::from(SYS_HZ) * 256);
+        let pio_ns = f64::from(divider) * 1e9 / (f64::from(SYS_HZ) * 256.0);
+        println!(
+            "DIRECT timing nominal: DCLK={} Hz, DATA update={:.3} ns after rise, \
+             setup={:.3} ns, hold={:.3} ns, rise at {:.1}% of one bit interval, centered={}",
+            hz, f64::from(data_phase) * pio_ns, f64::from(period - data_phase) * pio_ns,
+            f64::from(data_phase) * pio_ns, f64::from(period - data_phase) * 100.0 / f64::from(period),
+            data_phase * 2 == period,
+        );
     }
     let image = pattern_frame_range(Pattern::Diagonal, [0, MAX_GRAY_INPUT.min(255)]);
     let mut full = vec![0; FRAME_WORDS];
