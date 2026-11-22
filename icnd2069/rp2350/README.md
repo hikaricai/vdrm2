@@ -27,6 +27,8 @@ cargo run --release
 | `chains` | `2` | 新板固定两颗级联，其他值编译报错；30 列独立像素 |
 | `cfg_pre_clr_chains` | `0` | 可选整数 0～64，省略为 0；每条 WR_CFG 前额外清零的等效级联数量，每颗 16 个 DCLK；0 表示不额外清零 |
 | `cfg_chains` | `4` | 可选整数 1～8，独立于灰度 `chains`；每条 WR_CFG 发送该数量的 16-bit 配置字，省略跟随 `chains` |
+| `pin_drive_strength` | `"12mA"` | 可选，`2mA` / `4mA` / `8mA` / `12mA`；省略默认 `4mA`；RP2350 没有 10mA 档 |
+| `pin_slew_rate` | `"fast"` | 可选，`slow` / `fast`；省略默认 `slow`；控制输出边沿速度 |
 | `cpld_addresses` | `[7, 7, 7]` | 可选，三组独立地址；0～5 单路、6/7 广播，默认广播；配置始终广播 |
 | `row_on_cfg` | `false` | 可选布尔值，省略为 false；false 表示整个配置帧不发 VSYNC 和 ROW，true 保留配置帧 VSYNC 及配置完成后的扫描；普通帧照常发送 |
 | `pattern` | `"diagonal"` | 可选，`col_x` 点亮指定列，x 从 0 开始，范围 `0..chains*15-1`；该列沿行按 `gray[1] → gray[0]` 渐变，`lines=1` 时取 `gray[1]`。`diagonal` 为斜线，也是省略时的默认值 |
@@ -42,7 +44,13 @@ cargo run --release
 
 `keep_scan_time=true` 时，扫描结束点与 `DATA_END` 对齐；不能整除的 DCLK 均匀分配，各行周期最多相差 1 DCLK。ROW 高电平仍为首行 12 DCLK、后续 4 DCLK，BK/LCK 脉宽保持 8/2 DCLK。为保留这些脉冲及 PIO 执行间隔，最短行周期必须达到 14 DCLK，遍数过多会编译报错。这一实验模式覆盖固定 60 DCLK 的基础行周期，不会自动修改 GCLK 或 PWM_WIDTH。关闭或省略该字段时，每行固定 60 DCLK，扫描总时间随遍数增长。
 
-除 `lines`、`color`、`pattern`、`cfg_pre_clr_chains`、`cfg_chains`、`cpld_addresses`、`row_on_cfg`、`cfg_dclk_mhz`、`gclk_mhz`、`pwm_width`、`keep_scan_time`、`repeat_latch`、其中的 `repeat_latch_gap` 和注释字段外，上表字段必须填写。`repeat_latch: {}` 也会开启连续 latch，间隔默认为 1；已知参数的类型和范围仍会校验。
+除 `lines`、`color`、`pattern`、`cfg_pre_clr_chains`、`cfg_chains`、`pin_drive_strength`、`pin_slew_rate`、`cpld_addresses`、`row_on_cfg`、`cfg_dclk_mhz`、`gclk_mhz`、`pwm_width`、`keep_scan_time`、`repeat_latch`、其中的 `repeat_latch_gap` 和注释字段外，上表字段必须填写。`repeat_latch: {}` 也会开启连续 latch，间隔默认为 1；已知参数的类型和范围仍会校验。
+
+驱动强度和 slew rate 统一应用于 `driver::Pins` 的全部 20 个引脚：
+RGB、SEL、LAT、CLK、ROW、LCK、BK、DIN。设置发生在 PIO 引脚注册后，
+输出启动前；`disable_rt5990=true` 时由 SIO 固定控制的 BK 也应用同一配置。
+驱动强度是 GPIO 输出能力档位，不是 ICND2069 的 LED 恒流设置；
+slew rate 控制上升/下降沿速度，不是多引脚时钟偏斜（skew）。
 
 顶层和 `repeat_latch` 内的未知字段均忽略，可用于注释、备用配置和调试记录。例如把 `repeat_latch` 改名为 `_repeat_latch` 即可关闭连续 latch 并保留原配置。`pattern` 为正式配置，仅接受 `col_x` / `diagonal`；旧 `line`、非法格式和越界列号会编译报错。`pattern_doc` / `_pattern` 仍是忽略的说明字段。文件仍需符合 JSON 语法，说明内容写成字段即可。
 

@@ -13,6 +13,10 @@ struct Config {
     chains: u8,
     #[serde(default)]
     cfg_chains: Option<u8>,
+    #[serde(default)]
+    pin_drive_strength: PinDriveStrength,
+    #[serde(default)]
+    pin_slew_rate: PinSlewRate,
     #[serde(default = "default_cpld_addresses")]
     cpld_addresses: [u8; 3],
     #[serde(default)]
@@ -35,6 +39,27 @@ struct Config {
     gray: Gray,
     #[serde(default, deserialize_with = "read_repeat_latch")]
     repeat_latch: Option<RepeatLatch>,
+}
+
+#[derive(Deserialize, Default)]
+enum PinDriveStrength {
+    #[serde(rename = "2mA")]
+    Ma2,
+    #[default]
+    #[serde(rename = "4mA")]
+    Ma4,
+    #[serde(rename = "8mA")]
+    Ma8,
+    #[serde(rename = "12mA")]
+    Ma12,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+enum PinSlewRate {
+    #[default]
+    Slow,
+    Fast,
 }
 
 fn default_pattern() -> String {
@@ -94,6 +119,23 @@ fn main() {
     let path = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap()).join("config.json");
     let json = fs::read_to_string(&path).expect("cannot read config.json");
     let config: Config = serde_json::from_str(&json).expect("invalid config.json");
+    let drive_ma = match config.pin_drive_strength {
+        PinDriveStrength::Ma2 => 2,
+        PinDriveStrength::Ma4 => 4,
+        PinDriveStrength::Ma8 => 8,
+        PinDriveStrength::Ma12 => 12,
+    };
+    let slew = match config.pin_slew_rate {
+        PinSlewRate::Slow => "Slow",
+        PinSlewRate::Fast => "Fast",
+    };
+    fs::write(
+        out.join("pin_config.rs"),
+        format!(
+            "pub const PIN_DRIVE_STRENGTH: Drive = Drive::_{drive_ma}mA;\n\
+             pub const PIN_SLEW_RATE: SlewRate = SlewRate::{slew};\n"
+        ),
+    ).unwrap();
     assert!((1..=64).contains(&config.scan_repeats), "config.json: scan_repeats must be 1..=64");
     assert!((1..=64).contains(&config.lines), "config.json: lines must be 1..=64");
     assert!(config.config_interval > 0, "config.json: config_interval must be 1..=4294967295");

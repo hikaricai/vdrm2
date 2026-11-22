@@ -1,6 +1,6 @@
 use embassy_rp::{
     bind_interrupts,
-    gpio::{Level, Output},
+    gpio::{Drive, Level, Output, SlewRate},
     peripherals::{
         DMA_CH0, PIN_0, PIN_1, PIN_2, PIN_3, PIN_4, PIN_5, PIN_6, PIN_7, PIN_8,
         PIN_9, PIN_10, PIN_11, PIN_12, PIN_13, PIN_14, PIN_15, PIN_16,
@@ -12,6 +12,7 @@ use embassy_rp::{
 use fixed::types::U24F8;
 
 use crate::protocol;
+include!(concat!(env!("OUT_DIR"), "/pin_config.rs"));
 
 bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => pio::InterruptHandler<PIO0>;
@@ -54,33 +55,47 @@ pub struct Driver {
 impl Driver {
     pub fn new(pio: PIO0, dma: DMA_CH0, pins: Pins) -> Self {
         // Keep BK asserted even while PIO emits idle zeros or changes divider.
-        let (blank, bk_pin) = if protocol::DISABLE_RT5990 {
+        let (mut blank, bk_pin) = if protocol::DISABLE_RT5990 {
             let level = if protocol::BK_ACTIVE_HIGH { Level::High } else { Level::Low };
             (Some(Output::new(pins.lbk, level)), None)
         } else {
             (None, Some(pins.lbk))
         };
+        if let Some(blank) = blank.as_mut() {
+            blank.set_drive_strength(PIN_DRIVE_STRENGTH);
+            blank.set_slew_rate(PIN_SLEW_RATE);
+        }
         let Pio { mut common, sm0: mut sm, .. } = Pio::new(pio, Irqs);
-        let r1 = common.make_pio_pin(pins.r1);
-        let g1 = common.make_pio_pin(pins.g1);
-        let b1 = common.make_pio_pin(pins.b1);
-        let r2 = common.make_pio_pin(pins.r2);
-        let g2 = common.make_pio_pin(pins.g2);
-        let b2 = common.make_pio_pin(pins.b2);
-        let r3 = common.make_pio_pin(pins.r3);
-        let g3 = common.make_pio_pin(pins.g3);
-        let b3 = common.make_pio_pin(pins.b3);
-        let sel1 = common.make_pio_pin(pins.sel1);
-        let sel2 = common.make_pio_pin(pins.sel2);
-        let sel3 = common.make_pio_pin(pins.sel3);
-        let lat1 = common.make_pio_pin(pins.lat1);
-        let lat2 = common.make_pio_pin(pins.lat2);
-        let lat3 = common.make_pio_pin(pins.lat3);
-        let row = common.make_pio_pin(pins.row);
-        let dclk = common.make_pio_pin(pins.dclk);
-        let lck = common.make_pio_pin(pins.lck);
-        let bk = bk_pin.map(|pin| common.make_pio_pin(pin));
-        let din = common.make_pio_pin(pins.ldata);
+        let mut r1 = common.make_pio_pin(pins.r1);
+        let mut g1 = common.make_pio_pin(pins.g1);
+        let mut b1 = common.make_pio_pin(pins.b1);
+        let mut r2 = common.make_pio_pin(pins.r2);
+        let mut g2 = common.make_pio_pin(pins.g2);
+        let mut b2 = common.make_pio_pin(pins.b2);
+        let mut r3 = common.make_pio_pin(pins.r3);
+        let mut g3 = common.make_pio_pin(pins.g3);
+        let mut b3 = common.make_pio_pin(pins.b3);
+        let mut sel1 = common.make_pio_pin(pins.sel1);
+        let mut sel2 = common.make_pio_pin(pins.sel2);
+        let mut sel3 = common.make_pio_pin(pins.sel3);
+        let mut lat1 = common.make_pio_pin(pins.lat1);
+        let mut lat2 = common.make_pio_pin(pins.lat2);
+        let mut lat3 = common.make_pio_pin(pins.lat3);
+        let mut row = common.make_pio_pin(pins.row);
+        let mut dclk = common.make_pio_pin(pins.dclk);
+        let mut lck = common.make_pio_pin(pins.lck);
+        let mut bk = bk_pin.map(|pin| common.make_pio_pin(pin));
+        let mut din = common.make_pio_pin(pins.ldata);
+        // make_pio_pin resets pad settings, so configure after registration
+        // and before enabling output directions or starting the SM.
+        for pin in [
+            &mut r1, &mut g1, &mut b1, &mut r2, &mut g2, &mut b2,
+            &mut r3, &mut g3, &mut b3, &mut sel1, &mut sel2, &mut sel3,
+            &mut lat1, &mut lat2, &mut lat3, &mut row, &mut lck, &mut din, &mut dclk,
+        ].into_iter().chain(bk.as_mut()) {
+            pin.set_drive_strength(PIN_DRIVE_STRENGTH);
+            pin.set_slew_rate(PIN_SLEW_RATE);
+        }
         let loaded = common.load_program(&crate::dclk_program::fixed_rate(
             protocol::PIO_CYCLES_PER_DCLK));
         let mut cfg = pio::Config::default();
