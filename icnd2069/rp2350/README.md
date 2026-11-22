@@ -14,7 +14,7 @@ cargo run --release
 
 启动及周期配置帧依次执行 RT5990 清空 160 行、`EN_OP(11)`、PRE_ACT、49 条带额外清零的 WR_CFG 和灰度 DATA_LATCH。每条 WR_CFG 的配置数据前均发送 `cfg_pre_clr_chains×16` 个额外零。RT5990 清空时 DIN=0，LCK 发 160 个高/低各 2 DCLK 的脉冲，BK 保持消隐；加上首尾各 2 DCLK，共 644 个配置时钟（1 MHz 时为 644 µs）。160 行为物理链长度，独立于 `lines`、`chains`、`cfg_pre_clr_chains` 和 `cfg_chains`。`row_on_cfg=false`（默认）时，上一帧写完后进入配置帧，不发 VSYNC，整帧 ROW 保持低；下一普通帧才恢复 VSYNC 和扫描。true 时配置帧保留 VSYNC 和配置完成后的扫描。没有发送 `DIS_OP(12)`；板上表现待实测。
 
-当前配置：**每路固定配置/灰度各 2 颗、54 行、每颗 15 列、1 遍扫描、DCLK 30 MHz、配置 10 MHz、GCLK 120 MHz（按 N=1，超指南范围的实验值）、PWM_WIDTH=32、Accelerate Rate 8×**。`07h=08h=20h`，单 group 的理论灰阶容量为 128；8 bit 指串行输入宽度。图像宽度为 30 列，每颗仅 OUT0～OUT14 接 LED，OUT15 始终写零。灰度渐变覆盖有效列。顶层 `gray` 设置灰度范围，两种锁存方式在 0～255 范围内发送相同图案；更高输入值需关闭 `repeat_latch`。旧的 `ICND2069_*` 环境变量不再覆盖 JSON。
+当前配置：**每路灰度 2 颗、配置发送 4 份、54 行、每颗 15 列、1 遍扫描、DCLK/配置均为 20 MHz、GCLK 80 MHz（按 N=1）、PWM_WIDTH=32、Accelerate Rate 8×**。`07h=08h=20h`，单 group 的理论灰阶容量为 128；8 bit 指串行输入宽度。图像宽度为 30 列，每颗仅 OUT0～OUT14 接 LED，OUT15 始终写零。灰度渐变覆盖有效列。顶层 `gray` 设置灰度范围，两种锁存方式在 0～255 范围内发送相同图案；更高输入值需关闭 `repeat_latch`。旧的 `ICND2069_*` 环境变量不再覆盖 JSON。
 
 ## config.json 参数
 
@@ -26,7 +26,7 @@ cargo run --release
 | `config_interval` | `10000` | 整数 1～4294967295；第 0、N、2N…帧写完整配置 |
 | `chains` | `2` | 新板固定两颗级联，其他值编译报错；30 列独立像素 |
 | `cfg_pre_clr_chains` | `0` | 可选整数 0～64，省略为 0；每条 WR_CFG 前额外清零的等效级联数量，每颗 16 个 DCLK；0 表示不额外清零 |
-| `cfg_chains` | `2` | 可选，固定 2；省略跟随 `chains`，其他值编译报错 |
+| `cfg_chains` | `4` | 可选整数 1～8，独立于灰度 `chains`；每条 WR_CFG 发送该数量的 16-bit 配置字，省略跟随 `chains` |
 | `cpld_addresses` | `[7, 7, 7]` | 可选，三组独立地址；0～5 单路、6/7 广播，默认广播；配置始终广播 |
 | `row_on_cfg` | `false` | 可选布尔值，省略为 false；false 表示整个配置帧不发 VSYNC 和 ROW，true 保留配置帧 VSYNC 及配置完成后的扫描；普通帧照常发送 |
 | `pattern` | `"diagonal"` | 可选，`col_x` 点亮指定列，x 从 0 开始，范围 `0..chains*15-1`；该列沿行按 `gray[1] → gray[0]` 渐变，`lines=1` 时取 `gray[1]`。`diagonal` 为斜线，也是省略时的默认值 |
@@ -67,6 +67,11 @@ cargo run --release
 或分别使用 13/14 MHz。对应 GCLK 可选 78/84 MHz（M=3、P=9）。
 
 `cfg_pre_clr_chains` 控制每条小配置（WR_CFG）前的额外清零级联数量：每次先保持 SIN/LE 为 0，发送 `16×cfg_pre_clr_chains` 个零，再发送 `16×cfg_chains` bit 配置数据。配置解锁、45 项寄存器写入和配置锁定均适用，共 49 次额外清零。原有间隔仍保留，首条 9 DCLK、其余 8 DCLK；不再在整组开头单独额外清零。例如两个字段均为 2：每条先清零 32 CLK，再写两颗共 32 bit，常规 WR_CFG 间隔为 `8+32+32=72 DCLK`，1 MHz 下为 72 µs。RT5990 的 160 行清空仍独立保留在 EN_OP 前。
+
+`chains=2、cfg_chains=4` 时，灰度数据仍按两颗生成 30 列图像；
+每条配置发送四份相同的 16-bit 字，共 64 DCLK。
+配置后的慢速、高速清零各为 `16×max(chains,cfg_chains)=64` DCLK，
+普通帧灰度长度不变。
 
 `row_on_cfg` 控制配置帧的 VSYNC 和 ICND2069 ROW（GP22），不取消 RT5990 清空脉冲。false 时，保留前缀的八时钟广播选址，将其余前缀填 PARK，并清除整帧 ROW；true 时保留配置帧 VSYNC 和配置完成后的 ROW。普通帧缓冲始终保留 VSYNC 和扫描。若 `config_interval=1` 且 `row_on_cfg=false`，每帧都是配置帧，因此持续不发 VSYNC 和 ROW。
 

@@ -86,7 +86,7 @@ with tempfile.TemporaryDirectory(prefix="icnd2069-chain-width-") as temp:
     if args.cfg_only:
         cases = []
     cases += [(chains, latch, 1, "diagonal", 0, 1, False, "rgb", 54, cfg_chains)
-              for cfg_chains, chains in [(2, 2)]
+              for cfg_chains, chains in [(1, 2), (2, 2), (4, 2), (6, 2), (8, 2)]
               for latch in [0, 1]]
     cases += [(2, latch, 1, "diagonal", 0, 1, False, "r", 54, 2, preclear, rows)
               for preclear, rows in [(0, False), (2, True), (64, False), (64, True)]
@@ -106,13 +106,20 @@ with tempfile.TemporaryDirectory(prefix="icnd2069-chain-width-") as temp:
     assert result.returncode != 0 and "minimum row period is 14 DCLK" in result.stderr, (
         result.stdout + result.stderr)
     print("PASS keep_scan_time rejects 64 sweeps in the short gray window", flush=True)
-    for chains, cfg_chains in [(1, 2), (3, 2), (2, 1), (2, 4)]:
+    for chains, cfg_chains in [(1, 2), (3, 2)]:
         result = subprocess.run(
             ["rustc", "--edition=2021", str(root / "tools/check_diagonal_latch.rs"),
              "-o", binary], text=True, capture_output=True,
             env=params(chains, 0, cfg_chains=cfg_chains))
         assert result.returncode != 0 and "this board requires" in result.stderr, result.stderr
-    print("PASS non-two-chip configurations rejected", flush=True)
+    print("PASS non-two-chip grayscale configurations rejected", flush=True)
+    for cfg_chains in [0, 9]:
+        result = subprocess.run(
+            ["rustc", "--edition=2021", str(root / "tools/check_diagonal_latch.rs"),
+             "-o", binary], text=True, capture_output=True,
+            env=params(2, 0, cfg_chains=cfg_chains))
+        assert result.returncode != 0 and "cfg_chains must be 1..=8" in result.stderr, result.stderr
+    print("PASS out-of-range configuration lengths rejected", flush=True)
 
     sources = ([args.baseline.resolve()] if args.baseline else []) + [root / "src/protocol.rs"]
     results = []

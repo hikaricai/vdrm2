@@ -99,7 +99,7 @@ fn main() {
     assert!(config.config_interval > 0, "config.json: config_interval must be 1..=4294967295");
     assert_eq!(config.chains, 2, "config.json: this board requires chains=2");
     let cfg_chains = config.cfg_chains.unwrap_or(config.chains);
-    assert_eq!(cfg_chains, 2, "config.json: this board requires cfg_chains=2");
+    assert!((1..=8).contains(&cfg_chains), "config.json: cfg_chains must be 1..=8");
     assert!(config.cpld_addresses.iter().all(|&a| a <= 7),
         "config.json: cpld_addresses must contain three addresses in 0..=7");
     assert!(config.cfg_pre_clr_chains <= 64, "config.json: cfg_pre_clr_chains must be 0..=64");

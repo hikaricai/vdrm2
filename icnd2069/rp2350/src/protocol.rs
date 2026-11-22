@@ -233,7 +233,7 @@ pub const CFG_CHAIN_COPIES: usize = {
         Some(value) => unsigned_setting(value) as usize,
         None => CHAIN_COPIES,
     };
-    assert!(copies == 2, "this board requires cfg_chains=2");
+    assert!(copies >= 1 && copies <= 8, "cfg_chains must be 1..=8");
     copies
 };
 pub const CFG_TRANSFER_DCLKS: usize = 16 * CFG_CHAIN_COPIES;
