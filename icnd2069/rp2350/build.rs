@@ -14,11 +14,7 @@ struct Config {
     #[serde(default)]
     cfg_chains: Option<u8>,
     #[serde(default)]
-    pin_drive_strength: PinDriveStrength,
-    #[serde(default)]
-    cfg_pin_drive_strength: Option<PinDriveStrength>,
-    #[serde(default)]
-    pin_slew_rate: PinSlewRate,
+    pin_drive: Option<PinDrive>,
     #[serde(default = "default_cpld_addresses")]
     cpld_addresses: [u8; 3],
     #[serde(default)]
@@ -67,12 +63,63 @@ impl PinDriveStrength {
     }
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Clone, Copy, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 enum PinSlewRate {
     #[default]
     Slow,
     Fast,
+}
+
+impl PinSlewRate {
+    fn variant(self) -> &'static str {
+        match self {
+            Self::Slow => "Slow",
+            Self::Fast => "Fast",
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PinDrive {
+    #[serde(default)]
+    strength: PinDriveStrength,
+    #[serde(default)]
+    cfg_strength: Option<PinDriveStrength>,
+    #[serde(default)]
+    slew_rate: PinSlewRate,
+    #[serde(default)]
+    cfg_slew_rate: Option<PinSlewRate>,
+    pins: PinSelection,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum PinSelection {
+    One(String),
+    Many(Vec<String>),
+}
+
+impl PinSelection {
+    fn mask(&self) -> u32 {
+        let names = match self {
+            Self::One(name) => std::slice::from_ref(name),
+            Self::Many(names) => names.as_slice(),
+        };
+        let mapping = [
+            ("r1", 0), ("g1", 1), ("b1", 2), ("sel1", 3),
+            ("r2", 4), ("g2", 5), ("b2", 6), ("sel2", 7),
+            ("r3", 8), ("g3", 9), ("b3", 10), ("sel3", 11),
+            ("lat1", 12), ("lat2", 13), ("lat3", 14), ("dclk", 15),
+            ("lck", 16), ("dclk2", 17), ("lbk", 18), ("ldata", 20), ("row", 22),
+        ];
+        names.iter().fold(0, |mask, name| {
+            let (_, pin) = mapping.iter().find(|(field, _)| *field == name)
+                .unwrap_or_else(|| panic!("config.json: pin_drive.pins: unknown Pins field {name:?}"));
+            mask | (1u32 << pin)
+        })
+    }
 }
 
 fn default_pattern() -> String {
@@ -132,19 +179,24 @@ fn main() {
     let path = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap()).join("config.json");
     let json = fs::read_to_string(&path).expect("cannot read config.json");
     let config: Config = serde_json::from_str(&json).expect("invalid config.json");
-    let drive_ma = config.pin_drive_strength.milliamps();
-    let cfg_drive_ma = config.cfg_pin_drive_strength
-        .unwrap_or(config.pin_drive_strength).milliamps();
-    let slew = match config.pin_slew_rate {
-        PinSlewRate::Slow => "Slow",
-        PinSlewRate::Fast => "Fast",
+    let (drive_ma, cfg_drive_ma, slew, cfg_slew, pin_mask) = match &config.pin_drive {
+        Some(drive) => (
+            drive.strength.milliamps(),
+            drive.cfg_strength.unwrap_or(drive.strength).milliamps(),
+            drive.slew_rate.variant(),
+            drive.cfg_slew_rate.unwrap_or(drive.slew_rate).variant(),
+            drive.pins.mask(),
+        ),
+        None => (4, 4, "Slow", "Slow", 0),
     };
     fs::write(
         out.join("pin_config.rs"),
         format!(
             "pub const PIN_DRIVE_STRENGTH: Drive = Drive::_{drive_ma}mA;\n\
              pub const CFG_PIN_DRIVE_STRENGTH: Drive = Drive::_{cfg_drive_ma}mA;\n\
-             pub const PIN_SLEW_RATE: SlewRate = SlewRate::{slew};\n"
+             pub const PIN_SLEW_RATE: SlewRate = SlewRate::{slew};\n\
+             pub const CFG_PIN_SLEW_RATE: SlewRate = SlewRate::{cfg_slew};\n\
+             pub const PIN_DRIVE_MASK: u32 = {pin_mask:#x};\n"
         ),
     ).unwrap();
     assert!((1..=64).contains(&config.scan_repeats), "config.json: scan_repeats must be 1..=64");

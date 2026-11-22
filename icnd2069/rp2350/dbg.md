@@ -10,3 +10,5 @@ gclk太慢的话 outx会超过一行的宽度 图像也会很多噪声
 
 hdl的branch:
 目前一个pico2意外用了5v io 在12ma的驱动电流下直接飞线驱动可以30m无噪声
+现在同样的led面板和pico2 使用devboard可以点亮 但是使用cpld板仅飞线时却有噪声 怀疑和pin布局有关 cpld板仅用5v的pico板可以无噪声
+cpld板子使用多个3.3v pico 都有巨大噪声 哪怕只有12.5mhz 看来cpld板的clk走线还是太长 噪声太大

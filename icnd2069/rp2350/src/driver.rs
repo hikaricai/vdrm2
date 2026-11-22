@@ -87,6 +87,7 @@ pub struct Driver {
     pins: [pio::Pin<'static, PIO0>; 20],
     bk: Option<pio::Pin<'static, PIO0>>,
     drive_strength: Drive,
+    slew_rate: SlewRate,
     _blank: Option<Output<'static>>,
 }
 
@@ -100,8 +101,9 @@ impl Driver {
             (None, Some(pins.lbk))
         };
         if let Some(blank) = blank.as_mut() {
-            blank.set_drive_strength(CFG_PIN_DRIVE_STRENGTH);
-            blank.set_slew_rate(PIN_SLEW_RATE);
+            let selected = PIN_DRIVE_MASK & (1 << 18) != 0;
+            blank.set_drive_strength(if selected { CFG_PIN_DRIVE_STRENGTH } else { Drive::_4mA });
+            blank.set_slew_rate(if selected { CFG_PIN_SLEW_RATE } else { SlewRate::Slow });
         }
         let Pio { mut common, sm0: mut sm, sm1: mut clock_sm, .. } = Pio::new(pio, Irqs);
         let mut r1 = common.make_pio_pin(pins.r1);
@@ -132,8 +134,9 @@ impl Driver {
             &mut r3, &mut g3, &mut b3, &mut sel1, &mut sel2, &mut sel3,
             &mut lat1, &mut lat2, &mut lat3, &mut row, &mut lck, &mut din, &mut dclk, &mut dclk2,
         ].into_iter().chain(bk.as_mut()) {
-            pin.set_drive_strength(CFG_PIN_DRIVE_STRENGTH);
-            pin.set_slew_rate(PIN_SLEW_RATE);
+            let selected = PIN_DRIVE_MASK & (1 << pin.pin()) != 0;
+            pin.set_drive_strength(if selected { CFG_PIN_DRIVE_STRENGTH } else { Drive::_4mA });
+            pin.set_slew_rate(if selected { CFG_PIN_SLEW_RATE } else { SlewRate::Slow });
         }
         let loaded = common.load_program(&crate::dclk_program::fixed_rate(
             protocol::PIO_CYCLES_PER_DCLK));
@@ -184,11 +187,12 @@ impl Driver {
             ],
             bk,
             drive_strength: CFG_PIN_DRIVE_STRENGTH,
+            slew_rate: CFG_PIN_SLEW_RATE,
         }
     }
 
-    /// Blocks with unchanged rate and drive keep DCLK running.
-    /// Rate or drive changes drain the parking tail and stop both SMs.
+    /// Blocks with unchanged rate and pads keep DCLK running.
+    /// Rate or selected pad changes drain PARK and stop both SMs.
     pub async fn send(&mut self, words: &[u32], configuration: bool) {
         assert!(!words.is_empty());
         assert_eq!(words[words.len() - 1] & (protocol::LE | protocol::ROW), 0);
@@ -206,8 +210,10 @@ impl Driver {
         } else {
             PIN_DRIVE_STRENGTH
         };
-        let drive_changed = self.drive_strength != drive_strength;
-        let start = !self.running || self.divider != divider || drive_changed;
+        let slew_rate = if configuration { CFG_PIN_SLEW_RATE } else { PIN_SLEW_RATE };
+        let pads_changed = PIN_DRIVE_MASK != 0
+            && (self.drive_strength != drive_strength || self.slew_rate != slew_rate);
+        let start = !self.running || self.divider != divider || pads_changed;
         if start {
             if self.running {
                 while !self.sm.tx().empty() {
@@ -234,22 +240,26 @@ impl Driver {
             // changing pads/divider; startup reinitializes the idle word.
             unsafe { self.sm.exec_instr(self.program_origin as u16); }
             unsafe { self.clock_sm.exec_instr(self.program_origin as u16); }
-            if drive_changed {
-                for pin in self.pins.iter_mut().chain(self.bk.as_mut()) {
+            if pads_changed {
+                for pin in self.pins.iter_mut().chain(self.bk.as_mut())
+                    .filter(|pin| PIN_DRIVE_MASK & (1 << pin.pin()) != 0) {
                     pin.set_drive_strength(if configuration {
                         CFG_PIN_DRIVE_STRENGTH
                     } else {
                         PIN_DRIVE_STRENGTH
                     });
+                    pin.set_slew_rate(if configuration { CFG_PIN_SLEW_RATE } else { PIN_SLEW_RATE });
                 }
-                if let Some(blank) = self._blank.as_mut() {
+                if let Some(blank) = self._blank.as_mut().filter(|_| PIN_DRIVE_MASK & (1 << 18) != 0) {
                     blank.set_drive_strength(if configuration {
                         CFG_PIN_DRIVE_STRENGTH
                     } else {
                         PIN_DRIVE_STRENGTH
                     });
+                    blank.set_slew_rate(if configuration { CFG_PIN_SLEW_RATE } else { PIN_SLEW_RATE });
                 }
                 self.drive_strength = drive_strength;
+                self.slew_rate = slew_rate;
             }
             self.sm.set_clock_divider(U24F8::from_bits(divider));
             self.clock_sm.set_clock_divider(U24F8::from_bits(divider));
