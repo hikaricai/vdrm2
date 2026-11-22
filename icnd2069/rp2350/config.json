@@ -9,8 +9,8 @@
     "pin_drive": {
         "strength": "12mA",
         "cfg_strength": "12mA",
-        "slew_rate": "slow",
-        "cfg_slew_rate": "slow",
+        "slew_rate": "fast",
+        "cfg_slew_rate": "fast",
         "pins": "dclk"
     },
     "_pin_drive_doc": "仅 pins 指定的 driver::Pins 字段应用此配置：单个字符串或字符串列表，如 dclk 或 [dclk,dclk2]；未指定引脚固定4mA/slow。strength：2mA/4mA/8mA/12mA，默认4mA；cfg_strength省略跟随strength。slew_rate：slow/fast，默认slow；cfg_slew_rate省略跟随slew_rate。启动使用配置档位，进入灰度阶段恢复普通档位；仅档位变化时停车更新。这是GPIO驱动能力，不是LED恒流值。",
@@ -25,10 +25,10 @@
     "pattern": "diagonal",
     "cfg_dclk_mhz": 10,
     "_dclk_mhz_doc": "单位 MHz；可选 1、3、6、10、12.5、20、25、26、28、30、31、32、33、34、35、40、45。所有高速档位使用整数 PIO 分频；26/28 的系统时钟为 104/112 MHz，无需超频；1/3 为低速时序实验档；40/45 为 RP2350 超频实验档，系统时钟分别为 160/180 MHz。",
-    "dclk_mhz": 20,
+    "dclk_mhz": 30,
     "_cfg_dclk_mhz_doc": "配置速度须与高速档位的系统时钟/PIO 程序精确匹配；省略时跟随 dclk_mhz。25/20 MHz 不兼容，25/12.5、25/25、26/13、26/26、28/14、28/28、30/20、20/20 MHz 可用。高速档位仍完整保留，配置速度并非任意可组合。",
     "_gclk_mhz_doc": "按 dclk_mhz/gclk_mhz 精确选取 PLL M/P，GCLK 按 N=1 计算，非实测内部频率。12.5/31.25 组合保留抓包 M=4/P=10，DCLK/M=3.125 MHz 低于指南范围。keep_scan_time=false 时行周期固定60 DCLK，不随 PLL/PWM 寄存器调整。",
-    "gclk_mhz": 80,
+    "gclk_mhz": 120,
     "_pwm_width_doc": "允许整数4..255，写入07h/08h，名义 Accelerate Rate=256/pwm_width；仅调整芯片PWM配置，不改变外部行周期和帧长度。",
     "pwm_width": 32,
     "repeat_latch": {
