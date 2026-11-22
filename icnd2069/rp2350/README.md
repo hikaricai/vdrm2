@@ -10,7 +10,7 @@ cargo run --release
 
 编译参数全部读取本目录的 [`config.json`](config.json)，修改后 Cargo 自动重新构建。`bash build.sh` 执行同一条命令；只编译使用 `cargo build --release`。
 
-当前驱动只使用 **PIO0/SM0 + DMA0**。LE、SIN、ROW 和 RT5990 引脚来自同一个 GPIO 数据字，DCLK 用 side-set 输出。同频率帧之间不停 PIO，FIFO 空时补零并保持 DCLK；只在真正切换分频时停车。普通帧是一块，配置帧是慢速配置块和包含清零、灰度的连续高速块。
+当前驱动只使用 **PIO0/SM0 + DMA0**。LE、SIN、ROW 和 RT5990 引脚来自同一个 GPIO 数据字，DCLK 用 side-set 输出。频率及驱动强度均不变时不停 PIO，FIFO 空时补零并保持 DCLK；切换分频或驱动强度时停车。普通帧是一块，配置帧是慢速配置块和包含清零、灰度的连续高速块。
 
 启动及周期配置帧依次执行 RT5990 清空 160 行、`EN_OP(11)`、PRE_ACT、49 条带额外清零的 WR_CFG 和灰度 DATA_LATCH。每条 WR_CFG 的配置数据前均发送 `cfg_pre_clr_chains×16` 个额外零。RT5990 清空时 DIN=0，LCK 发 160 个高/低各 2 DCLK 的脉冲，BK 保持消隐；加上首尾各 2 DCLK，共 644 个配置时钟（1 MHz 时为 644 µs）。160 行为物理链长度，独立于 `lines`、`chains`、`cfg_pre_clr_chains` 和 `cfg_chains`。`row_on_cfg=false`（默认）时，上一帧写完后进入配置帧，不发 VSYNC，整帧 ROW 保持低；下一普通帧才恢复 VSYNC 和扫描。true 时配置帧保留 VSYNC 和配置完成后的扫描。没有发送 `DIS_OP(12)`；板上表现待实测。
 
@@ -27,8 +27,9 @@ cargo run --release
 | `chains` | `2` | 新板固定两颗级联，其他值编译报错；30 列独立像素 |
 | `cfg_pre_clr_chains` | `0` | 可选整数 0～64，省略为 0；每条 WR_CFG 前额外清零的等效级联数量，每颗 16 个 DCLK；0 表示不额外清零 |
 | `cfg_chains` | `4` | 可选整数 1～8，独立于灰度 `chains`；每条 WR_CFG 发送该数量的 16-bit 配置字，省略跟随 `chains` |
-| `pin_drive_strength` | `"12mA"` | 可选，`2mA` / `4mA` / `8mA` / `12mA`；省略默认 `4mA`；RP2350 没有 10mA 档 |
-| `pin_slew_rate` | `"fast"` | 可选，`slow` / `fast`；省略默认 `slow`；控制输出边沿速度 |
+| `cfg_pin_drive_strength` | `"4mA"` | 可选，配置块 GPIO 驱动强度，`2mA` / `4mA` / `8mA` / `12mA`；省略跟随 `pin_drive_strength` |
+| `pin_drive_strength` | `"12mA"` | 可选，灰度及普通帧 GPIO 驱动强度，`2mA` / `4mA` / `8mA` / `12mA`；省略默认 `4mA`；RP2350 没有 10mA 档 |
+| `pin_slew_rate` | `"slow"` | 可选，`slow` / `fast`；省略默认 `slow`；控制输出边沿速度，两阶段保持同一设置 |
 | `cpld_addresses` | `[7, 7, 7]` | 可选，三组独立地址；0～5 单路、6/7 广播，默认广播；配置始终广播 |
 | `row_on_cfg` | `false` | 可选布尔值，省略为 false；false 表示整个配置帧不发 VSYNC 和 ROW，true 保留配置帧 VSYNC 及配置完成后的扫描；普通帧照常发送 |
 | `pattern` | `"diagonal"` | 可选，`col_x` 点亮指定列，x 从 0 开始，范围 `0..chains*15-1`；该列沿行按 `gray[1] → gray[0]` 渐变，`lines=1` 时取 `gray[1]`。`diagonal` 为斜线，也是省略时的默认值 |
@@ -44,11 +45,15 @@ cargo run --release
 
 `keep_scan_time=true` 时，扫描结束点与 `DATA_END` 对齐；不能整除的 DCLK 均匀分配，各行周期最多相差 1 DCLK。ROW 高电平仍为首行 12 DCLK、后续 4 DCLK，BK/LCK 脉宽保持 8/2 DCLK。为保留这些脉冲及 PIO 执行间隔，最短行周期必须达到 14 DCLK，遍数过多会编译报错。这一实验模式覆盖固定 60 DCLK 的基础行周期，不会自动修改 GCLK 或 PWM_WIDTH。关闭或省略该字段时，每行固定 60 DCLK，扫描总时间随遍数增长。
 
-除 `lines`、`color`、`pattern`、`cfg_pre_clr_chains`、`cfg_chains`、`pin_drive_strength`、`pin_slew_rate`、`cpld_addresses`、`row_on_cfg`、`cfg_dclk_mhz`、`gclk_mhz`、`pwm_width`、`keep_scan_time`、`repeat_latch`、其中的 `repeat_latch_gap` 和注释字段外，上表字段必须填写。`repeat_latch: {}` 也会开启连续 latch，间隔默认为 1；已知参数的类型和范围仍会校验。
+除 `lines`、`color`、`pattern`、`cfg_pre_clr_chains`、`cfg_chains`、`cfg_pin_drive_strength`、`pin_drive_strength`、`pin_slew_rate`、`cpld_addresses`、`row_on_cfg`、`cfg_dclk_mhz`、`gclk_mhz`、`pwm_width`、`keep_scan_time`、`repeat_latch`、其中的 `repeat_latch_gap` 和注释字段外，上表字段必须填写。`repeat_latch: {}` 也会开启连续 latch，间隔默认为 1；已知参数的类型和范围仍会校验。
 
 驱动强度和 slew rate 统一应用于 `driver::Pins` 的全部 20 个引脚：
 RGB、SEL、LAT、CLK、ROW、LCK、BK、DIN。设置发生在 PIO 引脚注册后，
-输出启动前；`disable_rt5990=true` 时由 SIO 固定控制的 BK 也应用同一配置。
+输出启动前即使用 `cfg_pin_drive_strength`；配置块及其尾部清零结束后，
+进入高速清零和灰度块时恢复 `pin_drive_strength`。后续每次写配置均切回配置档位。
+`disable_rt5990=true` 时由 SIO 固定控制的 BK 也随阶段切换，消隐电平保持不变。
+切换时先排空 PARK 尾部并停 PIO、强制 DCLK 低，再更新全部引脚后恢复；
+即使两阶段 DCLK 相同也执行切换。驱动强度相同时不额外停车或重写 GPIO。
 驱动强度是 GPIO 输出能力档位，不是 ICND2069 的 LED 恒流设置；
 slew rate 控制上升/下降沿速度，不是多引脚时钟偏斜（skew）。
 
@@ -123,11 +128,11 @@ SEL 同样在下一上升沿采样，LAT/ROW 与该字保持一致。
 
 26/28 MHz 使用系统 PLL `12 MHz × 78/84 / 3 / 3 = 104/112 MHz`，VCO 分别为 936/1008 MHz。31 MHz 使用系统 PLL `12 MHz × 124 / 4 / 3 = 124 MHz`，VCO 为 1488 MHz，避免使用低于合法范围的 744 MHz VCO。32/33/34 MHz 分别使用 `12 MHz × 64/66/68 / 3 / 2`。
 
-绝对频率仍受晶振和 PLL 影响。同频率发送只等 DMA 写入完成，
+绝对频率仍受晶振和 PLL 影响。频率及驱动强度均相同的发送只等 DMA 写入完成，
 不排空 FIFO、不停 PIO、不重置分频；下一帧继续使用同一 DMA。
 CPU 尚未提交下一帧时，PIO 输出零字补齐空闲时间，CLK 不会断开。
-只有实际切换分频才等待 FIFO 清空，在 PARK 尾部停状态机并强制 DCLK 低，
-跳回一次性初始化入口、修改分频、预填 FIFO 后恢复。
+实际切换分频或 GPIO 驱动强度时等待 FIFO 清空，在 PARK 尾部停状态机并强制 DCLK 低，
+跳回一次性初始化入口、更新驱动强度及分频、预填 FIFO 后恢复。
 不再依赖阻塞 PULL 的 TXSTALL 标志判断发送完成。
 普通帧仍含相同数量的数据字，但帧间可能多出零时钟，
 理论 FPS 不计这段软件空闲时间，实测 FPS 会计入。

@@ -49,6 +49,9 @@ pub struct Driver {
     divider: u32,
     running: bool,
     program_origin: u8,
+    pins: [pio::Pin<'static, PIO0>; 19],
+    bk: Option<pio::Pin<'static, PIO0>>,
+    drive_strength: Drive,
     _blank: Option<Output<'static>>,
 }
 
@@ -62,7 +65,7 @@ impl Driver {
             (None, Some(pins.lbk))
         };
         if let Some(blank) = blank.as_mut() {
-            blank.set_drive_strength(PIN_DRIVE_STRENGTH);
+            blank.set_drive_strength(CFG_PIN_DRIVE_STRENGTH);
             blank.set_slew_rate(PIN_SLEW_RATE);
         }
         let Pio { mut common, sm0: mut sm, .. } = Pio::new(pio, Irqs);
@@ -93,7 +96,7 @@ impl Driver {
             &mut r3, &mut g3, &mut b3, &mut sel1, &mut sel2, &mut sel3,
             &mut lat1, &mut lat2, &mut lat3, &mut row, &mut lck, &mut din, &mut dclk,
         ].into_iter().chain(bk.as_mut()) {
-            pin.set_drive_strength(PIN_DRIVE_STRENGTH);
+            pin.set_drive_strength(CFG_PIN_DRIVE_STRENGTH);
             pin.set_slew_rate(PIN_SLEW_RATE);
         }
         let loaded = common.load_program(&crate::dclk_program::fixed_rate(
@@ -130,11 +133,17 @@ impl Driver {
             sm, dma: dma.into_ref(), _common: common,
             divider: protocol::PIO_CLKDIV_INT << 8,
             running: false, program_origin: loaded.origin, _blank: blank,
+            pins: [
+                r1, g1, b1, r2, g2, b2, r3, g3, b3,
+                sel1, sel2, sel3, lat1, lat2, lat3, row, lck, din, dclk,
+            ],
+            bk,
+            drive_strength: CFG_PIN_DRIVE_STRENGTH,
         }
     }
 
-    /// Same-rate blocks keep DCLK running; empty FIFO emits PARK words.
-    /// Only a rate change drains the parking tail and stops the SM.
+    /// Blocks with unchanged rate and drive keep DCLK running.
+    /// Rate or drive changes drain the parking tail and stop the SM.
     pub async fn send(&mut self, words: &[u32], configuration: bool) {
         assert!(!words.is_empty());
         assert_eq!(words[words.len() - 1] & (protocol::LE | protocol::ROW), 0);
@@ -143,21 +152,44 @@ impl Driver {
         } else {
             protocol::PIO_CLKDIV_INT << 8
         };
-        let start = !self.running || self.divider != divider;
+        let drive_strength = if configuration {
+            CFG_PIN_DRIVE_STRENGTH
+        } else {
+            PIN_DRIVE_STRENGTH
+        };
+        let drive_changed = self.drive_strength != drive_strength;
+        let start = !self.running || self.divider != divider || drive_changed;
         if start {
             if self.running {
                 while !self.sm.tx().empty() {
                     core::hint::spin_loop();
                 }
                 // All queued trailing words are PARK. No active latch/ROW
-                // can be cut short while stopping for the divider change.
+                // can be cut short while stopping for a rate/drive change.
                 self.sm.set_enable(false);
             }
             self.sm.restart();
             // JMP to the one-time SET X,0, with side-set LOW. Forced
             // instructions execute while disabled, parking DCLK before
-            // changing divider; startup then reinitializes the idle word.
+            // changing pads/divider; startup reinitializes the idle word.
             unsafe { self.sm.exec_instr(self.program_origin as u16); }
+            if drive_changed {
+                for pin in self.pins.iter_mut().chain(self.bk.as_mut()) {
+                    pin.set_drive_strength(if configuration {
+                        CFG_PIN_DRIVE_STRENGTH
+                    } else {
+                        PIN_DRIVE_STRENGTH
+                    });
+                }
+                if let Some(blank) = self._blank.as_mut() {
+                    blank.set_drive_strength(if configuration {
+                        CFG_PIN_DRIVE_STRENGTH
+                    } else {
+                        PIN_DRIVE_STRENGTH
+                    });
+                }
+                self.drive_strength = drive_strength;
+            }
             self.sm.set_clock_divider(U24F8::from_bits(divider));
             self.sm.clkdiv_restart();
             self.divider = divider;

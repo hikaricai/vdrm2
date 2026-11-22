@@ -55,7 +55,7 @@ async fn main(_spawner: Spawner) {
         let image = protocol::pattern_frame_range(PATTERN, GRAY_RANGE);
         protocol::prepare_frames(configuration, normal, &image);
     }
-    rtt_target::rprintln!("ICND2069: single PIO SM0 + DMA0; continuous idle-zero DCLK, stop LOW only for divider changes");
+    rtt_target::rprintln!("ICND2069: single PIO SM0 + DMA0; continuous idle-zero DCLK, stop LOW for divider/drive changes");
     rtt_target::rprintln!("chains={}, cfg_chains={}, lines={}, scan_repeats={}, row_on_cfg={}",
         protocol::CHAIN_COPIES, protocol::CFG_CHAIN_COPIES, protocol::ROWS,
         protocol::SCAN_REPEATS, protocol::ROW_ON_CFG);

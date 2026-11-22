@@ -16,6 +16,8 @@ struct Config {
     #[serde(default)]
     pin_drive_strength: PinDriveStrength,
     #[serde(default)]
+    cfg_pin_drive_strength: Option<PinDriveStrength>,
+    #[serde(default)]
     pin_slew_rate: PinSlewRate,
     #[serde(default = "default_cpld_addresses")]
     cpld_addresses: [u8; 3],
@@ -41,7 +43,7 @@ struct Config {
     repeat_latch: Option<RepeatLatch>,
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Clone, Copy, Deserialize, Default)]
 enum PinDriveStrength {
     #[serde(rename = "2mA")]
     Ma2,
@@ -52,6 +54,17 @@ enum PinDriveStrength {
     Ma8,
     #[serde(rename = "12mA")]
     Ma12,
+}
+
+impl PinDriveStrength {
+    fn milliamps(self) -> u8 {
+        match self {
+            Self::Ma2 => 2,
+            Self::Ma4 => 4,
+            Self::Ma8 => 8,
+            Self::Ma12 => 12,
+        }
+    }
 }
 
 #[derive(Deserialize, Default)]
@@ -119,12 +132,9 @@ fn main() {
     let path = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap()).join("config.json");
     let json = fs::read_to_string(&path).expect("cannot read config.json");
     let config: Config = serde_json::from_str(&json).expect("invalid config.json");
-    let drive_ma = match config.pin_drive_strength {
-        PinDriveStrength::Ma2 => 2,
-        PinDriveStrength::Ma4 => 4,
-        PinDriveStrength::Ma8 => 8,
-        PinDriveStrength::Ma12 => 12,
-    };
+    let drive_ma = config.pin_drive_strength.milliamps();
+    let cfg_drive_ma = config.cfg_pin_drive_strength
+        .unwrap_or(config.pin_drive_strength).milliamps();
     let slew = match config.pin_slew_rate {
         PinSlewRate::Slow => "Slow",
         PinSlewRate::Fast => "Fast",
@@ -133,6 +143,7 @@ fn main() {
         out.join("pin_config.rs"),
         format!(
             "pub const PIN_DRIVE_STRENGTH: Drive = Drive::_{drive_ma}mA;\n\
+             pub const CFG_PIN_DRIVE_STRENGTH: Drive = Drive::_{cfg_drive_ma}mA;\n\
              pub const PIN_SLEW_RATE: SlewRate = SlewRate::{slew};\n"
         ),
     ).unwrap();
