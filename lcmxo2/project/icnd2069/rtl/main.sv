@@ -27,7 +27,7 @@ module led (
         for (genvar channel = 0; channel < 3; channel++) begin : channels
             wire [5:0] decoded;
             logic [5:0] decoded_pos = '0;
-            decoder select_output (.a(3), .v(rgb[channel]), .o(decoded));
+            decoder select_output (.a(address), .v(rgb[channel]), .o(decoded));
             // Preserve the source project's current-edge, dual-edge sampling.
             // All six destinations hold between edges (no direct-path exception).
             always_ff @(negedge main_clock)
