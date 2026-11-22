@@ -13,9 +13,7 @@ module select_address (
 
     always_ff @(posedge clk) begin
         history <= {history[5:0], serial};
-        if (filled != 3'd7)
-            filled <= filled + 1'b1;
-        if (filled == 3'd7 && history[3:0] == 4'b0111 && serial)
+        if (history[3:0] == 4'b0111 && serial)
             address <= history[6:4];
     end
 endmodule

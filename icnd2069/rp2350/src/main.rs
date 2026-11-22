@@ -44,7 +44,7 @@ async fn main(_spawner: Spawner) {
             r2: p.PIN_4, g2: p.PIN_5, b2: p.PIN_6, sel2: p.PIN_7,
             r3: p.PIN_8, g3: p.PIN_9, b3: p.PIN_10, sel3: p.PIN_11,
             lat1: p.PIN_12, lat2: p.PIN_13, lat3: p.PIN_14,
-            dclk: p.PIN_15, row: p.PIN_22,
+            dclk: p.PIN_15, dclk2: p.PIN_17, row: p.PIN_22,
             lck: p.PIN_16, lbk: p.PIN_18, ldata: p.PIN_20,
         },
     );
@@ -55,7 +55,7 @@ async fn main(_spawner: Spawner) {
         let image = protocol::pattern_frame_range(PATTERN, GRAY_RANGE);
         protocol::prepare_frames(configuration, normal, &image);
     }
-    rtt_target::rprintln!("ICND2069: single PIO SM0 + DMA0; continuous idle-zero DCLK, stop LOW for divider/drive changes");
+    rtt_target::rprintln!("ICND2069: PIO SM0 + DMA0, synchronized SM1 DCLK copy; continuous idle-zero clocks, stop LOW for divider/drive changes");
     rtt_target::rprintln!("chains={}, cfg_chains={}, lines={}, scan_repeats={}, row_on_cfg={}",
         protocol::CHAIN_COPIES, protocol::CFG_CHAIN_COPIES, protocol::ROWS,
         protocol::SCAN_REPEATS, protocol::ROW_ON_CFG);
@@ -73,9 +73,9 @@ async fn main(_spawner: Spawner) {
         protocol::CFG_PRE_CLR_DCLKS, protocol::RT5990_CLEAR_ROWS);
     rtt_target::rprintln!("after configuration: {} slow zero clocks, {} fast zero clocks, complete grayscale frame, then VSYNC; clear LE/ROW LOW",
         protocol::CFG_POST_CLR_DCLKS, protocol::CFG_POST_CLR_DCLKS);
-    rtt_target::rprintln!("CPLD data addresses={:?}; configuration broadcasts to all six outputs",
+    rtt_target::rprintln!("CPLD configuration/gray addresses={:?}; both use the same destination",
         protocol::CPLD_ADDRESSES);
-    rtt_target::rprintln!("GPIO CLK/LAT1/LAT2/LAT3/ROW=15/12/13/14/22; RT LCK/BK/DIN=16/18/20; wave RAM={} bytes",
+    rtt_target::rprintln!("GPIO CLK/CLK2/LAT1/LAT2/LAT3/ROW=15/17/12/13/14/22; RT LCK/BK/DIN=16/18/20; wave RAM={} bytes",
         (configuration.len() + normal.len()) * 4);
     let fast_cycles = u64::from(protocol::SYS_HZ / protocol::DCLK_HZ);
     let normal_cycles = normal.len() as u64 * fast_cycles;
@@ -118,6 +118,8 @@ async fn main(_spawner: Spawner) {
         previous_start = start;
         let report_elapsed = start.duration_since(report);
         if report_elapsed.as_secs() >= 5 {
+            #[cfg(feature = "dma-diagnostics")]
+            driver::diagnose_rtt_mode();
             let average_fps = fps_x100(embassy_time::TICK_HZ,
                 u64::from(frames.wrapping_sub(report_frames)), report_elapsed.as_ticks());
             if normal_frames != 0 && normal_ticks != 0 {

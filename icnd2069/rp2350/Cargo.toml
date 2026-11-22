@@ -3,6 +3,9 @@ name = "icnd2069-demo"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+dma-diagnostics = []
+
 [dependencies]
 cortex-m = "0.7"
 cortex-m-rt = "0.7"

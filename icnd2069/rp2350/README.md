@@ -10,7 +10,7 @@ cargo run --release
 
 编译参数全部读取本目录的 [`config.json`](config.json)，修改后 Cargo 自动重新构建。`bash build.sh` 执行同一条命令；只编译使用 `cargo build --release`。
 
-当前驱动只使用 **PIO0/SM0 + DMA0**。LE、SIN、ROW 和 RT5990 引脚来自同一个 GPIO 数据字，DCLK 用 side-set 输出。频率及驱动强度均不变时不停 PIO，FIFO 空时补零并保持 DCLK；切换分频或驱动强度时停车。普通帧是一块，配置帧是慢速配置块和包含清零、灰度的连续高速块。
+当前驱动使用 **PIO0/SM0 + DMA0，SM1 输出独立时钟副本**。LE、SIN、ROW 和 RT5990 引脚来自同一个 GPIO 数据字，SM0 用 side-set 输出 GP15 DCLK，SM1 同步输出 GP17 DCLK2，独立接到 CPLD。频率及驱动强度均不变时不停 PIO，FIFO 空时补零并保持两路时钟；切换分频或驱动强度时两路一起停车。普通帧是一块，配置帧是慢速配置块和包含清零、灰度的连续高速块。
 
 启动及周期配置帧依次执行 RT5990 清空 160 行、`EN_OP(11)`、PRE_ACT、49 条带额外清零的 WR_CFG 和灰度 DATA_LATCH。每条 WR_CFG 的配置数据前均发送 `cfg_pre_clr_chains×16` 个额外零。RT5990 清空时 DIN=0，LCK 发 160 个高/低各 2 DCLK 的脉冲，BK 保持消隐；加上首尾各 2 DCLK，共 644 个配置时钟（1 MHz 时为 644 µs）。160 行为物理链长度，独立于 `lines`、`chains`、`cfg_pre_clr_chains` 和 `cfg_chains`。`row_on_cfg=false`（默认）时，上一帧写完后进入配置帧，不发 VSYNC，整帧 ROW 保持低；下一普通帧才恢复 VSYNC 和扫描。true 时配置帧保留 VSYNC 和配置完成后的扫描。没有发送 `DIS_OP(12)`；板上表现待实测。
 
@@ -30,7 +30,7 @@ cargo run --release
 | `cfg_pin_drive_strength` | `"4mA"` | 可选，配置块 GPIO 驱动强度，`2mA` / `4mA` / `8mA` / `12mA`；省略跟随 `pin_drive_strength` |
 | `pin_drive_strength` | `"12mA"` | 可选，灰度及普通帧 GPIO 驱动强度，`2mA` / `4mA` / `8mA` / `12mA`；省略默认 `4mA`；RP2350 没有 10mA 档 |
 | `pin_slew_rate` | `"slow"` | 可选，`slow` / `fast`；省略默认 `slow`；控制输出边沿速度，两阶段保持同一设置 |
-| `cpld_addresses` | `[7, 7, 7]` | 可选，三组独立地址；0～5 单路、6/7 广播，默认广播；配置始终广播 |
+| `cpld_addresses` | `[3, 3, 3]` | 可选，配置和灰度共用的三组独立地址；0～5 单路、6/7 本组广播，省略默认 `[7,7,7]`；配置不再强制广播 |
 | `row_on_cfg` | `false` | 可选布尔值，省略为 false；false 表示整个配置帧不发 VSYNC 和 ROW，true 保留配置帧 VSYNC 及配置完成后的扫描；普通帧照常发送 |
 | `pattern` | `"diagonal"` | 可选，`col_x` 点亮指定列，x 从 0 开始，范围 `0..chains*15-1`；该列沿行按 `gray[1] → gray[0]` 渐变，`lines=1` 时取 `gray[1]`。`diagonal` 为斜线，也是省略时的默认值 |
 | `color` | `"rgb"` | 可选，`r`/`g`/`b` 分别仅亮红/绿/蓝；`rg`/`rb`/`gb` 亮对应两色；`rgb` 三色全亮。省略默认 `rgb`，非法值编译报错 |
@@ -47,7 +47,7 @@ cargo run --release
 
 除 `lines`、`color`、`pattern`、`cfg_pre_clr_chains`、`cfg_chains`、`cfg_pin_drive_strength`、`pin_drive_strength`、`pin_slew_rate`、`cpld_addresses`、`row_on_cfg`、`cfg_dclk_mhz`、`gclk_mhz`、`pwm_width`、`keep_scan_time`、`repeat_latch`、其中的 `repeat_latch_gap` 和注释字段外，上表字段必须填写。`repeat_latch: {}` 也会开启连续 latch，间隔默认为 1；已知参数的类型和范围仍会校验。
 
-驱动强度和 slew rate 统一应用于 `driver::Pins` 的全部 20 个引脚：
+驱动强度和 slew rate 统一应用于 `driver::Pins` 的全部 21 个引脚（含 DCLK2）：
 RGB、SEL、LAT、CLK、ROW、LCK、BK、DIN。设置发生在 PIO 引脚注册后，
 输出启动前即使用 `cfg_pin_drive_strength`；配置块及其尾部清零结束后，
 进入高速清零和灰度块时恢复 `pin_drive_strength`。后续每次写配置均切回配置档位。
@@ -86,7 +86,7 @@ slew rate 控制上升/下降沿速度，不是多引脚时钟偏斜（skew）�
 配置后的慢速、高速清零各为 `16×max(chains,cfg_chains)=64` DCLK，
 普通帧灰度长度不变。
 
-`row_on_cfg` 控制配置帧的 VSYNC 和 ICND2069 ROW（GP22），不取消 RT5990 清空脉冲。false 时，保留前缀的八时钟广播选址，将其余前缀填 PARK，并清除整帧 ROW；true 时保留配置帧 VSYNC 和配置完成后的 ROW。普通帧缓冲始终保留 VSYNC 和扫描。若 `config_interval=1` 且 `row_on_cfg=false`，每帧都是配置帧，因此持续不发 VSYNC 和 ROW。
+`row_on_cfg` 控制配置帧的 VSYNC 和 ICND2069 ROW（GP22），不取消 RT5990 清空脉冲。false 时，保留前缀按 `cpld_addresses` 发送的八时钟选址，将其余前缀填 PARK，并清除整帧 ROW；true 时保留配置帧 VSYNC 和配置完成后的 ROW。普通帧缓冲始终保留 VSYNC 和扫描。若 `config_interval=1` 且 `row_on_cfg=false`，每帧都是配置帧，因此持续不发 VSYNC 和 ROW。
 
 `cfg_dclk_mhz` 用于配置帧的前缀、RT5990 清空及寄存器配置段（EN_OP、PRE_ACT、解锁、寄存器写入、锁定及对齐时钟）。配置块完成后停 PIO，切回 `dclk_mhz` 发送灰度。普通帧全部使用 `dclk_mhz`。ICND2069 的 M/P 配置仍按正常数据阶段的 `dclk_mhz` 与 `gclk_mhz` 计算。
 
@@ -251,7 +251,7 @@ probe-rs reset --chip RP235x --protocol swd --speed 1000
 
 接线依据 [RP2350 板原理图](../docs/SCH_Schematic4_2026-11-21.pdf) 和
 [CPLD/面板原理图](../../lcmxo2/project/icnd2069/SCH_Schematic5_2026-11-21.pdf)。
-三组 RGB/SEL 输入 CPLD，三组 LAT 直接送面板，CLK 共用：
+三组 RGB/SEL 输入 CPLD，三组 LAT 直接送面板。按 2026-11-22 新接线，GP15 送面板，GP17 独立送 CPLD；两路时钟同步：
 
 | 信号 | GPIO（R / G / B 顺序） | Pico 2 排针脚号 |
 |---|---|---|
@@ -262,7 +262,8 @@ probe-rs reset --chip RP235x --protocol swd --speed 1000
 | R3 / G3 / B3 | GP8 / GP9 / GP10 | 11 / 12 / 14 |
 | SEL3 | GP11 | 15 |
 | LAT1 / LAT2 / LAT3 | GP12 / GP13 / GP14 | 16 / 17 / 19 |
-| ICND2069 DCLK / CPLD CLK | GP15 | 20 |
+| ICND2069 DCLK | GP15 | 20 |
+| CPLD CLK / DCLK2 | GP17 | 22 |
 | RT5990 LCK | GP16 | 21 |
 | RT5990 BK | GP18 | 24 |
 | RT5990 DIN / LDATA | GP20 | 26 |
@@ -270,9 +271,9 @@ probe-rs reset --chip RP235x --protocol swd --speed 1000
 
 GP25 保留给 Pico 2 板载 LED；共地可接排针 3、8、13、18、23、28 或 38 脚。**旧接线需要按此表重接。**
 
-GP17/19/21 未被 PIO 占用，GP28 SYNC 暂未使用。LAT1～3 同步输出
+GP19/21 未被 PIO 占用，GP28 SYNC 暂未使用。LAT1～3 同步输出
 同一命令；三组 RGB 共享 30 列图像，`color` 只控制灰度颜色，配置仍分色
-写入全部输出。每条 SIN 固定两颗 ICND2069，CPLD 只扩展 IO。
+写入选定地址的全部 RGB 颜色。每条 SIN 固定两颗 ICND2069，CPLD 只扩展 IO。
 
 SEL 每组发送 `a2 a1 a0 0 1 1 1 1`，MSB 先发，总共 8 CLK。
 地址 0～5 对应后缀 1/3/5/7/9/11，6/7 广播。原理图 U3→面板 U2
@@ -280,9 +281,9 @@ SEL 每组发送 `a2 a1 a0 0 1 1 1 1`，MSB 先发，总共 8 CLK。
 默认 `[7,7,7]` 同时驱动这些输出；例如 `[0,3,0]` 分别选第 1/2/3 组
 的地址 0/3/0。当前没有逐地址独立图像调度。
 
-配置帧前八个 CLK 强制广播；普通帧前八个 CLK 设置 `cpld_addresses`。
+配置帧与普通帧前八个 CLK 均设置 `cpld_addresses`，配置和灰度使用同一目的地。
 原有 34 CLK 前缀不变，VSYNC 移到索引 13～15（零基）。
-配置后的高速 32 CLK 清零段最后八个 CLK 恢复数据地址，RGB/LAT 保持零。
+配置后的高速 32 CLK 清零段最后八个 CLK 再次发送相同地址，RGB/LAT 保持零。
 SEL 在数据和空闲期间为零，因此地址不会误锁存；普通帧长度不增加。
 
 ### RGB 配置
@@ -307,7 +308,9 @@ SEL 在数据和空闲期间为零，因此地址不会误锁存；普通帧长�
 2026-11-07 主机验证：`tools/check_config_interval.rs` 逐路解码 GP0～11，直接读取上述抓包表核对 45 个配置地址及 8 项颜色差异，并检查全级联、配置刷新、轮转配置和灰度更新。它与 `tools/check_diagonal_latch.rs` 均通过默认配置、25 MHz／6 颗（连续 latch 开/关）、8 颗／64 遍扫描的核验。默认及 25 MHz／6 颗 static 固件 release 构建通过；本轮未烧录。
 
 PIO 每个 DCLK 使用一个 32 位 DMA 样本，OUT 宽度为 23 位，覆盖 GP0～22；
-GP15 DCLK 使用 side-set，GP17/19/21 未复用到 PIO。所有信号由 SM0 同源输出。
+GP15 DCLK 使用 SM0 side-set，GP17 DCLK2 使用 SM1 side-set，GP19/21 未复用到 PIO。两路复用同一份 PIO 程序、相同分频，并同步复位分频器及使能；SM1 的 OUT_COUNT=0，不写数据管脚，空 FIFO 的 PULL 不阻塞。GP17 位于 SM0 的 OUT 范围内，SM1 同时 side-set 按较高状态机编号优先级覆盖其零位。GP16 LCK 仍只由 SM0 驱动。
+
+2026-11-22 DCLK2 适配：release 构建及共享程序的 `check_dclk.py --presets` 指令/分频检查通过；未烧录，板上同步和接面板后的波形质量待测。停车时两路一起禁止运行，随后分别执行低电平指令；有效传输从同步重启后开始。
 
 两种锁存方式都在启动时生成普通帧和配置帧两个不变缓冲，由 DMA0 顺序发送。
 

@@ -527,8 +527,12 @@ pub static CONFIG_IDLE_PREFIX: [u32; COMMON_PREFIX_WORDS] = {
     let mut words = [PARK; COMMON_PREFIX_WORDS];
     let mut bit = 0;
     while bit < CPLD_SELECT_DCLKS {
-        if 0xef & (1 << (7 - bit)) != 0 {
-            words[bit] |= SEL;
+        let mut bank = 0;
+        while bank < CPLD_ADDRESSES.len() {
+            if ((CPLD_ADDRESSES[bank] << 5) | 0x0f) & (1 << (7 - bit)) != 0 {
+                words[bit] |= 1 << (bank * 4 + 3);
+            }
+            bank += 1;
         }
         bit += 1;
     }
@@ -619,8 +623,8 @@ pub const ROW_RUN_COUNT: usize = GROUPS * ROWS * 2 + 1;
 pub const CONFIG_ROW_RUN_COUNT: usize = if ROW_ON_CFG { 0 } else { ROW_RUN_COUNT };
 #[cfg(not(target_os = "none"))]
 pub const VSYNC_FALL: usize = 16;
-/// Build the exact DMA buffers, including broadcast configuration and the
-/// fast zero flush that restores each bank's data destination.
+/// Build the exact DMA buffers, using each bank's destination for both
+/// configuration and gray data, with the fast zero flush between blocks.
 pub fn prepare_frames(configuration: &mut [u32], normal: &mut [u32], image: &Frame) {
     assert_eq!(configuration.len(), FRAME_WORDS + CFG_POST_CLR_DCLKS);
     assert_eq!(normal.len(), NORMAL_FRAME_DCLKS);
@@ -887,7 +891,7 @@ pub fn encode_split(head: &mut [u32], tail: &mut [u32], frame: &Frame) {
 
 fn encode_wave(wave: &mut Waveform<'_>, frame: &Frame, rotating: Option<[u16; 3]>) -> usize {
     let mut selection = [PARK; CPLD_SELECT_DCLKS];
-    select_cpld(&mut selection, [7; 3]);
+    select_cpld(&mut selection, CPLD_ADDRESSES);
     for word in selection {
         wave.hold(word, 1);
     }

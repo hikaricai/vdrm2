@@ -11,7 +11,8 @@ rtl = root.parents[1] / "lcmxo2/project/icnd2069/rtl"
 config = json.loads((root / "config.json").read_text())
 env = {k: v for k, v in os.environ.items() if not k.startswith("ICND2069_")}
 settings = {
-    "CHAIN_COPIES": 2, "CFG_CHAIN_COPIES": 2,
+    "CHAIN_COPIES": config["chains"],
+    "CFG_CHAIN_COPIES": config.get("cfg_chains", config["chains"]),
     "CFG_PRE_CLR_CHAINS": config.get("cfg_pre_clr_chains", 0),
     "DCLK_MHZ": config["dclk_mhz"],
     "CFG_DCLK_HZ": round(config.get("cfg_dclk_mhz", config["dclk_mhz"]) * 1e6),
@@ -20,6 +21,7 @@ settings = {
     "SCAN_REPEATS": config["scan_repeats"], "LINES": config.get("lines", 54),
     "KEEP_SCAN_TIME": int(config.get("keep_scan_time", False)),
     "CONFIG_INTERVAL": config["config_interval"],
+    "DISABLE_RT5990": int(config.get("disable_rt5990", False)),
     "REPEAT_LATCH_GAP": config.get("repeat_latch", {}).get("repeat_latch_gap", 1),
 }
 env.update({f"ICND2069_{k}": str(v) for k, v in settings.items()})

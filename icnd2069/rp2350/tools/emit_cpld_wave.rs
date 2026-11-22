@@ -28,8 +28,8 @@ fn main() {
         [0, 255]);
     prepare_frames(&mut configuration, &mut normal, &image);
     for _ in 0..2 {
-        emit(&configuration[..CONFIG_END_WORDS], [7; 3], CFG_DCLK_HZ);
-        emit(&[PARK; 17], [7; 3], CFG_DCLK_HZ);
+        emit(&configuration[..CONFIG_END_WORDS], CPLD_ADDRESSES, CFG_DCLK_HZ);
+        emit(&[PARK; 17], CPLD_ADDRESSES, CFG_DCLK_HZ);
         emit(&configuration[CONFIG_END_WORDS..], CPLD_ADDRESSES, DCLK_HZ);
         emit(&[PARK; 19], CPLD_ADDRESSES, DCLK_HZ);
         for _ in 0..2 {
