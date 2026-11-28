@@ -17,6 +17,8 @@ struct Config {
     cfg_chains: Option<u8>,
     #[serde(default)]
     pin_drive: Option<PinDrive>,
+    #[serde(default)]
+    timing: Option<Timing>,
     #[serde(default = "default_cpld_addresses")]
     cpld_addresses: [u8; 3],
     #[serde(default)]
@@ -39,6 +41,18 @@ struct Config {
     gray: Gray,
     #[serde(default, deserialize_with = "read_repeat_latch")]
     repeat_latch: Option<RepeatLatch>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Timing {
+    en_start: u32,
+    gray_start: u32,
+    row_start: u32,
+    gray_word_gap: u32,
+    gray_row_gap: u32,
+    row_period: u32,
+    frame_tail: u32,
 }
 
 #[derive(Clone, Copy, Deserialize, Default)]
@@ -195,6 +209,21 @@ fn main() {
     let path = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap()).join("config.json");
     let json = fs::read_to_string(&path).expect("cannot read config.json");
     let config: Config = serde_json::from_str(&json).expect("invalid config.json");
+    println!("cargo:rustc-env=ICND2069_TIMING={}", u8::from(config.timing.is_some()));
+    // Emit all fields even when absent, so shell exports cannot change JSON.
+    let timing = config.timing.as_ref();
+    for (key, value) in [
+        ("EN_START", timing.map_or(15, |t| t.en_start)),
+        ("GRAY_START", timing.map_or(732, |t| t.gray_start)),
+        ("ROW_START", timing.map_or(28, |t| t.row_start)),
+        ("GRAY_WORD_GAP", timing.map_or(8, |t| t.gray_word_gap)),
+        ("GRAY_ROW_GAP", timing.map_or(1, |t| t.gray_row_gap)),
+        ("ROW_PERIOD", timing.map_or(81, |t| t.row_period)),
+        ("FRAME_TAIL", timing.map_or(430, |t| t.frame_tail)),
+    ] {
+        assert!(value <= 65535, "config.json: timing.{key} must be 0..=65535 DCLK");
+        println!("cargo:rustc-env=ICND2069_TIMING_{key}={value}");
+    }
     assert!(matches!(config.board.as_str(), "dev" | "hdl" | "direct"),
         "config.json: board must be dev, hdl or direct");
     let dev = config.board == "dev";

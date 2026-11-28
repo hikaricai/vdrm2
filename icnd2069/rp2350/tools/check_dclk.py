@@ -34,6 +34,9 @@ env.update({
     "ICND2069_REPEAT_LATCH_GAP": str(config.get("repeat_latch", {}).get("repeat_latch_gap", 1)),
     "ICND2069_PATTERN": "diagonal",
 })
+env["ICND2069_TIMING"] = str(int("timing" in config))
+env.update({f"ICND2069_TIMING_{k.upper()}": str(v)
+            for k, v in config.get("timing", {}).items()})
 with tempfile.TemporaryDirectory(prefix="icnd2069-dclk-") as temp:
     binary = str(Path(temp) / "check")
     command = ["rustc", "--edition=2021", "-O", str(root / "tools/check_dclk.rs"),

@@ -55,6 +55,7 @@ HDL 驱动使用 **PIO0/SM0 + DMA0，SM1 输出独立时钟副本**；dev/direct
 | `chains` | `2` | HDL 固定两颗；dev/direct 允许 1～8 颗。每颗有效列数：HDL/direct 15，dev 16 |
 | `cfg_pre_clr_chains` | `0` | 可选整数 0～64，省略为 0；每条 WR_CFG 前额外清零的等效级联数量，每颗 16 个 DCLK；0 表示不额外清零 |
 | `cfg_chains` | `4` | 可选整数 1～8，独立于灰度 `chains`；每条 WR_CFG 发送该数量的 16-bit 配置字，省略跟随 `chains` |
+| `timing` | 参考时序对象 | 可选，普通显示帧的 DCLK 起点和间隔，详见下节；省略保持旧波形 |
 | `pin_drive.pins` | `"dclk"` | 对象内必填，`driver::Pins` 字段名字符串或列表，如 `["dclk","dclk2"]`；仅指定引脚应用配置，未知名字报错 |
 | `pin_drive.strength` / `cfg_strength` | `"12mA"` / `"12mA"` | `2mA` / `4mA` / `8mA` / `12mA`；普通档省略默认 4mA，配置档省略跟随普通档 |
 | `pin_drive.slew_rate` / `cfg_slew_rate` | `"slow"` / `"slow"` | `slow` / `fast`；普通档省略默认 slow，配置档省略跟随普通档 |
@@ -71,9 +72,9 @@ HDL 驱动使用 **PIO0/SM0 + DMA0，SM1 输出独立时钟副本**；dev/direct
 | `repeat_latch` | 当前启用 | 可选对象；固定列和斜线均支持连续 latch，省略时完整写入相同图案 |
 | `repeat_latch.repeat_latch_gap` | 备用值为 `1` | 整数 1～64，省略为 1；连续重复锁存之间 LAT 低电平的完整 DCLK 数 |
 
-`keep_scan_time=true` 时，扫描结束点与 `DATA_END` 对齐；不能整除的 DCLK 均匀分配，各行周期最多相差 1 DCLK。ROW 高电平仍为首行 12 DCLK、后续 4 DCLK，BK/LCK 脉宽保持 8/2 DCLK。为保留这些脉冲及 PIO 执行间隔，最短行周期必须达到 14 DCLK，遍数过多会编译报错。这一实验模式覆盖固定 60 DCLK 的基础行周期，不会自动修改 GCLK 或 PWM_WIDTH。关闭或省略该字段时，每行固定 60 DCLK，扫描总时间随遍数增长。
+`keep_scan_time=true` 时，全部扫描均匀分配到首个 ROW 至灰度结束的窗口；不能整除的 DCLK 均匀分配，各行周期最多相差 1 DCLK。ROW 高电平仍为首行 12 DCLK、后续 4 DCLK，BK/LCK 脉宽保持 8/2 DCLK。最短行周期必须达到 14 DCLK，遍数过多会编译报错。该模式覆盖普通帧的 `timing.row_period`，不修改 GCLK 或 PWM_WIDTH。false 时普通帧使用 `timing.row_period`；省略 `timing` 的旧波形及配置帧仍用 60 DCLK。
 
-除 `board`、`lines`、`color`、`pattern`、`cfg_pre_clr_chains`、`cfg_chains`、`pin_drive`、`cpld_addresses`、`row_on_cfg`、`cfg_dclk_mhz`、`gclk_mhz`、`pwm_width`、`keep_scan_time`、`repeat_latch`、其中的 `repeat_latch_gap` 和注释字段外，上表字段必须填写。`repeat_latch: {}` 也会开启连续 latch，间隔默认为 1；已知参数的类型和范围仍会校验。
+除 `board`、`lines`、`color`、`pattern`、`cfg_pre_clr_chains`、`cfg_chains`、`pin_drive`、`timing`、`cpld_addresses`、`row_on_cfg`、`cfg_dclk_mhz`、`gclk_mhz`、`pwm_width`、`keep_scan_time`、`repeat_latch`、其中的 `repeat_latch_gap` 和注释字段外，上表字段必须填写。`repeat_latch: {}` 也会开启连续 latch，间隔默认为 1；已知参数的类型和范围仍会校验。
 
 `pin_drive` 仅作用于 `pins` 指定的字段，HDL 字段名称为
 `r1/g1/b1/sel1/r2/g2/b2/sel2/r3/g3/b3/sel3/lat1/lat2/lat3/dclk/dclk2/row/lck/lbk/ldata`。
@@ -88,7 +89,33 @@ slew rate 控制上升/下降沿速度，不是多引脚时钟偏斜（skew）�
 
 顶层和 `repeat_latch` 内的未知字段均忽略，可用于注释、备用配置和调试记录。例如把 `repeat_latch` 改名为 `_repeat_latch` 即可关闭连续 latch 并保留原配置。`pattern` 为正式配置，仅接受 `col_x` / `diagonal` / `diagonal_rev`；旧 `line`、非法格式和越界列号会编译报错。`pattern_doc` / `_pattern` 仍是忽略的说明字段。文件仍需符合 JSON 语法，说明内容写成字段即可。
 
-行数 `ROWS=lines`，每颗芯片协议通道数 `CHANNELS=16` 固定，有效 LED 列数 `LED_CHANNELS` 为 HDL 15、dev 16，图像宽度为 `chains×LED_CHANNELS`。HDL 的 OUT15 保留零灰度锁存槽，dev 的 OUT15 正常参与图案；两者协议都按 OUT15→OUT0 发送。`keep_scan_time=false` 时，行周期固定为 60 DCLK；PWM/PLL 寄存器不再参与外部行周期和帧长度计算。02h=`lines - 1`（当前 54 行为 `0x35`），03h=`scan_repeats - 1`。图像大小、灰度写入长度、ROW 脉冲数和 DMA 缓冲随行数自动调整，修改后需重新编译烧录。组合参数仍需满足 512 KiB RAM 容量。
+行数 `ROWS=lines`，每颗芯片协议通道数 `CHANNELS=16` 固定，有效 LED 列数 `LED_CHANNELS` 为 HDL/direct 15、dev 16，图像宽度为 `chains×LED_CHANNELS`。HDL/direct 的 OUT15 保留零灰度锁存槽，dev 的 OUT15 正常参与图案；协议按 OUT15→OUT0 发送。普通帧外部行周期由 `timing.row_period` / `keep_scan_time` 控制，PWM/PLL 不参与计算。02h=`lines - 1`，03h=`scan_repeats - 1`。图像大小、灰度长度、ROW 数和 DMA 缓冲随行数调整，修改后需重新编译烧录；组合参数仍需满足 512 KiB RAM 容量。
+
+### 普通帧参考时序 `timing`
+
+所有数值单位为 **DCLK 上升沿个数**，`*_start` 以本帧 VSYNC 的 LE 拉高为 0。[参考抓包及测量口径](../docs/debug/20261128_产品抓包DCLK时序.md)。
+
+| 字段 | 已填参考值 | 控制含义 |
+|---|---:|---|
+| `en_start` | 15 | EN_OP 的 LE 拉高；命令宽固定 11 |
+| `gray_start` | 732 | 首个灰度块的串行起点；重复锁存依赖的整链清零提前完成 |
+| `row_start` | 28 | 首个 ROW 上升沿；首脉冲宽 12，其余宽 4 |
+| `gray_word_gap` | 8 | 完整写入时两个 16×chains 位数据块间的空闲 DCLK |
+| `gray_row_gap` | 1 | 完整写入跨数据行时额外增加的 DCLK |
+| `row_period` | 81 | 普通帧固定 ROW 周期；取参考主值，原包实际为 80～83 |
+| `frame_tail` | 430 | 末 ROW 下降沿到下一 VSYNC 的最小 DCLK 数；取参考首帧，原包为 380～465 |
+
+整个对象可省略；出现时七项均须填写，数值为 0～65535 的整数，未知字段报错。编译期检查 VSYNC/EN 的低电平分隔、灰度预清零空间、ROW 不早于 EN 结束及最短 14 DCLK 行周期。
+
+普通帧由这组参数直接生成，EN_OP 每普通帧发送一次。`repeat_latch` 启用时，灰度字/行间隔仍由原来的重复锁存算法决定，`gray_word_gap` 和 `gray_row_gap` 仅作用于完整写入。以当前两颗链为例：完整写入的首次锁存为 `732+32=764`；当前重复锁存首次零字锁存为 `732+1+1=734`。参考包八颗完整写入才是 `732+128=860`。
+
+`frame_tail` 是波形缓冲内的下限：若灰度或最后扫描窗口尚未结束，则等待它们完成；相邻 DMA 块之间的软件空闲时钟还会增加实测间隔。当前 54 行、一遍、两颗、重复锁存的普通帧为 **4755 DCLK**，ROW 起点 28、末次灰度锁存 4412；30 MHz 下缓冲时长 **158.5 µs**。参考八颗/40行/64遍的主机核验得到首次/末次锁存 **860/87803**。
+
+启动和周期配置帧仍执行完整配置、慢速清零及 `row_on_cfg` 策略；参考产品的“每帧五次 WR_CFG 轮转”没有替换当前 `config_interval` 流程。该对象用于调整普通显示帧时序，不是逐周期重放整份产品抓包。省略 `timing` 恢复此前波形。
+
+验证：`python3 tools/check_timing.py` 读取实际 `build.rs` 产生的编译参数，解码最终 DMA 缓冲；覆盖三板、两种写入、参考八颗时序、修改全部参数、`keep_scan_time`、无效参数，以及省略对象时与 HEAD 的逐字节比较。`check_chain_width.py` 在有 `timing` 时也调用此核验。
+
+2026-11-28 结果：三板 release 构建、25 组原波形回归、12 组新时序解码、无效时序拒绝及 5 组 PIO 检查通过。省略 `timing` 时 HDL/direct 各 47,400 字节、dev 45,096 字节的配置/普通 DMA 波形与修改前完全一致。启用新时序的 HDL CPLD 仿真三组共验证 266,932 个 DCLK。当前构建产物已核实为 direct；未烧录或采集实物波形。
 
 ### DCLK 精确分频
 
@@ -353,9 +380,9 @@ GP15 DCLK 使用 SM0 side-set，GP17 DCLK2 使用 SM1 side-set，GP19/21 未复�
 报告也不能替代上述两个外部半周期路径的验证。
 下面的硬件抓包数值来自此前直接连接版本。
 
-当前 JSON 普通帧仍为 **3762 DCLK / 125.4 µs**，理论普通帧
-**7974.48 FPS**；计入每 10000 帧一次的 10 MHz 配置后，
-理论平均 **7972.77 FPS**，均不包含软件间隔。
+当前 JSON 启用 `timing`，普通帧为 **4755 DCLK / 158.5 µs**，
+理论普通帧 **6309.15 FPS**，不包含软件间隔。配置帧及加权平均帧率由启动日志计算。
+旧版未配置 `timing` 时为 3762 DCLK / 125.4 µs。
 
 2026-11-14 22:43 起，普通帧之间不再停 PIO；FIFO 空时补零并继续 DCLK，
 仅实际切换分频时停车。实际检查 382 个完整帧，

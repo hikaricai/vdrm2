@@ -80,8 +80,14 @@ async fn main(_spawner: Spawner) {
         protocol::PIO_CLKDIV_INT << 8, protocol::CFG_CLKDIV_BITS);
     rtt_target::rprintln!("pattern={}, color={}, gray={:?}, config_interval={}",
         PATTERN_NAME, protocol::COLOR, GRAY_RANGE, protocol::CONFIG_INTERVAL);
-    rtt_target::rprintln!("normal={} data clocks, ROW={} pulses at {} clocks/row; idle-zero clocks between frames",
-        normal.len(), protocol::ROWS * protocol::SCAN_REPEATS, protocol::ROW_DCLKS);
+    rtt_target::rprintln!("normal={} data clocks, ROW={} pulses at {} minimum clocks/row; idle-zero clocks between frames",
+        normal.len(), protocol::ROWS * protocol::SCAN_REPEATS,
+        protocol::NORMAL_SCAN_DCLKS / (protocol::ROWS * protocol::SCAN_REPEATS));
+    if protocol::TIMING_ENABLED {
+        rtt_target::rprintln!("timing relative to VSYNC: EN={}, gray={}, ROW={}; full-write gaps={}/{}, minimum tail={}",
+            protocol::TIMING_EN_START, protocol::TIMING_GRAY_START, protocol::TIMING_ROW_START,
+            protocol::TIMING_GRAY_WORD_GAP, protocol::TIMING_GRAY_ROW_GAP, protocol::TIMING_FRAME_TAIL);
+    }
     rtt_target::rprintln!("configuration={} slow clocks; WR_CFG={}, preclear={} clocks/write, RT5990 clear={} rows",
         protocol::CONFIG_END_WORDS, protocol::CONFIG_WRITES,
         protocol::CFG_PRE_CLR_DCLKS, protocol::RT5990_CLEAR_ROWS);

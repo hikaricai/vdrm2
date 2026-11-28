@@ -82,13 +82,23 @@ fn main() {
         assert!(full[start..start + width].iter().all(|&w| w & ROW != 0));
         assert_eq!(full[start + width] & ROW, 0);
     }
-    let mut normal = full[..COMMON_PREFIX_WORDS].to_vec();
-    normal.extend_from_slice(&full[CONFIG_END_WORDS..]);
+    let mut configured = vec![0; FRAME_WORDS + CFG_POST_CLR_DCLKS];
+    let mut normal = vec![0; NORMAL_FRAME_DCLKS];
+    prepare_frames(&mut configured, &mut normal, &image);
     assert_eq!(normal.len(), NORMAL_FRAME_DCLKS);
+    assert!(normal.iter().all(|&w| w & !connected == 0));
+    for row in 0..ROWS * SCAN_REPEATS {
+        let start = normal_row_start(row);
+        let width = if row == 0 { 12 } else { 4 };
+        assert_eq!(normal[start - 1] & ROW, 0);
+        assert!(normal[start..start + width].iter().all(|&w| w & ROW != 0));
+        assert_eq!(normal[start + width] & ROW, 0);
+    }
     let normal_commands = commands(&normal);
     assert_eq!(normal_commands.iter().filter(|&&n| n == 3).count(), 1);
     assert_eq!(normal_commands.iter().filter(|&&n| n == 1).count(), ROWS * CHANNELS);
-    assert!(!normal_commands.iter().any(|&n| n == 5 || n == 11 || n == 14));
+    assert!(!normal_commands.iter().any(|&n| n == 5 || n == 14));
+    assert_eq!(normal_commands.iter().filter(|&&n| n == 11).count(), usize::from(TIMING_ENABLED));
     if !ROW_ON_CFG {
         full[CPLD_SELECT_DCLKS..COMMON_PREFIX_WORDS].fill(PARK);
         full.iter_mut().for_each(|w| *w &= !ROW);

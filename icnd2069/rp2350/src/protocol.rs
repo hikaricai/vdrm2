@@ -644,12 +644,85 @@ pub const ROW_DCLKS: usize = {
 pub const SCAN_END: usize = FIRST_ROW + SCAN_DCLKS;
 // VSYNC waits for both streams. Retain a PARK tail for DMA bank completion
 // even when a long data transfer outlasts the scan.
-pub const FRAME_DCLKS: usize = (
-    if DATA_END + 16 > SCAN_END { DATA_END + 16 } else { SCAN_END }
-    + 1
-) & !1;
+pub const FRAME_DCLKS: usize = {
+    assert!(ROW_DCLKS >= 14);
+    (if DATA_END + 16 > SCAN_END { DATA_END + 16 } else { SCAN_END } + 1) & !1
+};
 pub const FRAME_WORDS: usize = FRAME_DCLKS;
-pub const NORMAL_FRAME_DCLKS: usize = FRAME_DCLKS - CONFIG_SKIP_DCLKS;
+/// Optional ordinary-frame timing. Configuration frames retain their clearing,
+/// slow writes and scan policy; all gray serialization and pin mapping are shared.
+pub const TIMING_ENABLED: bool = match option_env!("ICND2069_TIMING") {
+    Some(value) => matches!(value.as_bytes(), b"1"),
+    None => false,
+};
+const fn timing_value(value: Option<&str>, default: usize) -> usize {
+    let value = match value {
+        Some(value) => unsigned_setting(value) as usize,
+        None => default,
+    };
+    assert!(value <= 65535, "timing values must be 0..=65535 DCLK");
+    value
+}
+pub const SYNC_START: usize = 13;
+pub const TIMING_EN_START: usize = timing_value(option_env!("ICND2069_TIMING_EN_START"), 15);
+pub const TIMING_GRAY_START: usize = timing_value(option_env!("ICND2069_TIMING_GRAY_START"), 732);
+pub const TIMING_ROW_START: usize = timing_value(option_env!("ICND2069_TIMING_ROW_START"), 28);
+pub const TIMING_GRAY_WORD_GAP: usize = timing_value(option_env!("ICND2069_TIMING_GRAY_WORD_GAP"), 8);
+pub const TIMING_GRAY_ROW_GAP: usize = timing_value(option_env!("ICND2069_TIMING_GRAY_ROW_GAP"), 1);
+pub const TIMING_ROW_PERIOD: usize = timing_value(option_env!("ICND2069_TIMING_ROW_PERIOD"), 81);
+pub const TIMING_FRAME_TAIL: usize = timing_value(option_env!("ICND2069_TIMING_FRAME_TAIL"), 430);
+pub const NORMAL_DATA_START: usize = if TIMING_ENABLED {
+    SYNC_START + TIMING_GRAY_START
+} else {
+    DATA_START + DATA_PREFIX_DCLKS - CONFIG_SKIP_DCLKS
+};
+pub const NORMAL_DATA_END: usize = if TIMING_ENABLED {
+    NORMAL_DATA_START + if SHORT_DATA {
+        DATA_PAYLOAD_END - DATA_START - DATA_PREFIX_DCLKS
+    } else {
+        ROWS * CHANNELS * TRANSFER_DCLKS
+            + (ROWS * CHANNELS - 1) * TIMING_GRAY_WORD_GAP
+            + (ROWS - 1) * TIMING_GRAY_ROW_GAP
+    }
+} else {
+    DATA_PAYLOAD_END - CONFIG_SKIP_DCLKS
+};
+pub const NORMAL_FIRST_ROW: usize = if TIMING_ENABLED {
+    SYNC_START + TIMING_ROW_START
+} else {
+    FIRST_ROW - CONFIG_SKIP_DCLKS
+};
+pub const NORMAL_SCAN_DCLKS: usize = if TIMING_ENABLED {
+    if KEEP_SCAN_TIME {
+        assert!(NORMAL_DATA_END > NORMAL_FIRST_ROW, "timing: gray must finish after ROW starts");
+        NORMAL_DATA_END - NORMAL_FIRST_ROW
+    } else {
+        GROUPS * ROWS * TIMING_ROW_PERIOD
+    }
+} else {
+    SCAN_DCLKS
+};
+pub const fn normal_row_start(index: usize) -> usize {
+    NORMAL_FIRST_ROW + index * NORMAL_SCAN_DCLKS / (GROUPS * ROWS)
+}
+pub const NORMAL_FRAME_DCLKS: usize = if TIMING_ENABLED {
+    assert!(TIMING_EN_START > VSYNC, "timing.en_start must follow VSYNC with LE low");
+    assert!(TIMING_GRAY_START >= TIMING_EN_START + EN_OP + 1 + DATA_PREFIX_DCLKS,
+        "timing.gray_start must leave room for EN_OP and the gray preclear");
+    assert!(TIMING_ROW_START >= TIMING_EN_START + EN_OP,
+        "timing.row_start must not precede the end of EN_OP");
+    assert!(NORMAL_FIRST_ROW >= 8, "timing.row_start must leave room for BK/LCK");
+    assert!(NORMAL_SCAN_DCLKS / (GROUPS * ROWS) >= 14,
+        "timing: minimum row period is 14 DCLK");
+    let last_width = if GROUPS * ROWS == 1 { 12 } else { 4 };
+    let scan_end = NORMAL_FIRST_ROW + NORMAL_SCAN_DCLKS;
+    let tail_end = normal_row_start(GROUPS * ROWS - 1) + last_width
+        + TIMING_FRAME_TAIL - SYNC_START;
+    let end = if tail_end > scan_end { tail_end } else { scan_end };
+    if NORMAL_DATA_END + 16 > end { NORMAL_DATA_END + 16 } else { end }
+} else {
+    FRAME_DCLKS - CONFIG_SKIP_DCLKS
+};
 #[cfg(not(target_os = "none"))]
 pub const HEAD_WORDS: usize = DATA_END;
 #[cfg(not(target_os = "none"))]
@@ -666,8 +739,19 @@ pub fn prepare_frames(configuration: &mut [u32], normal: &mut [u32], image: &Fra
     assert_eq!(configuration.len(), FRAME_WORDS + CFG_POST_CLR_DCLKS);
     assert_eq!(normal.len(), NORMAL_FRAME_DCLKS);
     encode_frame(&mut configuration[..FRAME_WORDS], image);
-    normal[..COMMON_PREFIX_WORDS].copy_from_slice(&configuration[..COMMON_PREFIX_WORDS]);
-    normal[COMMON_PREFIX_WORDS..].copy_from_slice(&configuration[CONFIG_END_WORDS..FRAME_WORDS]);
+    if TIMING_ENABLED {
+        let mut wave = Waveform::new(normal);
+        wave.command_at(SYNC_START, VSYNC);
+        wave.command_at(SYNC_START + TIMING_EN_START, EN_OP);
+        wave.hold(PARK, NORMAL_DATA_START - DATA_PREFIX_DCLKS - wave.clocks);
+        encode_gray(&mut wave, image, TIMING_GRAY_WORD_GAP, TIMING_GRAY_ROW_GAP);
+        assert_eq!(wave.clocks, NORMAL_DATA_END);
+        wave.hold(PARK, NORMAL_FRAME_DCLKS - wave.clocks);
+        overlay_scan(&mut wave, NORMAL_FIRST_ROW, NORMAL_SCAN_DCLKS);
+    } else {
+        normal[..COMMON_PREFIX_WORDS].copy_from_slice(&configuration[..COMMON_PREFIX_WORDS]);
+        normal[COMMON_PREFIX_WORDS..].copy_from_slice(&configuration[CONFIG_END_WORDS..FRAME_WORDS]);
+    }
     select_cpld(&mut normal[..CPLD_SELECT_DCLKS], CPLD_ADDRESSES);
     configuration.copy_within(CONFIG_END_WORDS..FRAME_WORDS,
         CONFIG_END_WORDS + CFG_POST_CLR_DCLKS);
@@ -682,10 +766,12 @@ pub fn prepare_frames(configuration: &mut [u32], normal: &mut [u32], image: &Fra
     }
 }
 
+#[cfg(not(target_os = "none"))]
 pub const fn row_start(index: usize) -> usize {
     FIRST_ROW + index * SCAN_DCLKS / (GROUPS * ROWS)
 }
 
+#[cfg(not(target_os = "none"))]
 pub const fn row_period(index: usize) -> usize {
     // Refer to ROW_DCLKS so the pulse-width bound is checked for host tools too.
     assert!(ROW_DCLKS >= 14);
@@ -934,7 +1020,7 @@ fn encode_wave(wave: &mut Waveform<'_>, frame: &Frame, rotating: Option<[u16; 3]
     for word in selection {
         wave.hold(word, 1);
     }
-    wave.command_at(13, VSYNC);
+    wave.command_at(SYNC_START, VSYNC);
     wave.hold(PARK, COMMON_PREFIX_WORDS - wave.clocks);
     // LCK shifts the RT5990 chain; ICND2069 ROW stays low throughout.
     // Blank while flushing old selections, with DIN, SIN and LE held low.
@@ -961,6 +1047,18 @@ fn encode_wave(wave: &mut Waveform<'_>, frame: &Frame, rotating: Option<[u16; 3]
     wave.shift_config(0x0055, if rotating.is_some() { 9 } else { 8 });
     wave.shift_config(0x0155, 8);
     wave.hold(PARK, CFG_POST_CLR_DCLKS);
+    encode_gray(wave, frame, 0, 1);
+    if rotating.is_none() {
+        assert_eq!(wave.clocks, DATA_PAYLOAD_END);
+        wave.hold(PARK, DATA_END - DATA_PAYLOAD_END);
+        assert_eq!(wave.clocks, DATA_END);
+    }
+    wave.hold(PARK, FRAME_DCLKS - wave.clocks);
+    overlay_scan(wave, FIRST_ROW, SCAN_DCLKS);
+    FRAME_WORDS
+}
+
+fn encode_gray(wave: &mut Waveform<'_>, frame: &Frame, word_gap: usize, row_gap: usize) {
     if SHORT_DATA {
         wave.hold(PARK, TRANSFER_DCLKS);
     }
@@ -988,24 +1086,20 @@ fn encode_wave(wave: &mut Waveform<'_>, frame: &Frame, rotating: Option<[u16; 3]
             }
         } else {
             for out in (0..CHANNELS).rev() {
-                // Reference has an extra DCLK between logical data rows.
-                let gap = usize::from(row != 0 && out == CHANNELS - 1);
+                let gap = if row == 0 && out == CHANNELS - 1 { 0 } else { word_gap }
+                    + if row != 0 && out == CHANNELS - 1 { row_gap } else { 0 };
                 wave.shift_pixels(values, out, gap);
             }
         }
     }
-    if rotating.is_none() {
-        assert_eq!(wave.clocks, DATA_PAYLOAD_END);
-        wave.hold(PARK, DATA_END - DATA_PAYLOAD_END);
-        assert_eq!(wave.clocks, DATA_END);
-    }
-    wave.hold(PARK, FRAME_DCLKS - wave.clocks);
-
+}
+fn overlay_scan(wave: &mut Waveform<'_>, first_row: usize, scan_dclks: usize) {
     // Overlay independently running ROW on the serialized command/data bus.
     // GROUPS complete sweeps x ROWS rows; distribute fractional periods in DCLK.
-    let mut start = FIRST_ROW;
+    let mut start = first_row;
     for i in 0..GROUPS * ROWS {
-        let period = row_period(i);
+        let next = first_row + (i + 1) * scan_dclks / (GROUPS * ROWS);
+        let period = next - start;
         for t in start - 8..start + period - 8 {
             let mut row_pins = blank(t < start);
             row_pins |= select_bit(i % ROWS == 0 && t < start + 2);
@@ -1022,7 +1116,6 @@ fn encode_wave(wave: &mut Waveform<'_>, frame: &Frame, rotating: Option<[u16; 3]
         }
         start += period;
     }
-    FRAME_WORDS
 }
 
 #[cfg(not(target_os = "none"))]

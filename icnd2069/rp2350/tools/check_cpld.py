@@ -28,6 +28,9 @@ settings = {
     "REPEAT_LATCH_GAP": config.get("repeat_latch", {}).get("repeat_latch_gap", 1),
 }
 env.update({f"ICND2069_{k}": str(v) for k, v in settings.items()})
+env["ICND2069_TIMING"] = str(int("timing" in config))
+env.update({f"ICND2069_TIMING_{k.upper()}": str(v)
+            for k, v in config.get("timing", {}).items()})
 with tempfile.TemporaryDirectory(prefix="icnd2069-cpld-") as temp:
     temp = Path(temp)
     sim, emitter, wave = temp / "sim", temp / "emit", temp / "wave.txt"

@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 
 root = Path(__file__).resolve().parents[1]
@@ -142,22 +143,31 @@ with tempfile.TemporaryDirectory(prefix="icnd2069-chain-width-") as temp:
         assert result.returncode != 0 and "cfg_chains must be 1..=8" in result.stderr, result.stderr
     print("PASS out-of-range configuration lengths rejected", flush=True)
 
+    if "timing" in config:
+        print(run([sys.executable, str(root / "tools/check_timing.py"),
+                   "--config", str(args.config)]), end="", flush=True)
     sources = ([args.baseline.resolve()] if args.baseline else []) + [root / "src/protocol.rs"]
     results = []
     for source in sources:
+        row_period = ("NORMAL_SCAN_DCLKS / (GROUPS * ROWS)"
+                      if source == root / "src/protocol.rs" else "ROW_DCLKS")
         code = f'''#![allow(dead_code)]
 #[path = {json.dumps(str(source))}] mod protocol;
 use protocol::*;
 fn main() {{
     println!("{{}} {{}} {{}} {{}} {{}} {{}} {{}}", NORMAL_FRAME_DCLKS, FRAME_DCLKS,
-        DATA_END, ROW_DCLKS, NORMAL_FRAME_PIO_CYCLES, CONFIG_FRAME_PIO_CYCLES,
+        DATA_END, {row_period}, NORMAL_FRAME_PIO_CYCLES, CONFIG_FRAME_PIO_CYCLES,
         SYS_HZ / PIO_CLKDIV_INT);
 }}
 '''
-        run(["rustc", "--edition=2021", "--crate-name", "metrics", "-", "-o", binary],
-            input=code, env=params(config["chains"], 1,
+        metrics_env = params(config["chains"], int("repeat_latch" in config),
                 config.get("repeat_latch", {}).get("repeat_latch_gap", 1),
-                pattern=config.get("pattern", "diagonal"), board=config.get("board", "hdl")))
+                pattern=config.get("pattern", "diagonal"), board=config.get("board", "hdl"))
+        metrics_env["ICND2069_TIMING"] = str(int("timing" in config))
+        metrics_env.update({f"ICND2069_TIMING_{k.upper()}": str(v)
+                           for k, v in config.get("timing", {}).items()})
+        run(["rustc", "--edition=2021", "--crate-name", "metrics", "-", "-o", binary],
+            input=code, env=metrics_env)
         result = list(map(int, run([binary]).split()))
         interval = config["config_interval"]
         fps = result[6] * interval / ((interval - 1) * result[4] + result[5])
