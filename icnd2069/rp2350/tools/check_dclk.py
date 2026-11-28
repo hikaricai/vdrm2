@@ -20,6 +20,7 @@ if not libraries:
 library = max(libraries, key=lambda path: path.stat().st_mtime)
 env = {k: v for k, v in os.environ.items() if not k.startswith("ICND2069_")}
 env.update({
+    "ICND2069_BOARD": config.get("board", "hdl"),
     "ICND2069_CHAIN_COPIES": str(config["chains"]),
     "ICND2069_CFG_CHAIN_COPIES": str(config.get("cfg_chains", config["chains"])),
     "ICND2069_CFG_PRE_CLR_CHAINS": str(config.get("cfg_pre_clr_chains", 0)),

@@ -32,7 +32,12 @@ fn decode(words: &[u32], expected: &Frame) {
                 if !CONTINUOUS_LATCH {
                     assert_eq!(t - previous, TRANSFER_DCLKS + usize::from(out == CHANNELS - 1));
                 } else if out == latch_target(row) {
-                    assert_eq!(t - previous, 8 + 16 * (latch_pixel(row) / LED_CHANNELS),
+                    // Dev may start a row with lit OUT15 immediately after
+                    // the previous row's OUT0 and its unlatched zero flush.
+                    let row_clear = if out == CHANNELS - 1 && row > 0 && latch_target(row - 1) == 0 {
+                        latch_clear_dclks(row - 1)
+                    } else { 0 };
+                    assert_eq!(t - previous, row_clear + 8 + 16 * (latch_pixel(row) / LED_CHANNELS),
                         "gray byte must advance to only the selected chip");
                 } else if latch_target(row) > 0 && out + 1 == latch_target(row) {
                     assert_eq!(t - previous, 16 * (CHAIN_COPIES - latch_pixel(row) / LED_CHANNELS),
@@ -44,7 +49,7 @@ fn decode(words: &[u32], expected: &Frame) {
                 let serial = CHAIN_COPIES - 1 - chip;
                 let value = saved[serial * 16..(serial + 1) * 16]
                     .iter().fold(0u16, |value, bit| (value << 1) | u16::from(*bit));
-                let expected = if GRAY_SIN == 0 || out == 15 { 0 }
+                let expected = if GRAY_SIN == 0 || out >= LED_CHANNELS { 0 }
                     else { expected[row][chip * LED_CHANNELS + out] };
                 assert_eq!(value, expected, "row={row} OUT{out} chip={chip}");
             }
@@ -57,7 +62,19 @@ fn decode(words: &[u32], expected: &Frame) {
 }
 
 fn main() {
-    assert_eq!((CHANNELS, LED_CHANNELS, TOTAL_CHANNELS), (16, 15, CHAIN_COPIES * 15));
+    let width = if DEV_BOARD { 16 } else { 15 };
+    assert_eq!((CHANNELS, LED_CHANNELS, TOTAL_CHANNELS), (16, width, CHAIN_COPIES * width));
+    if DEV_BOARD {
+        assert_eq!((SIN, LE, SEL, RT5990_CLEAR_ROWS), (1 << 13, 1 << 10, 0, 16));
+        assert_eq!(RGB_SIN, [1 << 13, 0, 0]);
+    } else if DIRECT_BOARD {
+        assert_eq!((SIN, LE, SEL, RT5990_CLEAR_ROWS), (0xfff, 1 << 18, 0, 160));
+        assert_eq!(RGB_SIN, [0x924, 0x492, 0x249]);
+        assert_eq!((ROW, DIN, LCK, BK, PIO_OUT_COUNT),
+            (1 << 13, 1 << 17, 1 << 16, 1 << 15, 19));
+    } else {
+        assert_eq!((SIN, LE, SEL, RT5990_CLEAR_ROWS), (0x777, 0x7000, 0x888, 160));
+    }
     let pattern = if COLUMN_PATTERN { Pattern::Column(TARGET_CHANNEL) }
         else if REVERSE_DIAGONAL { Pattern::DiagonalReverse }
         else if DIAGONAL_LATCH { Pattern::Diagonal } else { Pattern::Normal };
@@ -106,6 +123,22 @@ fn main() {
     let image = if CONTINUOUS_LATCH { target_frame(image) } else { image };
     let mut words = vec![0; FRAME_WORDS];
     encode_frame(&mut words, &image);
+    let mut configuration = vec![0; FRAME_WORDS + CFG_POST_CLR_DCLKS];
+    let mut normal = vec![0; NORMAL_FRAME_DCLKS];
+    prepare_frames(&mut configuration, &mut normal, &image);
+    let allowed = if DIRECT_BOARD {
+        0xfff | (1 << 13) | (1 << 15) | (1 << 16) | (1 << 17) | (1 << 18)
+    } else {
+        (if DEV_BOARD { (1 << 10) | (1 << 13) } else { 0x7fff })
+            | (1 << 16) | (1 << 18) | (1 << 20) | (1 << 22)
+    };
+    assert!(configuration.iter().chain(&normal).all(|word| word & !allowed == 0),
+        "actual DMA must only drive the selected board's signal pins");
+    if !HDL_BOARD {
+        assert!(configuration[..CPLD_SELECT_DCLKS].iter().all(|&word| word == PARK));
+        assert!(normal[..CPLD_SELECT_DCLKS].iter().all(|&word| word == PARK));
+        assert!(CONFIG_IDLE_PREFIX.iter().all(|&word| word == PARK));
+    }
     let bk_clocks: Vec<_> = (0..FRAME_DCLKS).filter(|&t|
         ((words[t] & BK) != 0) == BK_ACTIVE_HIGH
     ).collect();

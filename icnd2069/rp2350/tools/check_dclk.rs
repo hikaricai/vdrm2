@@ -37,7 +37,7 @@ fn main() {
     assert_eq!(pull & 0x1000, 0x1000, "PULL holds DCLK high for half a period");
     assert_eq!(((pull >> 8) & 15) + 1, half as u16);
     assert_eq!(out >> 13, 3);
-    assert_eq!(out & 31, 23);
+    assert_eq!(out & 31, if DIRECT_BOARD { 19 } else { 23 });
     assert_eq!(out & 0x1000, 0, "DATA must update on the falling edge");
     assert_eq!((out >> 8) & 15, 0);
     assert_eq!(low & 0x1000, 0);
@@ -66,7 +66,12 @@ fn main() {
     let image = pattern_frame_range(Pattern::Diagonal, [0, MAX_GRAY_INPUT.min(255)]);
     let mut full = vec![0; FRAME_WORDS];
     encode_frame(&mut full, &image);
-    let connected = 0x7fff | (1 << 16) | (1 << 18) | (1 << 20) | (1 << 22);
+    let connected = if DIRECT_BOARD {
+        0xfff | (1 << 13) | (1 << 15) | (1 << 16) | (1 << 17) | (1 << 18)
+    } else {
+        (if DEV_BOARD { (1 << 13) | (1 << 10) } else { 0x7fff })
+            | (1 << 16) | (1 << 18) | (1 << 20) | (1 << 22)
+    };
     assert_eq!(SIN | SEL | LE | LCK | BK | DIN | ROW, connected);
     assert!(full.iter().all(|&w| w & !connected == 0),
         "GPIO words may only drive the schematic's data/control pins");

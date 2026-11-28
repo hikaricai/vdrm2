@@ -1,4 +1,4 @@
-# ICND2069 / RP2350 + CPLD：固定两颗级联
+# ICND2069 / RP2350：HDL、dev 与 direct
 
 ## 先烧录
 
@@ -10,21 +10,49 @@ cargo run --release
 
 编译参数全部读取本目录的 [`config.json`](config.json)，修改后 Cargo 自动重新构建。`bash build.sh` 执行同一条命令；只编译使用 `cargo build --release`。
 
-当前驱动使用 **PIO0/SM0 + DMA0，SM1 输出独立时钟副本**。LE、SIN、ROW 和 RT5990 引脚来自同一个 GPIO 数据字，SM0 用 side-set 输出 GP15 DCLK，SM1 同步输出 GP17 DCLK2，独立接到 CPLD。频率及驱动强度均不变时不停 PIO，FIFO 空时补零并保持两路时钟；切换分频或驱动强度时两路一起停车。普通帧是一块，配置帧是慢速配置块和包含清零、灰度的连续高速块。
+## 选择板型
 
-启动及周期配置帧依次执行 RT5990 清空 160 行、`EN_OP(11)`、PRE_ACT、49 条带额外清零的 WR_CFG 和灰度 DATA_LATCH。每条 WR_CFG 的配置数据前均发送 `cfg_pre_clr_chains×16` 个额外零。RT5990 清空时 DIN=0，LCK 发 160 个高/低各 2 DCLK 的脉冲，BK 保持消隐；加上首尾各 2 DCLK，共 644 个配置时钟（1 MHz 时为 644 µs）。160 行为物理链长度，独立于 `lines`、`chains`、`cfg_pre_clr_chains` 和 `cfg_chains`。`row_on_cfg=false`（默认）时，上一帧写完后进入配置帧，不发 VSYNC，整帧 ROW 保持低；下一普通帧才恢复 VSYNC 和扫描。true 时配置帧保留 VSYNC 和配置完成后的扫描。没有发送 `DIS_OP(12)`；板上表现待实测。
+`board` 接受 `"hdl"`、`"dev"` 和 `"direct"`，省略时保持原来的 HDL 行为。dev 接线依据 `icnd2069/debug-devboard` 分支 `384f2d7`；direct 接线依据 `icnd2069/debug16-uniform255` 分支 `551dc02`。均核对了 `src/driver.rs`、`src/main.rs` 和 `src/protocol.rs`；参考分支旧 RTT/文档可能有不同引脚号，本实现以实际代码为准。
 
-当前配置：**每路灰度 2 颗、配置发送 4 份、54 行、每颗 15 列、1 遍扫描、DCLK/配置均为 20 MHz、GCLK 80 MHz（按 N=1）、PWM_WIDTH=32、Accelerate Rate 8×**。`07h=08h=20h`，单 group 的理论灰阶容量为 128；8 bit 指串行输入宽度。图像宽度为 30 列，每颗仅 OUT0～OUT14 接 LED，OUT15 始终写零。灰度渐变覆盖有效列。顶层 `gray` 设置灰度范围，两种锁存方式在 0～255 范围内发送相同图案；更高输入值需关闭 `repeat_latch`。旧的 `ICND2069_*` 环境变量不再覆盖 JSON。
+| 项目 | `hdl` | `dev` | `direct` |
+| --- | --- | --- | --- |
+| SIN | 三组 RGB：GP0/1/2、4/5/6、8/9/10 | GP13，单路，使用 R 寄存器配置 | 四组 RGB：GP5/4/3、11/10/9、2/1/0、8/7/6 |
+| LE / LAT | GP12、13、14 | GP10 | GP18 |
+| DCLK | GP15，SM1 在 GP17 输出时钟副本 | GP15，仅 SM0 | GP19，仅 SM0 |
+| ROW | GP22 | GP22 | GP13 |
+| RT5990 DIN / LCK / BK | GP20 / 16 / 18 | GP20 / 16 / 18 | GP17 / 16 / 15 |
+| CPLD SEL | GP3、7、11 | 无；选址位置输出空闲字 | 无；RP2350 直接输出到面板 |
+| 每颗有效 LED 通道 | OUT0～OUT14，OUT15 写零 | OUT0～OUT15 | OUT0～OUT14，OUT15 写零 |
+| 灰度级联 `chains` | 固定 2 | 支持 1～8，按实际连接填写 | 支持 1～8，按实际连接填写 |
+| RT5990 配置前清空 | 160 个行位 | 16 个行位 | 160 个行位 |
+| PIO 数据字覆盖 | GP0～22 | GP0～22，仅接管七根线 | GP0～18，GP12/14 不接管；GP19 由 side-set 输出 |
+
+`board` 不覆盖 `lines`、`chains`、`cfg_chains`、频率或灰度。参考分支的单颗 16×16 dev 开发板使用 **`lines=16、chains=1、cfg_chains=1`**；当前 JSON 的数值仍由用户单独设置。dev 的 `color="r"` 与 `"rgb"` 输出相同，`g`/`b`/`gb` 不输出灰度；direct 支持四组 RGB 分色，寄存器使用对应 R/G/B 值，同色四路镜像同一图案。`cpld_addresses` 在 dev/direct 上不产生选址信号。
+
+`pin_drive.pins` 也随板型校验：dev 接受 `sin/le/dclk/row/lck/lbk/ldata`；direct 接受 `r1/g1/b1/r2/g2/b2/r3/g3/b3/r4/g4/b4/dclk/le/row/lck/lbk/ldata`；HDL 保持原字段名。direct 的 `dclk` 指 GP19，`lbk` 指 GP15，包括 `disable_rt5990=true` 时的 SIO 消隐。三块板共用频率、灰度、配置刷新和图案编码；GPIO 波形按板型直接生成，不在 DMA 数据路径中增加逐字转换。
+
+2026-11-28 验证：两板 release 构建、14 组通道/配置逐字解码、dev PIO 指令检查通过；覆盖反向斜线、OUT15、单颗/双颗、重复锁存/完整写入。dev 单颗关闭行驱动、配置/普通阶段使用不同驱动强度的构建通过。相同 HDL 配置与图案下，配置帧和普通帧共 47,400 字节与修改前逐字一致（SHA-256 `5403c90e2d427f282e866e1b0f00fd5c17f901cf07cc59520b3034e51c033cbe`）。未烧录或验证实物显示。
+
+2026-11-28 direct 验证：三板 release 构建、25 组像素/配置逐字解码及 direct 实际 PIO 指令检查通过；包含四组 RGB 分色、正反斜线、单颗/双颗、完整写入/重复锁存。direct 关闭行驱动并分别设置配置/普通阶段驱动强度的构建通过，生成的 DCLK/LE/BK 驱动掩码为 GP19/18/15。HDL/dev 配置帧和普通帧分别共 47,400/45,096 字节，与添加 direct 前逐字一致；当前构建产物为 JSON 选择的 direct，未烧录。
+
+复用核验：`python3 tools/check_chain_width.py --boards-only` 检查三板及当前配置；`python3 tools/check_dclk.py` 检查当前板型 PIO；`python3 tools/check_cpld.py` 仅检查 HDL 的 CPLD，当前选 dev/direct 时运行固定 HDL 回归案例。
+
+HDL 驱动使用 **PIO0/SM0 + DMA0，SM1 输出独立时钟副本**；dev/direct 只使用 **SM0 + DMA0**。LE、SIN、ROW 和 RT5990 引脚来自同一个 GPIO 数据字，SM0 用 side-set 输出 DCLK；HDL 的 SM1 同步输出 GP17 DCLK2，独立接到 CPLD。频率及驱动强度均不变时不停 PIO，FIFO 空时补零并保持时钟；切换分频或驱动强度时停用当前板型占用的状态机。普通帧是一块，配置帧是慢速配置块和包含清零、灰度的连续高速块。
+
+启动及周期配置帧依次执行 RT5990 清空、`EN_OP(11)`、PRE_ACT、49 条带额外清零的 WR_CFG 和灰度 DATA_LATCH。每条 WR_CFG 的配置数据前均发送 `cfg_pre_clr_chains×16` 个额外零。RT5990 清空时 DIN=0，LCK 高/低各 2 DCLK，BK 保持消隐；HDL 清空 160 位、共 644 DCLK，dev 清空 16 位、共 68 DCLK。清空长度按板型选择，独立于 `lines`、`chains`、`cfg_pre_clr_chains` 和 `cfg_chains`。`row_on_cfg=false`（默认）时，上一帧写完后进入配置帧，不发 VSYNC，整帧 ROW 保持低；下一普通帧才恢复 VSYNC 和扫描。true 时配置帧保留 VSYNC 和配置完成后的扫描。没有发送 `DIS_OP(12)`；板上表现待实测。
+
+此前 HDL 参考配置：**每路灰度 2 颗、配置发送 4 份、54 行、每颗 15 列、1 遍扫描、DCLK/配置均为 20 MHz、GCLK 80 MHz（按 N=1）、PWM_WIDTH=32、Accelerate Rate 8×**。实际构建值以 `config.json` 和启动 RTT 为准。`07h=08h=20h` 时单 group 的理论灰阶容量为 128；8 bit 指串行输入宽度。顶层 `gray` 设置灰度范围，两种锁存方式在 0～255 范围内发送相同图案；更高输入值需关闭 `repeat_latch`。旧的 `ICND2069_*` 环境变量不再覆盖 JSON。
 
 ## config.json 参数
 
 | 字段 | 当前值 | 可选值 / 含义 |
 |---|---|---|
+| `board` | `"direct"` | `dev` / `hdl` / `direct`，省略默认 `hdl`；板型差异见上表 |
 | `scan_repeats` | `1` | 整数 1～64；每帧 ROW 数为 `lines × 遍数`，03h 为 `遍数 - 1` |
 | `lines` | `54` | 可选，整数 1～64，省略默认 54；设置图像高度和扫描行数，02h 为 `lines - 1` |
 | `keep_scan_time` | `false` | 可选布尔值，省略为 `false`。开启时将全部 `lines×scan_repeats` 次换行均匀分配到首个 ROW 至 gray 写入结束的窗口；扫描总时间不随遍数增加，平均换行速度随遍数同比增加 |
 | `config_interval` | `10000` | 整数 1～4294967295；第 0、N、2N…帧写完整配置 |
-| `chains` | `2` | 新板固定两颗级联，其他值编译报错；30 列独立像素 |
+| `chains` | `2` | HDL 固定两颗；dev/direct 允许 1～8 颗。每颗有效列数：HDL/direct 15，dev 16 |
 | `cfg_pre_clr_chains` | `0` | 可选整数 0～64，省略为 0；每条 WR_CFG 前额外清零的等效级联数量，每颗 16 个 DCLK；0 表示不额外清零 |
 | `cfg_chains` | `4` | 可选整数 1～8，独立于灰度 `chains`；每条 WR_CFG 发送该数量的 16-bit 配置字，省略跟随 `chains` |
 | `pin_drive.pins` | `"dclk"` | 对象内必填，`driver::Pins` 字段名字符串或列表，如 `["dclk","dclk2"]`；仅指定引脚应用配置，未知名字报错 |
@@ -32,7 +60,7 @@ cargo run --release
 | `pin_drive.slew_rate` / `cfg_slew_rate` | `"slow"` / `"slow"` | `slow` / `fast`；普通档省略默认 slow，配置档省略跟随普通档 |
 | `cpld_addresses` | `[3, 3, 3]` | 可选，配置和灰度共用的三组独立地址；0～5 单路、6/7 本组广播，省略默认 `[7,7,7]`；配置不再强制广播 |
 | `row_on_cfg` | `false` | 可选布尔值，省略为 false；false 表示整个配置帧不发 VSYNC 和 ROW，true 保留配置帧 VSYNC 及配置完成后的扫描；普通帧照常发送 |
-| `pattern` | `"diagonal_rev"` | 可选，`col_x` 点亮指定列，x 从 0 开始，范围 `0..chains*15-1`；该列沿行按 `gray[1] → gray[0]` 渐变，`lines=1` 时取 `gray[1]`。`diagonal` 为正向斜线（默认），列 0→29 循环；`diagonal_rev` 为反向斜线，列 29→0 循环，逐行灰度与正向相同。两种斜线均支持重复锁存和完整写入 |
+| `pattern` | `"diagonal_rev"` | 总宽 W 为 `chains×每颗有效通道数`。`col_x` 点亮指定列，范围 `0..W-1`，沿行按 `gray[1] → gray[0]` 渐变，`lines=1` 时取 `gray[1]`。`diagonal` 为正向斜线（默认），列 0→W-1 循环；`diagonal_rev` 为反向，列 W-1→0 循环，逐行灰度与正向相同。均支持两种锁存方式 |
 | `color` | `"rgb"` | 可选，`r`/`g`/`b` 分别仅亮红/绿/蓝；`rg`/`rb`/`gb` 亮对应两色；`rgb` 三色全亮。省略默认 `rgb`，非法值编译报错 |
 | `dclk_mhz` | `30` | 数值 1、3、6、10、12.5、20、25、26、28、30、31、32、33、34、35、40、45；1/3 为低速时序实验档，40/45 为超频实验档 |
 | `cfg_dclk_mhz` | `10` | 可选，配置块 DCLK MHz；省略跟随 `dclk_mhz`。正数且不高于 `dclk_mhz`，要求对称半周期和精确的 16.8 PIO 分频，分频不超过 65535 |
@@ -45,9 +73,9 @@ cargo run --release
 
 `keep_scan_time=true` 时，扫描结束点与 `DATA_END` 对齐；不能整除的 DCLK 均匀分配，各行周期最多相差 1 DCLK。ROW 高电平仍为首行 12 DCLK、后续 4 DCLK，BK/LCK 脉宽保持 8/2 DCLK。为保留这些脉冲及 PIO 执行间隔，最短行周期必须达到 14 DCLK，遍数过多会编译报错。这一实验模式覆盖固定 60 DCLK 的基础行周期，不会自动修改 GCLK 或 PWM_WIDTH。关闭或省略该字段时，每行固定 60 DCLK，扫描总时间随遍数增长。
 
-除 `lines`、`color`、`pattern`、`cfg_pre_clr_chains`、`cfg_chains`、`pin_drive`、`cpld_addresses`、`row_on_cfg`、`cfg_dclk_mhz`、`gclk_mhz`、`pwm_width`、`keep_scan_time`、`repeat_latch`、其中的 `repeat_latch_gap` 和注释字段外，上表字段必须填写。`repeat_latch: {}` 也会开启连续 latch，间隔默认为 1；已知参数的类型和范围仍会校验。
+除 `board`、`lines`、`color`、`pattern`、`cfg_pre_clr_chains`、`cfg_chains`、`pin_drive`、`cpld_addresses`、`row_on_cfg`、`cfg_dclk_mhz`、`gclk_mhz`、`pwm_width`、`keep_scan_time`、`repeat_latch`、其中的 `repeat_latch_gap` 和注释字段外，上表字段必须填写。`repeat_latch: {}` 也会开启连续 latch，间隔默认为 1；已知参数的类型和范围仍会校验。
 
-`pin_drive` 仅作用于 `pins` 指定的字段，名称为
+`pin_drive` 仅作用于 `pins` 指定的字段，HDL 字段名称为
 `r1/g1/b1/sel1/r2/g2/b2/sel2/r3/g3/b3/sel3/lat1/lat2/lat3/dclk/dclk2/row/lck/lbk/ldata`。
 未指定的引脚固定 4mA、slow；省略整个对象或 `pins: []` 时所有引脚均使用此基线。
 当前 `"dclk"` 只设置 GP15，GP17 DCLK2 需要显式加入列表。
@@ -60,7 +88,7 @@ slew rate 控制上升/下降沿速度，不是多引脚时钟偏斜（skew）�
 
 顶层和 `repeat_latch` 内的未知字段均忽略，可用于注释、备用配置和调试记录。例如把 `repeat_latch` 改名为 `_repeat_latch` 即可关闭连续 latch 并保留原配置。`pattern` 为正式配置，仅接受 `col_x` / `diagonal` / `diagonal_rev`；旧 `line`、非法格式和越界列号会编译报错。`pattern_doc` / `_pattern` 仍是忽略的说明字段。文件仍需符合 JSON 语法，说明内容写成字段即可。
 
-行数 `ROWS=lines`，每颗芯片协议通道数 `CHANNELS=16` 固定，有效 LED 列数 `LED_CHANNELS=15`，图像宽度 `TOTAL_CHANNELS=chains×15`。OUT15 不占逻辑列，但保留零灰度锁存槽，协议仍按 OUT15→OUT0 发送。`keep_scan_time=false` 时，行周期固定为 60 DCLK；PWM/PLL 寄存器不再参与外部行周期和帧长度计算。02h=`lines - 1`（当前 54 行为 `0x35`），03h=`scan_repeats - 1`。图像大小、灰度写入长度、ROW 脉冲数和 DMA 缓冲随行数自动调整，修改后需重新编译烧录。组合参数仍需满足 512 KiB RAM 容量。
+行数 `ROWS=lines`，每颗芯片协议通道数 `CHANNELS=16` 固定，有效 LED 列数 `LED_CHANNELS` 为 HDL 15、dev 16，图像宽度为 `chains×LED_CHANNELS`。HDL 的 OUT15 保留零灰度锁存槽，dev 的 OUT15 正常参与图案；两者协议都按 OUT15→OUT0 发送。`keep_scan_time=false` 时，行周期固定为 60 DCLK；PWM/PLL 寄存器不再参与外部行周期和帧长度计算。02h=`lines - 1`（当前 54 行为 `0x35`），03h=`scan_repeats - 1`。图像大小、灰度写入长度、ROW 脉冲数和 DMA 缓冲随行数自动调整，修改后需重新编译烧录。组合参数仍需满足 512 KiB RAM 容量。
 
 ### DCLK 精确分频
 

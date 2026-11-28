@@ -16,6 +16,8 @@ parser.add_argument("--lines-only", action="store_true",
                     help="Only verify scan-row variations (1, 16, 54, 64)")
 parser.add_argument("--cfg-only", action="store_true",
                     help="Only verify configuration/data cascade combinations")
+parser.add_argument("--boards-only", action="store_true",
+                    help="Verify dev/hdl/direct wiring, OUT15, reverse diagonal and both latch modes")
 args = parser.parse_args()
 config = json.loads(args.config.read_text())
 env = {k: v for k, v in os.environ.items() if not k.startswith("ICND2069_")}
@@ -28,11 +30,12 @@ def run(command, **kwargs):
     return result.stdout
 
 
-def params(chains, latch, gap=1, pattern="diagonal", target=0, repeats=None, keep_scan=None, color=None, lines=None, cfg_chains=None, pre_clr_chains=None, row_on_cfg=None):
+def params(chains, latch, gap=1, pattern="diagonal", target=0, repeats=None, keep_scan=None, color=None, lines=None, cfg_chains=None, pre_clr_chains=None, row_on_cfg=None, board="hdl"):
     if pattern.startswith("col_"):
         target = int(pattern[4:])
         pattern = "col"
     return env | {
+        "ICND2069_BOARD": board,
         "ICND2069_DCLK_MHZ": str(config["dclk_mhz"]),
         "ICND2069_CFG_DCLK_HZ": str(round(
             config.get("cfg_dclk_mhz", config["dclk_mhz"]) * 1_000_000)),
@@ -91,12 +94,30 @@ with tempfile.TemporaryDirectory(prefix="icnd2069-chain-width-") as temp:
     cases += [(2, latch, 1, "diagonal", 0, 1, False, "r", 54, 2, preclear, rows)
               for preclear, rows in [(0, False), (2, True), (64, False), (64, True)]
               for latch in [0, 1]]
+    if args.boards_only:
+        cases = [
+            (chains, latch, 1, pattern, 0, 1, False, "rgb", lines, chains, 0, False, board)
+            for board, chains, lines in [("dev", 1, 16), ("dev", 2, 54), ("hdl", 2, 54),
+                                        ("direct", 1, 16), ("direct", 2, 54)]
+            for pattern in ["diagonal_rev", "col_14" if board == "direct" and chains == 1 else "col_15"]
+            for latch in [0, 1]
+        ]
+        cases += [(1, 1, 1, "diagonal", 0, 1, False, "g", 16, 1, 0, True, "dev")]
+        cases += [(2, 1, 1, "diagonal_rev", 0, 1, False, color, 54, 2, 0, True, "direct")
+                  for color in ["r", "g", "b"]]
+        cases += [(config["chains"], int("repeat_latch" in config),
+                   config.get("repeat_latch", {}).get("repeat_latch_gap", 1),
+                   config.get("pattern", "diagonal"), 0, config["scan_repeats"],
+                   config.get("keep_scan_time", False), config.get("color", "rgb"),
+                   config.get("lines", 54), config.get("cfg_chains", config["chains"]),
+                   config.get("cfg_pre_clr_chains", 0), config.get("row_on_cfg", False),
+                   config.get("board", "hdl"))]
     for case in cases:
         for tool in ["check_diagonal_latch", "check_config_interval"]:
             run(["rustc", "--edition=2021", "-C", "opt-level=1",
                  str(root / "tools" / f"{tool}.rs"), "-o", binary], env=params(*case))
             run([binary])
-        print(f"PASS chains/latch/gap/pattern/target/repeats/keep_scan/color/lines/cfg_chains[/preclear/row_on_cfg]={case}", flush=True)
+        print(f"PASS chains/latch/gap/pattern/target/repeats/keep_scan/color/lines/cfg_chains[/preclear/row_on_cfg/board]={case}", flush=True)
 
     # A short row period cannot preserve the existing control pulse widths.
     result = subprocess.run(
@@ -111,7 +132,7 @@ with tempfile.TemporaryDirectory(prefix="icnd2069-chain-width-") as temp:
             ["rustc", "--edition=2021", str(root / "tools/check_diagonal_latch.rs"),
              "-o", binary], text=True, capture_output=True,
             env=params(chains, 0, cfg_chains=cfg_chains))
-        assert result.returncode != 0 and "this board requires" in result.stderr, result.stderr
+        assert result.returncode != 0 and "hdl board requires" in result.stderr, result.stderr
     print("PASS non-two-chip grayscale configurations rejected", flush=True)
     for cfg_chains in [0, 9]:
         result = subprocess.run(
@@ -136,7 +157,7 @@ fn main() {{
         run(["rustc", "--edition=2021", "--crate-name", "metrics", "-", "-o", binary],
             input=code, env=params(config["chains"], 1,
                 config.get("repeat_latch", {}).get("repeat_latch_gap", 1),
-                pattern=config.get("pattern", "diagonal")))
+                pattern=config.get("pattern", "diagonal"), board=config.get("board", "hdl")))
         result = list(map(int, run([binary]).split()))
         interval = config["config_interval"]
         fps = result[6] * interval / ((interval - 1) * result[4] + result[5])

@@ -6,6 +6,14 @@ mod protocol;
 mod scheduler;
 use protocol::*;
 
+// Independent wiring oracle, ordered as R/G/B per physical connector.
+const DATA_GPIO_COLORS: &[(usize, usize)] = if DEV_BOARD { &[(13, 0)] } else if DIRECT_BOARD {
+    &[(5, 0), (4, 1), (3, 2), (11, 0), (10, 1), (9, 2),
+      (2, 0), (1, 1), (0, 2), (8, 0), (7, 1), (6, 2)]
+} else {
+    &[(0, 0), (1, 1), (2, 2), (4, 0), (5, 1), (6, 2), (8, 0), (9, 1), (10, 2)]
+};
+
 fn sample(words: &[u32], t: usize) -> u32 {
     words[t]
 }
@@ -86,11 +94,11 @@ fn check_reference_registers() {
 }
 
 fn check_transfer(words: &[u32], start: usize, expected: [u16; 3]) {
-    for gpio in [0, 1, 2, 4, 5, 6, 8, 9, 10] {
+    for &(gpio, color) in DATA_GPIO_COLORS {
         for chip in 0..CFG_CHAIN_COPIES {
             let value = words[start + chip * 16..start + (chip + 1) * 16]
                 .iter().fold(0u16, |v, pins| (v << 1) | u16::from(pins & (1 << gpio) != 0));
-            assert_eq!(value, expected[gpio % 4], "GP{gpio}, chip={chip}");
+            assert_eq!(value, expected[color], "GP{gpio}, chip={chip}");
         }
     }
 }
@@ -249,9 +257,9 @@ fn check_frame(gray: u16, full: bool) {
         for &pins in &words[clear_start - 8..clear_end] {
             assert_eq!(pins & (SIN | LE), 0, "WR_CFG gap and extra preclear {index}");
         }
-        for gpio in [0, 1, 2, 4, 5, 6, 8, 9, 10] {
+        for &(gpio, color) in DATA_GPIO_COLORS {
             for copy in 0..CFG_CHAIN_COPIES {
-                assert_eq!((write.2[gpio] >> (16 * copy)) as u16, expected[gpio % 4],
+                assert_eq!((write.2[gpio] >> (16 * copy)) as u16, expected[color],
                     "WR_CFG GP{gpio}, chip={copy}");
             }
         }
@@ -287,7 +295,7 @@ fn check_frame(gray: u16, full: bool) {
                 assert_eq!(command.0 - data[i - 1].0, TRANSFER_DCLKS);
             }
         }
-        for gpio in [0, 1, 2, 4, 5, 6, 8, 9, 10] {
+        for &(gpio, _) in DATA_GPIO_COLORS {
             for copy in 0..CHAIN_COPIES {
                 let expected = if GRAY_SIN & (1 << gpio) != 0 && out < LED_CHANNELS {
                     image[i / CHANNELS][copy * LED_CHANNELS + out]
@@ -336,7 +344,8 @@ fn main() {
         check_frame(gray, true);
         check_frame(gray, false);
     }
-    println!("PASS 9 GPIO RGB config/data, capture table (45 registers, 8 RGB differences), rotation/gray patch; two-bank schedule: intervals 1/2/7/9/10/10000/u32::MAX; gray continuity; 49/0 WR_CFG; {} latches; ROW alignment. Full/normal={} / {} clocks, OUT{}, chain={}, groups={}, continuous_latch={}, row input={} clocks, sweep={:?}",
+    println!("PASS board={} GPIO config/data, capture table (45 registers, 8 RGB differences), rotation/gray patch; two-bank schedule: intervals 1/2/7/9/10/10000/u32::MAX; gray continuity; 49/0 WR_CFG; {} latches; ROW alignment. Full/normal={} / {} clocks, OUT{}, chain={}, groups={}, continuous_latch={}, row input={} clocks, sweep={:?}",
+        BOARD,
         ROWS * CHANNELS,
         FRAME_DCLKS, NORMAL_FRAME_DCLKS, TARGET_CHANNEL, CHAIN_COPIES, GROUPS,
         CONTINUOUS_LATCH, DATA_ROW_DCLKS, GRAY_SWEEP);

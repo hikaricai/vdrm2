@@ -2,12 +2,22 @@ use embassy_rp::{
     bind_interrupts,
     gpio::{Drive, Level, Output, SlewRate},
     peripherals::{
-        DMA_CH0, PIN_0, PIN_1, PIN_2, PIN_3, PIN_4, PIN_5, PIN_6, PIN_7, PIN_8,
-        PIN_9, PIN_10, PIN_11, PIN_12, PIN_13, PIN_14, PIN_15, PIN_16,
-        PIN_17, PIN_18, PIN_20, PIN_22, PIO0,
+        DMA_CH0, PIN_10, PIN_13, PIN_15, PIN_16, PIN_18, PIO0,
     },
     pio::{self, Common, Pio, ShiftConfig, StateMachine},
     Peripheral, PeripheralRef,
+};
+#[cfg(any(icnd2069_dev, icnd2069_hdl))]
+use embassy_rp::peripherals::{PIN_20, PIN_22};
+#[cfg(icnd2069_hdl)]
+use embassy_rp::peripherals::{
+    PIN_0, PIN_1, PIN_2, PIN_3, PIN_4, PIN_5, PIN_6, PIN_7, PIN_8,
+    PIN_9, PIN_11, PIN_12, PIN_14, PIN_17,
+};
+#[cfg(icnd2069_direct)]
+use embassy_rp::peripherals::{
+    PIN_0, PIN_1, PIN_2, PIN_3, PIN_4, PIN_5, PIN_6, PIN_7, PIN_8,
+    PIN_9, PIN_11, PIN_17, PIN_19,
 };
 use fixed::types::U24F8;
 
@@ -51,6 +61,7 @@ bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => pio::InterruptHandler<PIO0>;
 });
 
+#[cfg(icnd2069_hdl)]
 pub struct Pins {
     pub r1: PIN_0,
     pub g1: PIN_1,
@@ -75,16 +86,57 @@ pub struct Pins {
     pub ldata: PIN_20,
 }
 
-/// SM0 drives data/control and DCLK; synchronized SM1 copies DCLK to GP17.
+#[cfg(icnd2069_dev)]
+pub struct Pins {
+    pub sin: PIN_13,
+    pub le: PIN_10,
+    pub dclk: PIN_15,
+    pub row: PIN_22,
+    pub lck: PIN_16,
+    pub lbk: PIN_18,
+    pub ldata: PIN_20,
+}
+
+#[cfg(icnd2069_direct)]
+pub struct Pins {
+    pub r1: PIN_5,
+    pub g1: PIN_4,
+    pub b1: PIN_3,
+    pub r2: PIN_11,
+    pub g2: PIN_10,
+    pub b2: PIN_9,
+    pub r3: PIN_2,
+    pub g3: PIN_1,
+    pub b3: PIN_0,
+    pub r4: PIN_8,
+    pub g4: PIN_7,
+    pub b4: PIN_6,
+    pub dclk: PIN_19,
+    pub le: PIN_18,
+    pub row: PIN_13,
+    pub lck: PIN_16,
+    pub lbk: PIN_15,
+    pub ldata: PIN_17,
+}
+
+const SM0_PIN_COUNT: usize = if protocol::DEV_BOARD { 6 }
+    else if protocol::DIRECT_BOARD { 17 } else { 19 };
+const PIN_COUNT: usize = SM0_PIN_COUNT + protocol::HDL_BOARD as usize;
+const DCLK_INDEX: usize = SM0_PIN_COUNT - 1;
+const DIN_INDEX: usize = SM0_PIN_COUNT - 2;
+const SM_MASK: u8 = if protocol::HDL_BOARD { 0b11 } else { 0b01 };
+
+/// SM0 drives data/control and DCLK; HDL also uses SM1 for the GP17 clock copy.
 pub struct Driver {
     sm: StateMachine<'static, PIO0, 0>,
+    #[cfg(icnd2069_hdl)]
     clock_sm: StateMachine<'static, PIO0, 1>,
     dma: PeripheralRef<'static, DMA_CH0>,
     _common: Common<'static, PIO0>,
     divider: u32,
     running: bool,
     program_origin: u8,
-    pins: [pio::Pin<'static, PIO0>; 20],
+    pins: [pio::Pin<'static, PIO0>; PIN_COUNT],
     bk: Option<pio::Pin<'static, PIO0>>,
     drive_strength: Drive,
     slew_rate: SlewRate,
@@ -101,39 +153,44 @@ impl Driver {
             (None, Some(pins.lbk))
         };
         if let Some(blank) = blank.as_mut() {
-            let selected = PIN_DRIVE_MASK & (1 << 18) != 0;
+            let selected = PIN_DRIVE_MASK & protocol::BK != 0;
             blank.set_drive_strength(if selected { CFG_PIN_DRIVE_STRENGTH } else { Drive::_4mA });
             blank.set_slew_rate(if selected { CFG_PIN_SLEW_RATE } else { SlewRate::Slow });
         }
-        let Pio { mut common, sm0: mut sm, sm1: mut clock_sm, .. } = Pio::new(pio, Irqs);
-        let mut r1 = common.make_pio_pin(pins.r1);
-        let mut g1 = common.make_pio_pin(pins.g1);
-        let mut b1 = common.make_pio_pin(pins.b1);
-        let mut r2 = common.make_pio_pin(pins.r2);
-        let mut g2 = common.make_pio_pin(pins.g2);
-        let mut b2 = common.make_pio_pin(pins.b2);
-        let mut r3 = common.make_pio_pin(pins.r3);
-        let mut g3 = common.make_pio_pin(pins.g3);
-        let mut b3 = common.make_pio_pin(pins.b3);
-        let mut sel1 = common.make_pio_pin(pins.sel1);
-        let mut sel2 = common.make_pio_pin(pins.sel2);
-        let mut sel3 = common.make_pio_pin(pins.sel3);
-        let mut lat1 = common.make_pio_pin(pins.lat1);
-        let mut lat2 = common.make_pio_pin(pins.lat2);
-        let mut lat3 = common.make_pio_pin(pins.lat3);
-        let mut row = common.make_pio_pin(pins.row);
-        let mut dclk = common.make_pio_pin(pins.dclk);
-        let mut dclk2 = common.make_pio_pin(pins.dclk2);
-        let mut lck = common.make_pio_pin(pins.lck);
+        let pio = Pio::new(pio, Irqs);
+        let mut common = pio.common;
+        let mut sm = pio.sm0;
+        #[cfg(icnd2069_hdl)]
+        let mut clock_sm = pio.sm1;
+        #[cfg(icnd2069_dev)]
+        let mut owned_pins = [
+            common.make_pio_pin(pins.sin), common.make_pio_pin(pins.le),
+            common.make_pio_pin(pins.row), common.make_pio_pin(pins.lck),
+            common.make_pio_pin(pins.ldata), common.make_pio_pin(pins.dclk),
+        ];
+        #[cfg(icnd2069_direct)]
+        let mut owned_pins = [
+            common.make_pio_pin(pins.r1), common.make_pio_pin(pins.g1), common.make_pio_pin(pins.b1),
+            common.make_pio_pin(pins.r2), common.make_pio_pin(pins.g2), common.make_pio_pin(pins.b2),
+            common.make_pio_pin(pins.r3), common.make_pio_pin(pins.g3), common.make_pio_pin(pins.b3),
+            common.make_pio_pin(pins.r4), common.make_pio_pin(pins.g4), common.make_pio_pin(pins.b4),
+            common.make_pio_pin(pins.le), common.make_pio_pin(pins.row),
+            common.make_pio_pin(pins.lck), common.make_pio_pin(pins.ldata), common.make_pio_pin(pins.dclk),
+        ];
+        #[cfg(icnd2069_hdl)]
+        let mut owned_pins = [
+            common.make_pio_pin(pins.r1), common.make_pio_pin(pins.g1), common.make_pio_pin(pins.b1),
+            common.make_pio_pin(pins.r2), common.make_pio_pin(pins.g2), common.make_pio_pin(pins.b2),
+            common.make_pio_pin(pins.r3), common.make_pio_pin(pins.g3), common.make_pio_pin(pins.b3),
+            common.make_pio_pin(pins.sel1), common.make_pio_pin(pins.sel2), common.make_pio_pin(pins.sel3),
+            common.make_pio_pin(pins.lat1), common.make_pio_pin(pins.lat2), common.make_pio_pin(pins.lat3),
+            common.make_pio_pin(pins.row), common.make_pio_pin(pins.lck), common.make_pio_pin(pins.ldata),
+            common.make_pio_pin(pins.dclk), common.make_pio_pin(pins.dclk2),
+        ];
         let mut bk = bk_pin.map(|pin| common.make_pio_pin(pin));
-        let mut din = common.make_pio_pin(pins.ldata);
         // make_pio_pin resets pad settings, so configure after registration
         // and before enabling output directions or starting the SM.
-        for pin in [
-            &mut r1, &mut g1, &mut b1, &mut r2, &mut g2, &mut b2,
-            &mut r3, &mut g3, &mut b3, &mut sel1, &mut sel2, &mut sel3,
-            &mut lat1, &mut lat2, &mut lat3, &mut row, &mut lck, &mut din, &mut dclk, &mut dclk2,
-        ].into_iter().chain(bk.as_mut()) {
+        for pin in owned_pins.iter_mut().chain(bk.as_mut()) {
             let selected = PIN_DRIVE_MASK & (1 << pin.pin()) != 0;
             pin.set_drive_strength(if selected { CFG_PIN_DRIVE_STRENGTH } else { Drive::_4mA });
             pin.set_slew_rate(if selected { CFG_PIN_SLEW_RATE } else { SlewRate::Slow });
@@ -141,7 +198,7 @@ impl Driver {
         let loaded = common.load_program(&crate::dclk_program::fixed_rate(
             protocol::PIO_CYCLES_PER_DCLK));
         let mut cfg = pio::Config::default();
-        cfg.use_program(&loaded, &[&dclk]);
+        cfg.use_program(&loaded, &[&owned_pins[DCLK_INDEX]]);
         cfg.clock_divider = U24F8::from_bits(protocol::PIO_CLKDIV_INT << 8);
         cfg.fifo_join = pio::FifoJoin::TxOnly;
         cfg.shift_out = ShiftConfig {
@@ -152,39 +209,40 @@ impl Driver {
         let mut pin_cfg = cfg.get_pins();
         pin_cfg.out_base = 0;
         pin_cfg.out_count = protocol::PIO_OUT_COUNT;
-        // SM1 side-sets GP17 at every SM0 instruction boundary, overriding
-        // SM0's OUT write there. GP19/21 remain unowned.
+        // Only board-connected pins are muxed. On HDL, SM1 overrides GP17
+        // at each SM0 instruction boundary; direct uses GP17 as DIN.
         unsafe { cfg.set_pins(pin_cfg); }
         sm.set_config(&cfg);
         // Reuse the same program: empty FIFO PULL is nonblocking, and
         // OUT_COUNT=0 disables data writes. Only GP17 side-set is driven.
-        let mut clock_cfg = pio::Config::default();
-        clock_cfg.use_program(&loaded, &[&dclk2]);
-        clock_cfg.clock_divider = cfg.clock_divider;
-        clock_sm.set_config(&clock_cfg);
-        clock_sm.set_pins(Level::Low, &[&dclk2]);
-        clock_sm.set_pin_dirs(pio::Direction::Out, &[&dclk2]);
-        let all = [
-            &r1, &g1, &b1, &r2, &g2, &b2, &r3, &g3, &b3,
-            &sel1, &sel2, &sel3, &lat1, &lat2, &lat3, &row, &lck, &din, &dclk,
-        ];
-        sm.set_pins(Level::Low, &all);
+        #[cfg(icnd2069_hdl)]
+        {
+            let dclk2 = &owned_pins[SM0_PIN_COUNT];
+            let mut clock_cfg = pio::Config::default();
+            clock_cfg.use_program(&loaded, &[dclk2]);
+            clock_cfg.clock_divider = cfg.clock_divider;
+            clock_sm.set_config(&clock_cfg);
+            clock_sm.set_pins(Level::Low, &[dclk2]);
+            clock_sm.set_pin_dirs(pio::Direction::Out, &[dclk2]);
+        }
+        let all = owned_pins.each_ref();
+        sm.set_pins(Level::Low, &all[..SM0_PIN_COUNT]);
         if let Some(bk) = &bk {
             sm.set_pins(Level::Low, &[bk]);
             sm.set_pin_dirs(pio::Direction::Out, &[bk]);
         }
         if !protocol::DISABLE_RT5990 && !protocol::DIN_ONE_SELECTS {
-            sm.set_pins(Level::High, &[&din]);
+            sm.set_pins(Level::High, &[&owned_pins[DIN_INDEX]]);
         }
-        sm.set_pin_dirs(pio::Direction::Out, &all);
+        sm.set_pin_dirs(pio::Direction::Out, &all[..SM0_PIN_COUNT]);
         Self {
-            sm, clock_sm, dma: dma.into_ref(), _common: common,
+            sm,
+            #[cfg(icnd2069_hdl)]
+            clock_sm,
+            dma: dma.into_ref(), _common: common,
             divider: protocol::PIO_CLKDIV_INT << 8,
             running: false, program_origin: loaded.origin, _blank: blank,
-            pins: [
-                r1, g1, b1, r2, g2, b2, r3, g3, b3,
-                sel1, sel2, sel3, lat1, lat2, lat3, row, lck, din, dclk, dclk2,
-            ],
+            pins: owned_pins,
             bk,
             drive_strength: CFG_PIN_DRIVE_STRENGTH,
             slew_rate: CFG_PIN_SLEW_RATE,
@@ -230,15 +288,17 @@ impl Driver {
                 // All queued trailing words are PARK. No active latch/ROW
                 // can be cut short while stopping for a rate/drive change.
                 embassy_rp::pac::PIO0.ctrl().modify(|w| {
-                    w.set_sm_enable(w.sm_enable() & !0b11);
+                    w.set_sm_enable(w.sm_enable() & !SM_MASK);
                 });
             }
             self.sm.restart();
+            #[cfg(icnd2069_hdl)]
             self.clock_sm.restart();
             // JMP to the one-time SET X,0, with side-set LOW. Forced
             // instructions execute while disabled, parking DCLK before
             // changing pads/divider; startup reinitializes the idle word.
             unsafe { self.sm.exec_instr(self.program_origin as u16); }
+            #[cfg(icnd2069_hdl)]
             unsafe { self.clock_sm.exec_instr(self.program_origin as u16); }
             if pads_changed {
                 for pin in self.pins.iter_mut().chain(self.bk.as_mut())
@@ -250,7 +310,7 @@ impl Driver {
                     });
                     pin.set_slew_rate(if configuration { CFG_PIN_SLEW_RATE } else { PIN_SLEW_RATE });
                 }
-                if let Some(blank) = self._blank.as_mut().filter(|_| PIN_DRIVE_MASK & (1 << 18) != 0) {
+                if let Some(blank) = self._blank.as_mut().filter(|_| PIN_DRIVE_MASK & protocol::BK != 0) {
                     blank.set_drive_strength(if configuration {
                         CFG_PIN_DRIVE_STRENGTH
                     } else {
@@ -262,6 +322,7 @@ impl Driver {
                 self.slew_rate = slew_rate;
             }
             self.sm.set_clock_divider(U24F8::from_bits(divider));
+            #[cfg(icnd2069_hdl)]
             self.clock_sm.set_clock_divider(U24F8::from_bits(divider));
             self.divider = divider;
         }
@@ -282,8 +343,8 @@ impl Driver {
             }
             // Reset both divider phases and enable both SMs in one write.
             embassy_rp::pac::PIO0.ctrl().modify(|w| {
-                w.set_clkdiv_restart(0b11);
-                w.set_sm_enable(w.sm_enable() | 0b11);
+                w.set_clkdiv_restart(SM_MASK);
+                w.set_sm_enable(w.sm_enable() | SM_MASK);
             });
             self.running = true;
         }

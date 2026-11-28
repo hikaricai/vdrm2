@@ -4,6 +4,8 @@ use std::{env, fs, path::PathBuf};
 #[derive(Deserialize)]
 // Unknown fields are ignored so renamed options and debug notes can stay.
 struct Config {
+    #[serde(default = "default_board")]
+    board: String,
     scan_repeats: u8,
     #[serde(default = "default_lines")]
     lines: u8,
@@ -102,24 +104,38 @@ enum PinSelection {
 }
 
 impl PinSelection {
-    fn mask(&self) -> u32 {
+    fn mask(&self, board: &str) -> u32 {
         let names = match self {
             Self::One(name) => std::slice::from_ref(name),
             Self::Many(names) => names.as_slice(),
         };
-        let mapping = [
+        let mapping: &[(&str, u8)] = if board == "dev" { &[
+            ("sin", 13), ("le", 10), ("dclk", 15), ("row", 22),
+            ("lck", 16), ("lbk", 18), ("ldata", 20),
+        ] } else if board == "direct" { &[
+            ("r1", 5), ("g1", 4), ("b1", 3),
+            ("r2", 11), ("g2", 10), ("b2", 9),
+            ("r3", 2), ("g3", 1), ("b3", 0),
+            ("r4", 8), ("g4", 7), ("b4", 6),
+            ("dclk", 19), ("le", 18), ("row", 13),
+            ("lck", 16), ("lbk", 15), ("ldata", 17),
+        ] } else { &[
             ("r1", 0), ("g1", 1), ("b1", 2), ("sel1", 3),
             ("r2", 4), ("g2", 5), ("b2", 6), ("sel2", 7),
             ("r3", 8), ("g3", 9), ("b3", 10), ("sel3", 11),
             ("lat1", 12), ("lat2", 13), ("lat3", 14), ("dclk", 15),
             ("lck", 16), ("dclk2", 17), ("lbk", 18), ("ldata", 20), ("row", 22),
-        ];
+        ] };
         names.iter().fold(0, |mask, name| {
             let (_, pin) = mapping.iter().find(|(field, _)| *field == name)
-                .unwrap_or_else(|| panic!("config.json: pin_drive.pins: unknown Pins field {name:?}"));
+                .unwrap_or_else(|| panic!("config.json: pin_drive.pins: unknown {board} Pins field {name:?}"));
             mask | (1u32 << pin)
         })
     }
+}
+
+fn default_board() -> String {
+    "hdl".into()
 }
 
 fn default_pattern() -> String {
@@ -179,13 +195,22 @@ fn main() {
     let path = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap()).join("config.json");
     let json = fs::read_to_string(&path).expect("cannot read config.json");
     let config: Config = serde_json::from_str(&json).expect("invalid config.json");
+    assert!(matches!(config.board.as_str(), "dev" | "hdl" | "direct"),
+        "config.json: board must be dev, hdl or direct");
+    let dev = config.board == "dev";
+    for board in ["dev", "hdl", "direct"] {
+        println!("cargo:rustc-check-cfg=cfg(icnd2069_{board})");
+    }
+    println!("cargo:rustc-cfg=icnd2069_{}", config.board);
+    println!("cargo:rustc-env=ICND2069_BOARD={}", config.board);
+    let led_channels = if dev { 16 } else { 15 };
     let (drive_ma, cfg_drive_ma, slew, cfg_slew, pin_mask) = match &config.pin_drive {
         Some(drive) => (
             drive.strength.milliamps(),
             drive.cfg_strength.unwrap_or(drive.strength).milliamps(),
             drive.slew_rate.variant(),
             drive.cfg_slew_rate.unwrap_or(drive.slew_rate).variant(),
-            drive.pins.mask(),
+            drive.pins.mask(&config.board),
         ),
         None => (4, 4, "Slow", "Slow", 0),
     };
@@ -202,7 +227,11 @@ fn main() {
     assert!((1..=64).contains(&config.scan_repeats), "config.json: scan_repeats must be 1..=64");
     assert!((1..=64).contains(&config.lines), "config.json: lines must be 1..=64");
     assert!(config.config_interval > 0, "config.json: config_interval must be 1..=4294967295");
-    assert_eq!(config.chains, 2, "config.json: this board requires chains=2");
+    if config.board != "hdl" {
+        assert!((1..=8).contains(&config.chains), "config.json: dev/direct chains must be 1..=8");
+    } else {
+        assert_eq!(config.chains, 2, "config.json: hdl board requires chains=2");
+    }
     let cfg_chains = config.cfg_chains.unwrap_or(config.chains);
     assert!((1..=8).contains(&cfg_chains), "config.json: cfg_chains must be 1..=8");
     assert!(config.cpld_addresses.iter().all(|&a| a <= 7),
@@ -219,8 +248,8 @@ fn main() {
             .filter(|value| !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit()))
             .and_then(|value| value.parse::<usize>().ok())
             .expect("config.json: pattern must be diagonal, diagonal_rev or col_x (x is a nonnegative decimal column)");
-        assert!(column < usize::from(config.chains) * 15,
-            "config.json: col_x column must be in 0..chains*15-1 (OUT15 is unconnected)");
+        assert!(column < usize::from(config.chains) * led_channels,
+            "config.json: col_x column must be in 0..chains*{led_channels}-1 for {}", config.board);
         ("col", format!("Column({column})"), column)
     };
     assert!(

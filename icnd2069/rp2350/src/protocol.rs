@@ -2,6 +2,18 @@
 //! Each u32 describes pins for one DCLK rising-edge transfer.
 //! Reference: captures/reference/nova_to_devboard_100m_2s.dsl and the startup summary.
 
+pub const BOARD: &str = match option_env!("ICND2069_BOARD") {
+    Some(value) => value,
+    None => "hdl",
+};
+pub const DEV_BOARD: bool = match BOARD.as_bytes() {
+    b"dev" => true,
+    b"hdl" | b"direct" => false,
+    _ => panic!("board must be dev, hdl or direct"),
+};
+pub const DIRECT_BOARD: bool = matches!(BOARD.as_bytes(), b"direct");
+pub const HDL_BOARD: bool = !DEV_BOARD && !DIRECT_BOARD;
+
 /// Scan rows from config.json; register 02h receives ROWS - 1.
 pub const ROWS: usize = {
     let rows = match option_env!("ICND2069_LINES") {
@@ -12,8 +24,8 @@ pub const ROWS: usize = {
     rows
 };
 pub const CHANNELS: usize = 16;
-/// Only OUT0..OUT14 connect to LEDs; OUT15 still has a zero-valued wire slot.
-pub const LED_CHANNELS: usize = 15;
+/// Dev connects OUT0..OUT15; HDL/direct keep OUT15 as an unconnected zero slot.
+pub const LED_CHANNELS: usize = if DEV_BOARD { 16 } else { 15 };
 /// Number of complete ROWS-row sweeps per frame; build-time variable, default 1.
 pub const SCAN_REPEATS: usize = match option_env!("ICND2069_SCAN_REPEATS") {
     Some(value) => {
@@ -221,10 +233,14 @@ pub const DEMO_GRAY: u16 = 8192;
 pub const CHAIN_COPIES: usize = match option_env!("ICND2069_CHAIN_COPIES") {
     Some(value) => {
         let copies = unsigned_setting(value) as usize;
-        assert!(copies == 2, "this board requires chains=2");
+        if !HDL_BOARD {
+            assert!(copies >= 1 && copies <= 8, "dev/direct chains must be 1..=8");
+        } else {
+            assert!(copies == 2, "hdl board requires chains=2");
+        }
         copies
     }
-    None => 2,
+    None => if HDL_BOARD { 2 } else { 1 },
 };
 pub const TRANSFER_DCLKS: usize = 16 * CHAIN_COPIES;
 /// Configuration cascade length; defaults to the grayscale cascade length.
@@ -318,7 +334,7 @@ pub const fn latch_target(row: usize) -> usize {
 pub const fn latch_chip(row: usize) -> usize {
     latch_pixel(row) / LED_CHANNELS
 }
-/// Logical column (chip * 15 + OUT). Latch order remains OUT15 through OUT0.
+/// Logical column (chip * LED_CHANNELS + OUT). Wire order stays OUT15 through OUT0.
 pub const TARGET_CHANNEL: usize = match option_env!("ICND2069_TARGET_CHANNEL") {
     Some(value) => {
         let bytes = value.as_bytes();
@@ -354,13 +370,21 @@ pub const REPEAT_LATCH_GAP: usize = match option_env!("ICND2069_REPEAT_LATCH_GAP
 };
 
 // SCH_Schematic4_2026-11-21: three RGB/SEL banks, three LAT, shared CLK.
-pub const PIO_OUT_COUNT: u8 = 23;
+pub const PIO_OUT_COUNT: u8 = if DIRECT_BOARD { 19 } else { 23 };
 // RGB1=GP0/1/2, RGB2=GP4/5/6, RGB3=GP8/9/10.
 // Configuration is color-specific; gray data describes one image mirrored
 // onto the selected colors in all three banks.
-pub const RGB_SIN: [u32; 3] = [0x0111, 0x0222, 0x0444];
-pub const SIN: u32 = 0x0777;
-pub const SEL: u32 = (1 << 3) | (1 << 7) | (1 << 11);
+// Dev follows debug-devboard: one SIN on GP13, using the R register values.
+pub const RGB_SIN: [u32; 3] = if DEV_BOARD {
+    [1 << 13, 0, 0]
+} else if DIRECT_BOARD {
+    // debug16-uniform255: four groups, R/G/B in descending GPIO order.
+    [0x0924, 0x0492, 0x0249]
+} else {
+    [0x0111, 0x0222, 0x0444]
+};
+pub const SIN: u32 = RGB_SIN[0] | RGB_SIN[1] | RGB_SIN[2];
+pub const SEL: u32 = if HDL_BOARD { (1 << 3) | (1 << 7) | (1 << 11) } else { 0 };
 pub const CPLD_SELECT_DCLKS: usize = 8;
 const fn cpld_address(value: Option<&str>) -> u8 {
     let address = match value {
@@ -379,6 +403,10 @@ pub const CPLD_ADDRESSES: [u8; 3] = [
 pub fn select_cpld(words: &mut [u32], addresses: [u8; 3]) {
     assert_eq!(words.len(), CPLD_SELECT_DCLKS);
     assert!(addresses.iter().all(|&address| address <= 7));
+    if !HDL_BOARD {
+        words.fill(PARK);
+        return;
+    }
     for (bit, word) in words.iter_mut().enumerate() {
         *word = PARK & !SEL;
         for (bank, &address) in addresses.iter().enumerate() {
@@ -403,12 +431,13 @@ pub const GRAY_SIN: u32 = match COLOR.as_bytes() {
     b"rgb" => SIN,
     _ => panic!("color must be r, g, b, rg, rb, gb or rgb"),
 };
-pub const LE: u32 = (1 << 12) | (1 << 13) | (1 << 14);
+pub const LE: u32 = if DEV_BOARD { 1 << 10 }
+    else if DIRECT_BOARD { 1 << 18 } else { (1 << 12) | (1 << 13) | (1 << 14) };
 pub const LCK: u32 = 1 << 16;
-pub const BK: u32 = 1 << 18;
-pub const DIN: u32 = 1 << 20;
-pub const ROW: u32 = 1 << 22;
-// CLK on GP15 is driven separately by side-set; GP17/19/21 are unowned.
+pub const BK: u32 = if DIRECT_BOARD { 1 << 15 } else { 1 << 18 };
+pub const DIN: u32 = if DIRECT_BOARD { 1 << 17 } else { 1 << 20 };
+pub const ROW: u32 = if DIRECT_BOARD { 1 << 13 } else { 1 << 22 };
+// Side-set drives DCLK: GP19 on direct, GP15 on dev/HDL.
 // The reference's six channels do not measure RT5990 DIN/LCK/BK.
 // Preserve the existing board assumptions; do not claim measured parity.
 pub const BK_ACTIVE_HIGH: bool = true;
@@ -537,7 +566,7 @@ pub static CONFIG_IDLE_PREFIX: [u32; COMMON_PREFIX_WORDS] = {
     while bit < CPLD_SELECT_DCLKS {
         let mut bank = 0;
         while bank < CPLD_ADDRESSES.len() {
-            if ((CPLD_ADDRESSES[bank] << 5) | 0x0f) & (1 << (7 - bit)) != 0 {
+            if HDL_BOARD && ((CPLD_ADDRESSES[bank] << 5) | 0x0f) & (1 << (7 - bit)) != 0 {
                 words[bit] |= 1 << (bank * 4 + 3);
             }
             bank += 1;
@@ -547,8 +576,8 @@ pub static CONFIG_IDLE_PREFIX: [u32; COMMON_PREFIX_WORDS] = {
     words
 };
 /// Physical RT5990 chain, independent of the configured ICND2069 scan rows.
-pub const RT5990_CLEAR_ROWS: usize = 160;
-/// Two setup clocks, 160 LCK pulses (two high/two low), two trailing clocks.
+pub const RT5990_CLEAR_ROWS: usize = if DEV_BOARD { 16 } else { 160 };
+/// Two setup clocks, one LCK pulse per physical row (two high/two low), two trailing clocks.
 /// SIN/LE also stay zero here; each ICND2069 write has its own extra preclear.
 pub const RT5990_CLEAR_DCLKS: usize = 4 + RT5990_CLEAR_ROWS * 4;
 pub const CONFIG_COMMAND_START: usize = COMMON_PREFIX_WORDS + RT5990_CLEAR_DCLKS;
@@ -697,8 +726,8 @@ pub fn update_white(words: &mut [u32], gray: u16) {
     for row in 0..ROWS {
         for transfer in 0..CHANNELS {
             start += usize::from(row != 0 && transfer == 0);
-            // OUT15 is the first wire slot and must stay black.
-            let value = if transfer == 0 { 0 } else { gray };
+            // HDL's unused OUT15 stays black; dev uses all sixteen outputs.
+            let value = if CHANNELS - 1 - transfer < LED_CHANNELS { gray } else { 0 };
             for t in start..start + TRANSFER_DCLKS {
                 let bit = 15 - (t - start) % 16;
                 let mask = SIN;
@@ -833,7 +862,7 @@ pub fn pattern_frame(pattern: Pattern, gray: u16) -> Frame {
 /// Diagonal keeps column (row % TOTAL_CHANNELS), fading gray[1] to gray[0].
 /// DiagonalReverse mirrors Diagonal across the full chain width, keeping row gray.
 /// Column fades gray[1] to gray[0] from the first to the last row.
-/// Column = chip * 15 + OUT; chip 0 is nearest the MCU.
+/// Column = chip * LED_CHANNELS + OUT; chip 0 is nearest the MCU.
 /// Integer interpolation rounds to the nearest gray and preserves endpoints.
 pub fn pattern_frame_range(pattern: Pattern, gray: [u16; 2]) -> Frame {
     assert!(gray.iter().all(|&value| value <= MAX_GRAY_INPUT));

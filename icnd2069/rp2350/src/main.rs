@@ -37,17 +37,30 @@ async fn main(_spawner: Spawner) {
     let p = embassy_rp::init(config);
     assert_eq!(embassy_rp::clocks::clk_sys_freq(), protocol::SYS_HZ);
     let mut led = Output::new(p.PIN_25, Level::Low);
-    let mut driver = driver::Driver::new(
-        p.PIO0, p.DMA_CH0,
-        driver::Pins {
-            r1: p.PIN_0, g1: p.PIN_1, b1: p.PIN_2, sel1: p.PIN_3,
-            r2: p.PIN_4, g2: p.PIN_5, b2: p.PIN_6, sel2: p.PIN_7,
-            r3: p.PIN_8, g3: p.PIN_9, b3: p.PIN_10, sel3: p.PIN_11,
-            lat1: p.PIN_12, lat2: p.PIN_13, lat3: p.PIN_14,
-            dclk: p.PIN_15, dclk2: p.PIN_17, row: p.PIN_22,
-            lck: p.PIN_16, lbk: p.PIN_18, ldata: p.PIN_20,
-        },
-    );
+    #[cfg(icnd2069_hdl)]
+    let pins = driver::Pins {
+        r1: p.PIN_0, g1: p.PIN_1, b1: p.PIN_2, sel1: p.PIN_3,
+        r2: p.PIN_4, g2: p.PIN_5, b2: p.PIN_6, sel2: p.PIN_7,
+        r3: p.PIN_8, g3: p.PIN_9, b3: p.PIN_10, sel3: p.PIN_11,
+        lat1: p.PIN_12, lat2: p.PIN_13, lat3: p.PIN_14,
+        dclk: p.PIN_15, dclk2: p.PIN_17, row: p.PIN_22,
+        lck: p.PIN_16, lbk: p.PIN_18, ldata: p.PIN_20,
+    };
+    #[cfg(icnd2069_dev)]
+    let pins = driver::Pins {
+        sin: p.PIN_13, le: p.PIN_10, dclk: p.PIN_15, row: p.PIN_22,
+        lck: p.PIN_16, lbk: p.PIN_18, ldata: p.PIN_20,
+    };
+    #[cfg(icnd2069_direct)]
+    let pins = driver::Pins {
+        r1: p.PIN_5, g1: p.PIN_4, b1: p.PIN_3,
+        r2: p.PIN_11, g2: p.PIN_10, b2: p.PIN_9,
+        r3: p.PIN_2, g3: p.PIN_1, b3: p.PIN_0,
+        r4: p.PIN_8, g4: p.PIN_7, b4: p.PIN_6,
+        dclk: p.PIN_19, le: p.PIN_18, row: p.PIN_13,
+        lck: p.PIN_16, lbk: p.PIN_15, ldata: p.PIN_17,
+    };
+    let mut driver = driver::Driver::new(p.PIO0, p.DMA_CH0, pins);
     let configuration = CONFIG_FRAME.take();
     let normal = NORMAL_FRAME.take();
     {
@@ -55,7 +68,8 @@ async fn main(_spawner: Spawner) {
         let image = protocol::pattern_frame_range(PATTERN, GRAY_RANGE);
         protocol::prepare_frames(configuration, normal, &image);
     }
-    rtt_target::rprintln!("ICND2069: PIO SM0 + DMA0, synchronized SM1 DCLK copy; continuous idle-zero clocks, stop LOW for divider/drive changes");
+    rtt_target::rprintln!("ICND2069 board={}: PIO SM0 + DMA0, SM1 clock copy={}; continuous idle-zero clocks",
+        protocol::BOARD, protocol::HDL_BOARD);
     rtt_target::rprintln!("chains={}, cfg_chains={}, lines={}, scan_repeats={}, row_on_cfg={}",
         protocol::CHAIN_COPIES, protocol::CFG_CHAIN_COPIES, protocol::ROWS,
         protocol::SCAN_REPEATS, protocol::ROW_ON_CFG);
@@ -73,10 +87,18 @@ async fn main(_spawner: Spawner) {
         protocol::CFG_PRE_CLR_DCLKS, protocol::RT5990_CLEAR_ROWS);
     rtt_target::rprintln!("after configuration: {} slow zero clocks, {} fast zero clocks, complete grayscale frame, then VSYNC; clear LE/ROW LOW",
         protocol::CFG_POST_CLR_DCLKS, protocol::CFG_POST_CLR_DCLKS);
-    rtt_target::rprintln!("CPLD configuration/gray addresses={:?}; both use the same destination",
-        protocol::CPLD_ADDRESSES);
-    rtt_target::rprintln!("GPIO CLK/CLK2/LAT1/LAT2/LAT3/ROW=15/17/12/13/14/22; RT LCK/BK/DIN=16/18/20; wave RAM={} bytes",
-        (configuration.len() + normal.len()) * 4);
+    if protocol::DEV_BOARD {
+        rtt_target::rprintln!("GPIO SIN/LE/CLK/ROW=13/10/15/22; RT LCK/BK/DIN=16/18/20; single R data line, no CPLD");
+    } else if protocol::DIRECT_BOARD {
+        rtt_target::rprintln!("GPIO RGB1=5/4/3 RGB2=11/10/9 RGB3=2/1/0 RGB4=8/7/6");
+        rtt_target::rprintln!("GPIO CLK/LE/ROW=19/18/13; RT LCK/BK/DIN=16/15/17; direct, no CPLD");
+    } else {
+        rtt_target::rprintln!("CPLD configuration/gray addresses={:?}; both use the same destination",
+            protocol::CPLD_ADDRESSES);
+        rtt_target::rprintln!("GPIO CLK/CLK2/LAT1/LAT2/LAT3/ROW=15/17/12/13/14/22; RT LCK/BK/DIN=16/18/20");
+    }
+    rtt_target::rprintln!("LED channels/chip={}; wave RAM={} bytes",
+        protocol::LED_CHANNELS, (configuration.len() + normal.len()) * 4);
     let fast_cycles = u64::from(protocol::SYS_HZ / protocol::DCLK_HZ);
     let normal_cycles = normal.len() as u64 * fast_cycles;
     let config_cycles = protocol::CONFIG_END_WORDS as u64
