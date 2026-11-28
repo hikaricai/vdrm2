@@ -13,12 +13,13 @@
     },
     "timing": {
         "en_start": 15,
-        "gray_start": 732,
+        "_gray_start": "改成0就会产生空洞像素 严重异常",
+        "gray_start": 30,
         "row_start": 28,
         "gray_word_gap": 8,
         "gray_row_gap": 1,
         "row_period": 81,
-        "frame_tail": 430
+        "frame_tail": 0
     },
     "regs_high_level": {
         "_doc": "本组只覆盖已填的寄存器字段，删掉某项就回退到 regs。商业抓包 40 扫、64 组、K=32；lines 保留本板 54 扫。lines 写 02h，scan_repeats 写 03h，pwm_width 同时写 07h/08h。",
@@ -89,8 +90,8 @@
     "disable_rt5990": false,
     "_disable_rt5990_doc": "true：BK 固定消隐（当前高有效），DIN/LCK 固定低；保留 ICND2069 DCLK/LE/ROW/数据时序。false：恢复行驱动扫描。仅关闭行选择，不等于物理断开 LED 负载。",
 
-    "color": "b",
-    "pattern_doc": "hdl/direct每颗15列（OUT15写零），dev每颗16列；总宽W=chains×每颗列数。col_x：第x列，范围0..W-1，沿行从gray[1]渐变到gray[0]；diagonal：列0→W-1循环（默认）；diagonal_rev：列W-1→0循环，保持各扫描行灰度不变。均支持repeat_latch。",
+    "color": "rgb",
+    "pattern_doc": "hdl/direct每颗15列（OUT15写零），dev每颗16列；总宽W=chains×每颗列数。col_x：第x列，范围0..W-1；diagonal：列0→W-1循环（默认）；diagonal_rev：列W-1→0循环。三种图案都从首扫描行的gray[1]渐变到末扫描行的gray[0]，列绕回不重算灰度，均支持repeat_latch。",
     "pattern": "diagonal_rev",
     "cfg_dclk_mhz": 10,
     "_dclk_mhz_doc": "单位 MHz；可选 1、3、6、10、12.5、20、25、26、28、30、31、32、33、34、35、40、45。所有高速档位使用整数 PIO 分频；26/28 的系统时钟为 104/112 MHz，无需超频；1/3 为低速时序实验档；40/45 为 RP2350 超频实验档，系统时钟分别为 160/180 MHz。",

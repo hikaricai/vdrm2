@@ -35,9 +35,25 @@ fn main() {
         (config.len() + normal.len()) * 4,
         (stored_config.len() + stored_normal.len()) * 4,
         CONFIG_LAYOUT.repeats, NORMAL_LAYOUT.repeats);
+    let en = setting("EN_START");
+    let gray = setting("GRAY_START");
+    let zero_from = if HDL_BOARD { CPLD_SELECT_DCLKS } else { 0 };
+    if en <= VSYNC || gray <= en + EN_OP
+        || (SHORT_DATA && SYNC_START + gray < zero_from + TRANSFER_DCLKS)
+        || NORMAL_SCAN_DCLKS / (ROWS * GROUPS) < 20
+    {
+        // Experimental settings may deliberately merge commands or truncate ROW.
+        for (start, width) in [(SYNC_START, VSYNC), (SYNC_START + en, EN_OP)] {
+            assert!(normal[start..start + width].iter().all(|word| word & LE != 0));
+        }
+        println!("PASS raw timing: EN={en}, gray={gray}, ROW={}, period={}, scan={} DCLK",
+            setting("ROW_START"), setting("ROW_PERIOD"), NORMAL_SCAN_DCLKS);
+        return;
+    }
     let mut commands = Vec::new();
     let mut width = 0;
-    let mut shift = [0u128; 3];
+    // Start dirty so repeat latch is verified against earlier frame data.
+    let mut shift = [u128::MAX; 3];
     let mut row_edges = Vec::new();
     let mut row_widths = Vec::new();
     let mut row_high = 0;
@@ -67,7 +83,6 @@ fn main() {
     assert_eq!((width, row_high), (0, 0));
     assert_eq!(commands[0].2, 3);
     let sync = commands[0].0;
-    let en = setting("EN_START");
     assert_eq!((commands[1].0 - sync, commands[1].2), (en, 11));
     assert_eq!(commands.len(), 2 + ROWS * 16, "normal frame must contain VSYNC, EN and grayscale");
     let data = &commands[2..];

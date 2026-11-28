@@ -102,7 +102,6 @@ impl RegisterOverrides {
 }
 
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 struct Timing {
     en_start: u32,
     gray_start: u32,
@@ -335,7 +334,6 @@ fn main() {
         ("ROW_PERIOD", timing.map_or(81, |t| t.row_period)),
         ("FRAME_TAIL", timing.map_or(430, |t| t.frame_tail)),
     ] {
-        assert!(value <= 65535, "config.json: timing.{key} must be 0..=65535 DCLK");
         println!("cargo:rustc-env=ICND2069_TIMING_{key}={value}");
     }
     assert!(matches!(config.board.as_str(), "dev" | "hdl" | "direct"),

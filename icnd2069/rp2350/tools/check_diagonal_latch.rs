@@ -84,14 +84,20 @@ fn main() {
             let step = row % TOTAL_CHANNELS;
             let column = if REVERSE_DIAGONAL { TOTAL_CHANNELS - 1 - step } else { step };
             let mut expected = [0; TOTAL_CHANNELS];
-            expected[column] = (255.0 * (TOTAL_CHANNELS - 1 - step) as f64
-                / (TOTAL_CHANNELS - 1) as f64).round() as u16;
+            expected[column] = if ROWS == 1 { 255 } else {
+                (255.0 * (ROWS - 1 - row) as f64 / (ROWS - 1) as f64).round() as u16
+            };
             assert_eq!(image[row], expected, "diagonal gray range row={row}");
         }
-        for range in [[255, 255], [255, 0], [16, 64], [0, 0]] {
+        for range in [[255, 255], [0xffff, 0], [0, 0xffff], [0, 0]] {
             let forward = pattern_frame_range(Pattern::Diagonal, range);
             let reverse = pattern_frame_range(Pattern::DiagonalReverse, range);
             for row in 0..ROWS {
+                let expected = if ROWS == 1 { range[1] } else {
+                    (f64::from(range[1]) + (f64::from(range[0]) - f64::from(range[1]))
+                        * row as f64 / (ROWS - 1) as f64).round() as u16
+                };
+                assert_eq!(forward[row][row % TOTAL_CHANNELS], expected);
                 for column in 0..TOTAL_CHANNELS {
                     assert_eq!(reverse[row][column], forward[row][TOTAL_CHANNELS - 1 - column]);
                 }

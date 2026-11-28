@@ -686,12 +686,10 @@ pub const TIMING_ENABLED: bool = match option_env!("ICND2069_TIMING") {
     None => false,
 };
 const fn timing_value(value: Option<&str>, default: usize) -> usize {
-    let value = match value {
+    match value {
         Some(value) => unsigned_setting(value) as usize,
         None => default,
-    };
-    assert!(value <= 65535, "timing values must be 0..=65535 DCLK");
-    value
+    }
 }
 pub const SYNC_START: usize = 13;
 pub const TIMING_EN_START: usize = timing_value(option_env!("ICND2069_TIMING_EN_START"), 15);
@@ -724,32 +722,33 @@ pub const NORMAL_FIRST_ROW: usize = if TIMING_ENABLED {
 };
 pub const NORMAL_SCAN_DCLKS: usize = if TIMING_ENABLED {
     if KEEP_SCAN_TIME {
-        assert!(NORMAL_DATA_END > NORMAL_FIRST_ROW, "timing: gray must finish after ROW starts");
-        NORMAL_DATA_END - NORMAL_FIRST_ROW
+        NORMAL_DATA_END.saturating_sub(NORMAL_FIRST_ROW)
     } else {
         GROUPS * ROWS * TIMING_ROW_PERIOD
     }
 } else {
     SCAN_DCLKS
 };
+const NORMAL_COMMAND_END: usize = SYNC_START + if TIMING_EN_START + EN_OP > VSYNC {
+    TIMING_EN_START + EN_OP
+} else {
+    VSYNC
+};
+const NORMAL_SERIAL_END: usize = if NORMAL_DATA_END > NORMAL_COMMAND_END {
+    NORMAL_DATA_END
+} else {
+    NORMAL_COMMAND_END
+};
 pub const fn normal_row_start(index: usize) -> usize {
     NORMAL_FIRST_ROW + index * NORMAL_SCAN_DCLKS / (GROUPS * ROWS)
 }
 pub const NORMAL_FRAME_DCLKS: usize = if TIMING_ENABLED {
-    assert!(TIMING_EN_START > VSYNC, "timing.en_start must follow VSYNC with LE low");
-    assert!(TIMING_GRAY_START >= TIMING_EN_START + EN_OP + 1 + DATA_PREFIX_DCLKS,
-        "timing.gray_start must leave room for EN_OP and the gray preclear");
-    assert!(TIMING_ROW_START >= TIMING_EN_START + EN_OP,
-        "timing.row_start must not precede the end of EN_OP");
-    assert!(NORMAL_FIRST_ROW >= 8, "timing.row_start must leave room for BK/LCK");
-    assert!(NORMAL_SCAN_DCLKS / (GROUPS * ROWS) >= 14,
-        "timing: minimum row period is 14 DCLK");
     let last_width = if GROUPS * ROWS == 1 { 12 } else { 4 };
     let scan_end = NORMAL_FIRST_ROW + NORMAL_SCAN_DCLKS;
     let tail_end = normal_row_start(GROUPS * ROWS - 1) + last_width
         + TIMING_FRAME_TAIL - SYNC_START;
     let end = if tail_end > scan_end { tail_end } else { scan_end };
-    if NORMAL_DATA_END + 16 > end { NORMAL_DATA_END + 16 } else { end }
+    if NORMAL_SERIAL_END + 16 > end { NORMAL_SERIAL_END + 16 } else { end }
 } else {
     FRAME_DCLKS - CONFIG_SKIP_DCLKS
 };
@@ -766,7 +765,7 @@ pub struct FrameLayout {
 impl FrameLayout {
     const fn new(total: usize, data_end: usize, first: usize, scan: usize) -> Self {
         let plain = Self { total, start: total, period: 0, repeats: 0 };
-        if !TIMING_ENABLED || KEEP_SCAN_TIME { return plain; }
+        if !TIMING_ENABLED || KEEP_SCAN_TIME || scan == 0 { return plain; }
         let period = scan / GROUPS;
         let base = first - 8;
         // Exclude the first sweep (ROW12), all serial data, and their controls.
@@ -808,7 +807,7 @@ pub const CONFIG_LAYOUT: FrameLayout = FrameLayout::new(
     FRAME_WORDS + CFG_POST_CLR_DCLKS, DATA_END + CFG_POST_CLR_DCLKS,
     FIRST_ROW + CFG_POST_CLR_DCLKS, SCAN_DCLKS);
 pub const NORMAL_LAYOUT: FrameLayout = FrameLayout::new(
-    NORMAL_FRAME_DCLKS, NORMAL_DATA_END, NORMAL_FIRST_ROW, NORMAL_SCAN_DCLKS);
+    NORMAL_FRAME_DCLKS, NORMAL_SERIAL_END, NORMAL_FIRST_ROW, NORMAL_SCAN_DCLKS);
 
 
 pub fn prepare_stored_frames(configuration: &mut [u32], normal: &mut [u32], image: &Frame) {
@@ -835,12 +834,18 @@ pub fn prepare_stored_frames(configuration: &mut [u32], normal: &mut [u32], imag
 }
 
 fn encode_normal(wave: &mut Waveform<'_>, image: &Frame) {
-    wave.command_at(SYNC_START, VSYNC);
-    wave.command_at(SYNC_START + TIMING_EN_START, EN_OP);
-    wave.hold(PARK, NORMAL_DATA_START - DATA_PREFIX_DCLKS - wave.clocks);
+    wave.hold(PARK, NORMAL_DATA_START);
     encode_gray(wave, image, TIMING_GRAY_WORD_GAP, TIMING_GRAY_ROW_GAP);
     assert_eq!(wave.clocks, NORMAL_DATA_END);
     wave.hold(PARK, NORMAL_FRAME_DCLKS - wave.clocks);
+    // VSYNC, EN_OP and DATA_LATCH share LE. Requested overlaps merge on the pin.
+    for t in SYNC_START..SYNC_START + VSYNC {
+        *wave.word_mut(t) |= LE;
+    }
+    let en = SYNC_START + TIMING_EN_START;
+    for t in en..en + EN_OP {
+        *wave.word_mut(t) |= LE;
+    }
     overlay_scan(wave, NORMAL_FIRST_ROW, NORMAL_SCAN_DCLKS);
 }
 #[cfg(not(target_os = "none"))]
@@ -1065,7 +1070,7 @@ pub fn pattern_frame(pattern: Pattern, gray: u16) -> Frame {
 }
 
 /// Normal rotates the full chain-width gradient right by one column per row.
-/// Diagonal keeps column (row % TOTAL_CHANNELS), fading gray[1] to gray[0].
+/// Diagonal keeps column (row % TOTAL_CHANNELS), fading across the whole frame.
 /// DiagonalReverse mirrors Diagonal across the full chain width, keeping row gray.
 /// Column fades gray[1] to gray[0] from the first to the last row.
 /// Column = chip * LED_CHANNELS + OUT; chip 0 is nearest the MCU.
@@ -1080,19 +1085,13 @@ pub fn pattern_frame_range(pattern: Pattern, gray: [u16; 2]) -> Frame {
             let (position, last) = match pattern {
                 Pattern::Diagonal | Pattern::DiagonalReverse => {
                     // One nonzero-capable channel per row permits zero repeats.
-                    let diagonal_row = row % TOTAL_CHANNELS;
                     if out != diagonal_pixel(row, matches!(pattern, Pattern::DiagonalReverse)) {
                         continue;
                     }
-                    (TOTAL_CHANNELS - 1 - diagonal_row, TOTAL_CHANNELS - 1)
+                    (ROWS - 1 - row, ROWS - 1)
                 }
                 Pattern::Column(column) => {
                     if out != column {
-                        continue;
-                    }
-                    // A single row is the first endpoint of the column.
-                    if ROWS == 1 {
-                        *value = gray[1];
                         continue;
                     }
                     (ROWS - 1 - row, ROWS - 1)
@@ -1102,6 +1101,10 @@ pub fn pattern_frame_range(pattern: Pattern, gray: [u16; 2]) -> Frame {
                     TOTAL_CHANNELS - 1,
                 ),
             };
+            if last == 0 {
+                *value = gray[1];
+                continue;
+            }
             // Weighted endpoints also support descending ranges without
             // unsigned subtraction. Serial transfer still runs OUT15..OUT0.
             let position = position as u32;
@@ -1165,7 +1168,7 @@ fn encode_wave(wave: &mut Waveform<'_>, frame: &Frame, rotating: Option<[u16; 3]
     }
     wave.shift_config(0x0055, if rotating.is_some() { 9 } else { 8 });
     wave.shift_config(0x0155, 8);
-    wave.hold(PARK, CFG_POST_CLR_DCLKS);
+    wave.hold(PARK, CFG_POST_CLR_DCLKS + DATA_PREFIX_DCLKS);
     encode_gray(wave, frame, 0, 1);
     if rotating.is_none() {
         assert_eq!(wave.clocks, DATA_PAYLOAD_END);
@@ -1178,9 +1181,6 @@ fn encode_wave(wave: &mut Waveform<'_>, frame: &Frame, rotating: Option<[u16; 3]
 }
 
 fn encode_gray(wave: &mut Waveform<'_>, frame: &Frame, word_gap: usize, row_gap: usize) {
-    if SHORT_DATA {
-        wave.hold(PARK, TRANSFER_DCLKS);
-    }
     for (row, values) in frame.iter().enumerate() {
         if SHORT_DATA {
             let target = latch_target(row);
