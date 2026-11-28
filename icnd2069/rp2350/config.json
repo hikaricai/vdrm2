@@ -21,8 +21,8 @@
     "_disable_rt5990_doc": "true：BK 固定消隐（当前高有效），DIN/LCK 固定低；保留 ICND2069 DCLK/LE/ROW/数据时序。false：恢复行驱动扫描。仅关闭行选择，不等于物理断开 LED 负载。",
 
     "color": "rgb",
-    "pattern_doc": "每颗使用 OUT0..OUT14，OUT15 未接 LED、写零；col_x：第 x 列，x 范围 0..chains*15-1，沿行从 gray[1] 渐变到 gray[0]；diagonal：斜线（默认）。两者均支持 repeat_latch。",
-    "pattern": "diagonal",
+    "pattern_doc": "每颗使用 OUT0..OUT14，OUT15 未接 LED、写零；col_x：第 x 列，x 范围 0..chains*15-1，沿行从 gray[1] 渐变到 gray[0]；diagonal：正向斜线，列0→29循环（默认）；diagonal_rev：反向斜线，列29→0循环，保持各扫描行灰度不变。均支持 repeat_latch。",
+    "pattern": "diagonal_rev",
     "cfg_dclk_mhz": 10,
     "_dclk_mhz_doc": "单位 MHz；可选 1、3、6、10、12.5、20、25、26、28、30、31、32、33、34、35、40、45。所有高速档位使用整数 PIO 分频；26/28 的系统时钟为 104/112 MHz，无需超频；1/3 为低速时序实验档；40/45 为 RP2350 超频实验档，系统时钟分别为 160/180 MHz。",
     "dclk_mhz": 30,
@@ -34,5 +34,5 @@
     "repeat_latch": {
         "repeat_latch_gap": 1
     },
-    "gray": [0, 255]
+    "gray": [255, 255]
 }

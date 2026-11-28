@@ -298,11 +298,19 @@ pub const CONTINUOUS_LATCH: bool = match option_env!("ICND2069_CONTINUOUS_LATCH"
 pub const SHORT_DATA: bool = CONTINUOUS_LATCH;
 /// The diagonal advances the selected OUT with each logical data row.
 pub const DIAGONAL_LATCH: bool = match option_env!("ICND2069_PATTERN") {
-    Some(value) => matches!(value.as_bytes(), b"diagonal"),
+    Some(value) => matches!(value.as_bytes(), b"diagonal" | b"diagonal_rev"),
     None => true,
 };
+pub const REVERSE_DIAGONAL: bool = match option_env!("ICND2069_PATTERN") {
+    Some(value) => matches!(value.as_bytes(), b"diagonal_rev"),
+    None => false,
+};
+const fn diagonal_pixel(row: usize, reverse: bool) -> usize {
+    let column = row % TOTAL_CHANNELS;
+    if reverse { TOTAL_CHANNELS - 1 - column } else { column }
+}
 pub const fn latch_pixel(row: usize) -> usize {
-    if DIAGONAL_LATCH { row % TOTAL_CHANNELS } else { TARGET_CHANNEL }
+    if DIAGONAL_LATCH { diagonal_pixel(row, REVERSE_DIAGONAL) } else { TARGET_CHANNEL }
 }
 pub const fn latch_target(row: usize) -> usize {
     latch_pixel(row) % LED_CHANNELS
@@ -810,6 +818,7 @@ pub fn sweep_frame(frame_index: usize) -> Frame {
 #[allow(dead_code)]
 pub enum Pattern {
     Diagonal,
+    DiagonalReverse,
     Column(usize),
     Normal,
 }
@@ -822,6 +831,7 @@ pub fn pattern_frame(pattern: Pattern, gray: u16) -> Frame {
 
 /// Normal rotates the full chain-width gradient right by one column per row.
 /// Diagonal keeps column (row % TOTAL_CHANNELS), fading gray[1] to gray[0].
+/// DiagonalReverse mirrors Diagonal across the full chain width, keeping row gray.
 /// Column fades gray[1] to gray[0] from the first to the last row.
 /// Column = chip * 15 + OUT; chip 0 is nearest the MCU.
 /// Integer interpolation rounds to the nearest gray and preserves endpoints.
@@ -834,10 +844,10 @@ pub fn pattern_frame_range(pattern: Pattern, gray: [u16; 2]) -> Frame {
     for (row, values) in frame.iter_mut().enumerate() {
         for (out, value) in values.iter_mut().enumerate() {
             let (position, last) = match pattern {
-                Pattern::Diagonal => {
+                Pattern::Diagonal | Pattern::DiagonalReverse => {
                     // One nonzero-capable channel per row permits zero repeats.
                     let diagonal_row = row % TOTAL_CHANNELS;
-                    if out != diagonal_row {
+                    if out != diagonal_pixel(row, matches!(pattern, Pattern::DiagonalReverse)) {
                         continue;
                     }
                     (TOTAL_CHANNELS - 1 - diagonal_row, TOTAL_CHANNELS - 1)

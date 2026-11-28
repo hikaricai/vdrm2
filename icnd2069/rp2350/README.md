@@ -32,7 +32,7 @@ cargo run --release
 | `pin_drive.slew_rate` / `cfg_slew_rate` | `"slow"` / `"slow"` | `slow` / `fast`；普通档省略默认 slow，配置档省略跟随普通档 |
 | `cpld_addresses` | `[3, 3, 3]` | 可选，配置和灰度共用的三组独立地址；0～5 单路、6/7 本组广播，省略默认 `[7,7,7]`；配置不再强制广播 |
 | `row_on_cfg` | `false` | 可选布尔值，省略为 false；false 表示整个配置帧不发 VSYNC 和 ROW，true 保留配置帧 VSYNC 及配置完成后的扫描；普通帧照常发送 |
-| `pattern` | `"diagonal"` | 可选，`col_x` 点亮指定列，x 从 0 开始，范围 `0..chains*15-1`；该列沿行按 `gray[1] → gray[0]` 渐变，`lines=1` 时取 `gray[1]`。`diagonal` 为斜线，也是省略时的默认值 |
+| `pattern` | `"diagonal_rev"` | 可选，`col_x` 点亮指定列，x 从 0 开始，范围 `0..chains*15-1`；该列沿行按 `gray[1] → gray[0]` 渐变，`lines=1` 时取 `gray[1]`。`diagonal` 为正向斜线（默认），列 0→29 循环；`diagonal_rev` 为反向斜线，列 29→0 循环，逐行灰度与正向相同。两种斜线均支持重复锁存和完整写入 |
 | `color` | `"rgb"` | 可选，`r`/`g`/`b` 分别仅亮红/绿/蓝；`rg`/`rb`/`gb` 亮对应两色；`rgb` 三色全亮。省略默认 `rgb`，非法值编译报错 |
 | `dclk_mhz` | `30` | 数值 1、3、6、10、12.5、20、25、26、28、30、31、32、33、34、35、40、45；1/3 为低速时序实验档，40/45 为超频实验档 |
 | `cfg_dclk_mhz` | `10` | 可选，配置块 DCLK MHz；省略跟随 `dclk_mhz`。正数且不高于 `dclk_mhz`，要求对称半周期和精确的 16.8 PIO 分频，分频不超过 65535 |
@@ -58,7 +58,7 @@ cargo run --release
 驱动强度是 GPIO 输出能力档位，不是 ICND2069 的 LED 恒流设置；
 slew rate 控制上升/下降沿速度，不是多引脚时钟偏斜（skew）。
 
-顶层和 `repeat_latch` 内的未知字段均忽略，可用于注释、备用配置和调试记录。例如把 `repeat_latch` 改名为 `_repeat_latch` 即可关闭连续 latch 并保留原配置。`pattern` 为正式配置，仅接受 `col_x` / `diagonal`；旧 `line`、非法格式和越界列号会编译报错。`pattern_doc` / `_pattern` 仍是忽略的说明字段。文件仍需符合 JSON 语法，说明内容写成字段即可。
+顶层和 `repeat_latch` 内的未知字段均忽略，可用于注释、备用配置和调试记录。例如把 `repeat_latch` 改名为 `_repeat_latch` 即可关闭连续 latch 并保留原配置。`pattern` 为正式配置，仅接受 `col_x` / `diagonal` / `diagonal_rev`；旧 `line`、非法格式和越界列号会编译报错。`pattern_doc` / `_pattern` 仍是忽略的说明字段。文件仍需符合 JSON 语法，说明内容写成字段即可。
 
 行数 `ROWS=lines`，每颗芯片协议通道数 `CHANNELS=16` 固定，有效 LED 列数 `LED_CHANNELS=15`，图像宽度 `TOTAL_CHANNELS=chains×15`。OUT15 不占逻辑列，但保留零灰度锁存槽，协议仍按 OUT15→OUT0 发送。`keep_scan_time=false` 时，行周期固定为 60 DCLK；PWM/PLL 寄存器不再参与外部行周期和帧长度计算。02h=`lines - 1`（当前 54 行为 `0x35`），03h=`scan_repeats - 1`。图像大小、灰度写入长度、ROW 脉冲数和 DMA 缓冲随行数自动调整，修改后需重新编译烧录。组合参数仍需满足 512 KiB RAM 容量。
 

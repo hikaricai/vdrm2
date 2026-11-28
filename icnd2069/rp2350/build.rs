@@ -212,11 +212,13 @@ fn main() {
         "config.json: color must be r, g, b, rg, rb, gb or rgb");
     let (pattern_kind, pattern_variant, target_channel) = if config.pattern == "diagonal" {
         ("diagonal", "Diagonal".to_owned(), 0)
+    } else if config.pattern == "diagonal_rev" {
+        ("diagonal_rev", "DiagonalReverse".to_owned(), 0)
     } else {
         let column = config.pattern.strip_prefix("col_")
             .filter(|value| !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit()))
             .and_then(|value| value.parse::<usize>().ok())
-            .expect("config.json: pattern must be diagonal or col_x (x is a nonnegative decimal column)");
+            .expect("config.json: pattern must be diagonal, diagonal_rev or col_x (x is a nonnegative decimal column)");
         assert!(column < usize::from(config.chains) * 15,
             "config.json: col_x column must be in 0..chains*15-1 (OUT15 is unconnected)");
         ("col", format!("Column({column})"), column)

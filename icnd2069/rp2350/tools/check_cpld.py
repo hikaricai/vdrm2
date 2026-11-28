@@ -43,7 +43,7 @@ with tempfile.TemporaryDirectory(prefix="icnd2069-cpld-") as temp:
             **{f"ICND2069_CPLD_ADDRESS_{i+1}": str(a) for i, a in enumerate(addresses)},
             "ICND2069_CONTINUOUS_LATCH": str(latch), "ICND2069_ROW_ON_CFG": str(rows),
             "ICND2069_COLOR": color,
-            "ICND2069_PATTERN": "col" if pattern.startswith("col_") else "diagonal",
+            "ICND2069_PATTERN": "col" if pattern.startswith("col_") else pattern,
             "ICND2069_TARGET_CHANNEL": pattern[4:] if pattern.startswith("col_") else "0",
         }
         subprocess.run(["rustc", "--edition=2021", "-O", str(root / "tools/emit_cpld_wave.rs"),

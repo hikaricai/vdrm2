@@ -59,15 +59,30 @@ fn decode(words: &[u32], expected: &Frame) {
 fn main() {
     assert_eq!((CHANNELS, LED_CHANNELS, TOTAL_CHANNELS), (16, 15, CHAIN_COPIES * 15));
     let pattern = if COLUMN_PATTERN { Pattern::Column(TARGET_CHANNEL) }
+        else if REVERSE_DIAGONAL { Pattern::DiagonalReverse }
         else if DIAGONAL_LATCH { Pattern::Diagonal } else { Pattern::Normal };
     let image = pattern_frame_range(pattern, [0, 255]);
     if DIAGONAL_LATCH {
         for row in 0..ROWS {
-            let column = row % TOTAL_CHANNELS;
+            let step = row % TOTAL_CHANNELS;
+            let column = if REVERSE_DIAGONAL { TOTAL_CHANNELS - 1 - step } else { step };
             let mut expected = [0; TOTAL_CHANNELS];
-            expected[column] = (255.0 * (TOTAL_CHANNELS - 1 - column) as f64
+            expected[column] = (255.0 * (TOTAL_CHANNELS - 1 - step) as f64
                 / (TOTAL_CHANNELS - 1) as f64).round() as u16;
             assert_eq!(image[row], expected, "diagonal gray range row={row}");
+        }
+        for range in [[255, 255], [255, 0], [16, 64], [0, 0]] {
+            let forward = pattern_frame_range(Pattern::Diagonal, range);
+            let reverse = pattern_frame_range(Pattern::DiagonalReverse, range);
+            for row in 0..ROWS {
+                for column in 0..TOTAL_CHANNELS {
+                    assert_eq!(reverse[row][column], forward[row][TOTAL_CHANNELS - 1 - column]);
+                }
+            }
+            let image = if REVERSE_DIAGONAL { reverse } else { forward };
+            let mut words = vec![0; FRAME_WORDS];
+            encode_frame(&mut words, &image);
+            decode(&words, &image);
         }
     } else if COLUMN_PATTERN {
         for (row, values) in image.iter().enumerate() {

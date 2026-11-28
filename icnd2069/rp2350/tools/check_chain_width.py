@@ -60,8 +60,8 @@ def params(chains, latch, gap=1, pattern="diagonal", target=0, repeats=None, kee
 
 with tempfile.TemporaryDirectory(prefix="icnd2069-chain-width-") as temp:
     binary = str(Path(temp) / "check")
-    cases = [(n, latch, 1, "diagonal", 0, 1)
-             for n in [2] for latch in [0, 1]]
+    cases = [(2, latch, 1, pattern, 0, 1)
+             for pattern in ["diagonal", "diagonal_rev"] for latch in [0, 1]]
     cases += [(2, 1, gap, "diagonal", 0, 1) for gap in [4, 64]]
     cases += [(2, 1, 1, "normal", target, 1) for target in [0, 14, 15, 29]]
     cases += [(2, 0, 1, "normal", 0, 1), (2, 1, 1, "diagonal", 0, 64)]
@@ -80,7 +80,7 @@ with tempfile.TemporaryDirectory(prefix="icnd2069-chain-width-") as temp:
         cases = []
     cases += [(2, latch, 1, pattern, 0, 1, keep, "rgb", lines)
               for lines in [1, 16, 54, 64] if args.lines_only or lines != config.get("lines", 54)
-              for pattern in ["diagonal", "col_16"] for latch in [0, 1]
+              for pattern in ["diagonal", "diagonal_rev", "col_16"] for latch in [0, 1]
               for keep in [False, True]]
     cases = [(*case, config.get("cfg_chains", case[0])) for case in cases]
     if args.cfg_only:
