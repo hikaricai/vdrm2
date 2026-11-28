@@ -11,10 +11,30 @@ fn setting(name: &str) -> usize {
 fn main() {
     let pattern = if COLUMN_PATTERN { Pattern::Column(TARGET_CHANNEL) }
         else if REVERSE_DIAGONAL { Pattern::DiagonalReverse } else { Pattern::Diagonal };
-    let image = pattern_frame_range(pattern, [255, 31]);
+    let image = pattern_frame_range(pattern, [0xffff, 0x8021]);
     let mut config = vec![0; FRAME_WORDS + CFG_POST_CLR_DCLKS];
     let mut normal = vec![0; NORMAL_FRAME_DCLKS];
     prepare_frames(&mut config, &mut normal, &image);
+    let mut stored_config = vec![0; CONFIG_LAYOUT.stored()];
+    let mut stored_normal = vec![0; NORMAL_LAYOUT.stored()];
+    prepare_stored_frames(&mut stored_config, &mut stored_normal, &image);
+    for (layout, stored, flat) in [
+        (CONFIG_LAYOUT, &stored_config, &config),
+        (NORMAL_LAYOUT, &stored_normal, &normal),
+    ] {
+        let mut clock = 0;
+        for range in layout.ranges(0, layout.total) {
+            for word in &stored[range] {
+                assert_eq!(*word, flat[clock], "stored DMA differs at DCLK {clock}");
+                clock += 1;
+            }
+        }
+        assert_eq!(clock, flat.len());
+    }
+    println!("PASS stored DMA: {} -> {} bytes, config/normal repeats={}/{}",
+        (config.len() + normal.len()) * 4,
+        (stored_config.len() + stored_normal.len()) * 4,
+        CONFIG_LAYOUT.repeats, NORMAL_LAYOUT.repeats);
     let mut commands = Vec::new();
     let mut width = 0;
     let mut shift = [0u128; 3];
@@ -76,11 +96,11 @@ fn main() {
             }
         }
     }
-    // Short mode's first transfer may be a zero repeated latch or a gray byte.
+    // Short mode's first transfer may be a repeated zero or a full gray word.
     // The first source bit is anchored even when all leading SIN values are zero.
     if SHORT_DATA {
         let expected_first = if latch_target(0) == 15 {
-            start + 8 + 16 * latch_chip(0)
+            start + 16 * (1 + latch_chip(0))
         } else {
             start + REPEAT_LATCH_GAP + 1
         };

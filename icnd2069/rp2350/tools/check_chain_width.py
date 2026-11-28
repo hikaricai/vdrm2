@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from config_env import build_env
 
 root = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
@@ -22,6 +23,9 @@ parser.add_argument("--boards-only", action="store_true",
 args = parser.parse_args()
 config = json.loads(args.config.read_text())
 env = {k: v for k, v in os.environ.items() if not k.startswith("ICND2069_")}
+parsed = build_env(config)
+config["lines"] = int(parsed["ICND2069_LINES"])
+config["scan_repeats"] = int(parsed["ICND2069_SCAN_REPEATS"])
 
 
 def run(command, **kwargs):
@@ -35,7 +39,7 @@ def params(chains, latch, gap=1, pattern="diagonal", target=0, repeats=None, kee
     if pattern.startswith("col_"):
         target = int(pattern[4:])
         pattern = "col"
-    return env | {
+    settings = env | {
         "ICND2069_BOARD": board,
         "ICND2069_DCLK_MHZ": str(config["dclk_mhz"]),
         "ICND2069_CFG_DCLK_HZ": str(round(
@@ -60,6 +64,14 @@ def params(chains, latch, gap=1, pattern="diagonal", target=0, repeats=None, kee
         "ICND2069_COLOR": color if color is not None else config.get("color", "rgb"),
         "ICND2069_TARGET_CHANNEL": str(target),
     }
+    raw = parsed["ICND2069_REGS"]
+    if raw:
+        # Geometry variations keep the other explicit RGB register values.
+        rows = int(settings["ICND2069_LINES"]) - 1
+        groups = int(settings["ICND2069_SCAN_REPEATS"]) - 1
+        raw = f"02{rows:02X}{rows:02X}{rows:02X}03{groups:02X}{groups:02X}{groups:02X}" + raw[16:]
+    settings["ICND2069_REGS"] = raw
+    return settings
 
 
 with tempfile.TemporaryDirectory(prefix="icnd2069-chain-width-") as temp:

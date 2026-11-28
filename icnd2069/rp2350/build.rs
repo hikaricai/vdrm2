@@ -6,6 +6,7 @@ use std::{env, fs, path::PathBuf};
 struct Config {
     #[serde(default = "default_board")]
     board: String,
+    #[serde(default = "default_latch_gap")]
     scan_repeats: u8,
     #[serde(default = "default_lines")]
     lines: u8,
@@ -19,6 +20,10 @@ struct Config {
     pin_drive: Option<PinDrive>,
     #[serde(default)]
     timing: Option<Timing>,
+    #[serde(default)]
+    regs: Option<std::collections::BTreeMap<String, String>>,
+    #[serde(default)]
+    regs_high_level: Option<RegisterOverrides>,
     #[serde(default = "default_cpld_addresses")]
     cpld_addresses: [u8; 3],
     #[serde(default)]
@@ -41,6 +46,59 @@ struct Config {
     gray: Gray,
     #[serde(default, deserialize_with = "read_repeat_latch")]
     repeat_latch: Option<RepeatLatch>,
+}
+
+#[derive(Deserialize)]
+struct RegisterOverrides {
+    lines: Option<u8>,
+    scan_repeats: Option<u8>,
+    pwm_width: Option<u8>,
+    gclk: Option<String>,
+    gclk_n_code: Option<u8>,
+}
+
+impl RegisterOverrides {
+    fn apply(&self, registers: &mut std::collections::BTreeMap<u8, [u8; 3]>) {
+        let mut set = |addr: u8, mask: u8, value: u8| {
+            let rgb = registers.get_mut(&addr)
+                .unwrap_or_else(|| panic!("config.json: missing register 0x{addr:02X}"));
+            for old in rgb { *old = (*old & !mask) | value; }
+        };
+        if let Some(lines) = self.lines {
+            assert!((1..=64).contains(&lines), "config.json: regs_high_level.lines must be 1..=64");
+            set(0x02, 0x3f, lines - 1);
+        }
+        if let Some(repeats) = self.scan_repeats {
+            assert!((1..=64).contains(&repeats), "config.json: regs_high_level.scan_repeats must be 1..=64");
+            set(0x03, 0x7f, repeats - 1);
+        }
+        if let Some(width) = self.pwm_width {
+            assert!(width >= 4, "config.json: regs_high_level.pwm_width must be 4..=255");
+            set(0x07, 0xff, width);
+            set(0x08, 0xff, width);
+        }
+        match (&self.gclk, self.gclk_n_code) {
+            (Some(expression), Some(code)) => {
+                let format = "config.json: gclk must be P/(M*N) with integer factors";
+                let (p, factors) = expression.split_once('/').expect(format);
+                let factors = factors.trim().strip_prefix('(')
+                    .and_then(|s| s.strip_suffix(')')).expect(format);
+                let (m, n) = factors.split_once('*').expect(format);
+                let parse = |s: &str| s.trim().parse::<u8>().expect(format);
+                let (m, n, p) = (parse(m), parse(n), parse(p));
+                assert!((1..=31).contains(&m) && (1..=31).contains(&p),
+                    "config.json: gclk M and P must be 1..=31");
+                assert!(matches!(n, 1 | 2 | 4) && code <= 3,
+                    "config.json: gclk N must be 1, 2 or 4; gclk_n_code must be 0..=3");
+                set(0x04, 0x1f, m);
+                set(0x05, 0x1f, p);
+                // The guide does not map mathematical N to the hardware encoding.
+                set(0x06, 0x03, code);
+            }
+            (None, None) => {}
+            _ => panic!("config.json: set gclk and gclk_n_code together"),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -187,6 +245,16 @@ where
 enum Gray {
     Uniform(u16),
     Range([u16; 2]),
+    Text(String),
+}
+
+fn parse_gray_word(word: &str) -> u16 {
+    let word = word.trim();
+    if let Some(hex) = word.strip_prefix("0x").or_else(|| word.strip_prefix("0X")) {
+        u16::from_str_radix(hex, 16)
+    } else {
+        word.parse()
+    }.expect("config.json: gray words must be in 0..=65535 (0x0000..=0xffff)")
 }
 
 fn default_latch_gap() -> u8 {
@@ -208,7 +276,53 @@ fn main() {
 
     let path = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap()).join("config.json");
     let json = fs::read_to_string(&path).expect("cannot read config.json");
-    let config: Config = serde_json::from_str(&json).expect("invalid config.json");
+    let mut config: Config = serde_json::from_str(&json).expect("invalid config.json");
+    assert!(config.regs_high_level.is_none() || config.regs.is_some(),
+        "config.json: regs_high_level requires regs");
+    let mut raw_regs = String::new();
+    if let Some(regs) = &config.regs {
+        let fields: serde_json::Value = serde_json::from_str(&json).unwrap();
+        for key in ["lines", "scan_repeats", "gclk_mhz", "pwm_width", "keep_scan_time"] {
+            assert!(fields.get(key).is_none(),
+                "config.json: regs controls registers directly; rename {key} to _{key}");
+        }
+        let byte = |text: &str| -> u8 {
+            let hex = text.trim().strip_prefix("0x")
+                .expect("config.json: register addresses/values require 0xXX");
+            assert_eq!(hex.len(), 2, "config.json: register byte must be 0xXX");
+            u8::from_str_radix(hex, 16).expect("config.json: invalid register hex byte")
+        };
+        let mut values = std::collections::BTreeMap::new();
+        for (key, value) in regs {
+            if key.starts_with('_') { continue; }
+            let addr = byte(key);
+            assert!(matches!(addr, 0x02..=0x23 | 0x70..=0x74 | 0xf0..=0xf5),
+                "config.json: unsupported register {key}; 00/01 are automatic access controls");
+            let parts: Vec<_> = value.split(',').map(byte).collect();
+            let rgb = match parts.as_slice() {
+                [v] => [*v; 3],
+                [r, g, b] => [*r, *g, *b],
+                _ => panic!("config.json: {key} requires one byte or R,G,B bytes"),
+            };
+            assert!(values.insert(addr, rgb).is_none(), "config.json: duplicate register {key}");
+        }
+        if let Some(overrides) = &config.regs_high_level {
+            overrides.apply(&mut values);
+        }
+        for addr in (0x02..=0x22).chain(0x70..=0x74).chain(0xf0..=0xf5).chain([0x23]) {
+            let rgb = values.get(&addr)
+                .unwrap_or_else(|| panic!("config.json: missing register 0x{addr:02X}"));
+            raw_regs.push_str(&format!("{addr:02X}{:02X}{:02X}{:02X}", rgb[0], rgb[1], rgb[2]));
+        }
+        for addr in [0x02, 0x03] {
+            let rgb = values[&addr];
+            assert!(rgb[0] == rgb[1] && rgb[1] == rgb[2],
+                "config.json: shared ROW requires matching RGB scan registers");
+        }
+        config.lines = (values[&0x02][0] & 0x3f) + 1;
+        config.scan_repeats = (values[&0x03][0] & 0x7f) + 1;
+    }
+    println!("cargo:rustc-env=ICND2069_REGS={raw_regs}");
     println!("cargo:rustc-env=ICND2069_TIMING={}", u8::from(config.timing.is_some()));
     // Emit all fields even when absent, so shell exports cannot change JSON.
     let timing = config.timing.as_ref();
@@ -320,13 +434,13 @@ fn main() {
     let gray = match config.gray {
         Gray::Uniform(value) => [value; 2],
         Gray::Range(range) => range,
+        Gray::Text(text) => match text.split_once(',') {
+            Some((start, end)) => [parse_gray_word(start), parse_gray_word(end)],
+            None => [parse_gray_word(&text); 2],
+        },
     };
-    assert!(gray.iter().all(|&value| value <= 8192),
-        "config.json: gray must be 0..=8192 or [start, end], each in 0..=8192");
     let (continuous_latch, latch_gap) = match config.repeat_latch {
         Some(RepeatLatch { repeat_latch_gap }) => {
-            assert!(gray.iter().all(|&value| value <= 255),
-                "config.json: repeat_latch uses 8-bit gray, each value must be 0..=255");
             assert!((1..=64).contains(&repeat_latch_gap),
                 "config.json: repeat_latch.repeat_latch_gap must be 1..=64");
             (true, repeat_latch_gap)

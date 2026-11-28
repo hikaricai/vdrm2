@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+from config_env import build_env
 
 root = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
@@ -18,25 +19,7 @@ libraries = list(deps.glob("libpio_core-*.rlib"))
 if not libraries:
     raise SystemExit("Run cargo build --release --locked first (host pio-core is required)")
 library = max(libraries, key=lambda path: path.stat().st_mtime)
-env = {k: v for k, v in os.environ.items() if not k.startswith("ICND2069_")}
-env.update({
-    "ICND2069_BOARD": config.get("board", "hdl"),
-    "ICND2069_CHAIN_COPIES": str(config["chains"]),
-    "ICND2069_CFG_CHAIN_COPIES": str(config.get("cfg_chains", config["chains"])),
-    "ICND2069_CFG_PRE_CLR_CHAINS": str(config.get("cfg_pre_clr_chains", 0)),
-    "ICND2069_ROW_ON_CFG": str(int(config.get("row_on_cfg", False))),
-    "ICND2069_SCAN_REPEATS": str(config["scan_repeats"]),
-    "ICND2069_LINES": str(config.get("lines", 54)),
-    "ICND2069_KEEP_SCAN_TIME": str(int(config.get("keep_scan_time", False))),
-    "ICND2069_CONFIG_INTERVAL": str(config["config_interval"]),
-    "ICND2069_PWM_WIDTH": str(config.get("pwm_width", 16)),
-    "ICND2069_CONTINUOUS_LATCH": str(int("repeat_latch" in config)),
-    "ICND2069_REPEAT_LATCH_GAP": str(config.get("repeat_latch", {}).get("repeat_latch_gap", 1)),
-    "ICND2069_PATTERN": "diagonal",
-})
-env["ICND2069_TIMING"] = str(int("timing" in config))
-env.update({f"ICND2069_TIMING_{k.upper()}": str(v)
-            for k, v in config.get("timing", {}).items()})
+env = build_env(config)
 with tempfile.TemporaryDirectory(prefix="icnd2069-dclk-") as temp:
     binary = str(Path(temp) / "check")
     command = ["rustc", "--edition=2021", "-O", str(root / "tools/check_dclk.rs"),

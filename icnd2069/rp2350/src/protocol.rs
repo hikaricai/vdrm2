@@ -14,7 +14,7 @@ pub const DEV_BOARD: bool = match BOARD.as_bytes() {
 pub const DIRECT_BOARD: bool = matches!(BOARD.as_bytes(), b"direct");
 pub const HDL_BOARD: bool = !DEV_BOARD && !DIRECT_BOARD;
 
-/// Scan rows from config.json; register 02h receives ROWS - 1.
+/// Build.rs derives this from regs.02h; legacy JSON uses lines instead.
 pub const ROWS: usize = {
     let rows = match option_env!("ICND2069_LINES") {
         Some(value) => unsigned_setting(value) as usize,
@@ -223,10 +223,6 @@ pub const GCLK_HZ_ASSUMING_N1: u32 = {
 // keep_scan_time may instead fit all rows into the gray-loading window.
 // ROW high remains 12 DCLK for the first pulse and four thereafter.
 pub const BASE_ROW_DCLKS: usize = 60;
-// Software input limit retained from the saved NOVA image. This is NOT a
-// calibrated PWM full scale. The previous 40-scan capture saturated by 512;
-// the new 16-scan/full-config mode must be measured independently.
-pub const MAX_GRAY_INPUT: u16 = if CONTINUOUS_LATCH { 255 } else { 8192 };
 #[cfg(not(target_os = "none"))]
 pub const DEMO_GRAY: u16 = 8192;
 /// Grayscale ICND2069 chips per input; chip 0 is nearest the MCU.
@@ -281,10 +277,10 @@ pub const ROW_ON_CFG: bool = match option_env!("ICND2069_ROW_ON_CFG") {
 };
 /// Logical image width excludes each chip's unconnected OUT15.
 pub const TOTAL_CHANNELS: usize = LED_CHANNELS * CHAIN_COPIES;
-// Starting with a cleared chain, shift one gray byte and move it to the
-// selected chip. Clearing afterwards only needs to flush that byte out.
+// Start with a cleared chain, send D15..D0, then move that word to the
+// selected chip. Clear enough clocks to flush the entire word out.
 pub const fn latch_gray_dclks(row: usize) -> usize {
-    8 + 16 * latch_chip(row)
+    16 * (1 + latch_chip(row))
 }
 pub const fn latch_clear_dclks(row: usize) -> usize {
     16 * (CHAIN_COPIES - latch_chip(row))
@@ -473,10 +469,10 @@ pub const EN_OP: usize = 11;
 pub const PRE_ACT: usize = 14;
 
 // R/G/B values from dsview/icnd2069/ICND2069-抓包寄存器汇总.md (B/C).
-// Override the reference row/group/PLL settings and PWM width from JSON.
+// Legacy configurations derive row/group/PLL/PWM; raw regs replace all 45 values.
 // 00/01 are access controls, sent outside this list to keep the whole batch
 // unlocked. The reference rotation includes them but they are not payload.
-pub const REGISTERS: &[(u8, [u8; 3])] = &[
+const LEGACY_REGISTERS: [(u8, [u8; 3]); 45] = [
     (0x02, [(ROWS - 1) as u8; 3]),
     (0x03, [(GROUPS - 1) as u8; 3]),
     (0x04, [PLL_M; 3]),
@@ -523,6 +519,40 @@ pub const REGISTERS: &[(u8, [u8; 3])] = &[
     (0xf5, [0x00; 3]),
     (0x23, [0x01, 0x01, 0x05]),
 ];
+
+/// Empty retains the old derived configuration for existing host tools/configs.
+pub const RAW_REGS: &str = match option_env!("ICND2069_REGS") {
+    Some(value) => value,
+    None => "",
+};
+const fn hex_nibble(value: u8) -> u8 {
+    match value {
+        b'0'..=b'9' => value - b'0',
+        b'A'..=b'F' => value - b'A' + 10,
+        _ => panic!("invalid generated register hex"),
+    }
+}
+const fn configured_registers() -> [(u8, [u8; 3]); 45] {
+    let mut regs = LEGACY_REGISTERS;
+    let bytes = RAW_REGS.as_bytes();
+    if !bytes.is_empty() {
+        assert!(bytes.len() == 45 * 8);
+        let mut i = 0;
+        while i < 45 {
+            let at = i * 8;
+            assert!(regs[i].0 == (hex_nibble(bytes[at]) << 4 | hex_nibble(bytes[at + 1])));
+            let mut color = 0;
+            while color < 3 {
+                let at = at + 2 + color * 2;
+                regs[i].1[color] = hex_nibble(bytes[at]) << 4 | hex_nibble(bytes[at + 1]);
+                color += 1;
+            }
+            i += 1;
+        }
+    }
+    regs
+}
+pub const REGISTERS: &[(u8, [u8; 3])] = &configured_registers();
 
 fn config_words(address: u8, values: [u8; 3]) -> [u16; 3] {
     values.map(|value| (address as u16) << 8 | value as u16)
@@ -594,7 +624,7 @@ pub const CONFIG_FRAME_PIO_CYCLES: u64 = (FRAME_DCLKS + CFG_POST_CLR_DCLKS) as u
 pub const NORMAL_FRAME_PIO_CYCLES: u64 =
     NORMAL_FRAME_DCLKS as u64 * PIO_CYCLES_PER_DCLK as u64;
 pub const DATA_ROW_DCLKS: usize = if SHORT_DATA {
-    TRANSFER_DCLKS + 8 + (CHANNELS - 2) * (REPEAT_LATCH_GAP + 1)
+    TRANSFER_DCLKS + 16 + (CHANNELS - 2) * (REPEAT_LATCH_GAP + 1)
 } else {
     CHANNELS * TRANSFER_DCLKS
 };
@@ -723,6 +753,96 @@ pub const NORMAL_FRAME_DCLKS: usize = if TIMING_ENABLED {
 } else {
     FRAME_DCLKS - CONFIG_SKIP_DCLKS
 };
+
+/// Store the data head, one identical complete scan sweep, and the final tail.
+/// DMA reuses that sweep without inserting clocks or changing the PIO program.
+#[derive(Clone, Copy)]
+pub struct FrameLayout {
+    pub total: usize,
+    pub start: usize,
+    pub period: usize,
+    pub repeats: usize,
+}
+impl FrameLayout {
+    const fn new(total: usize, data_end: usize, first: usize, scan: usize) -> Self {
+        let plain = Self { total, start: total, period: 0, repeats: 0 };
+        if !TIMING_ENABLED || KEEP_SCAN_TIME { return plain; }
+        let period = scan / GROUPS;
+        let base = first - 8;
+        // Exclude the first sweep (ROW12), all serial data, and their controls.
+        let first_group = if data_end <= base + period { 1 }
+            else { (data_end - base + period - 1) / period };
+        if first_group + 1 >= GROUPS { return plain; }
+        Self { total, start: base + first_group * period,
+            period, repeats: GROUPS - first_group }
+    }
+    pub const fn stored(self) -> usize {
+        if self.repeats == 0 { self.total }
+        else { self.total - (self.repeats - 1) * self.period }
+    }
+    pub const fn index(self, clock: usize) -> usize {
+        if self.repeats == 0 || clock < self.start { clock }
+        else if clock < self.start + self.period * self.repeats {
+            self.start + (clock - self.start) % self.period
+        } else { clock - (self.repeats - 1) * self.period }
+    }
+    /// Each item is a physical SRAM range in logical transmission order.
+    pub fn ranges(self, from: usize, to: usize) -> impl Iterator<Item = core::ops::Range<usize>> {
+        assert!(from <= to && to <= self.total);
+        let mut clock = from;
+        core::iter::from_fn(move || {
+            if clock == to { return None; }
+            let end = if self.repeats == 0 { to }
+                else if clock < self.start { to.min(self.start) }
+                else if clock < self.start + self.period * self.repeats {
+                    to.min(self.start + ((clock - self.start) / self.period + 1) * self.period)
+                } else { to };
+            let at = self.index(clock);
+            let range = at..at + end - clock;
+            clock = end;
+            Some(range)
+        })
+    }
+}
+pub const CONFIG_LAYOUT: FrameLayout = FrameLayout::new(
+    FRAME_WORDS + CFG_POST_CLR_DCLKS, DATA_END + CFG_POST_CLR_DCLKS,
+    FIRST_ROW + CFG_POST_CLR_DCLKS, SCAN_DCLKS);
+pub const NORMAL_LAYOUT: FrameLayout = FrameLayout::new(
+    NORMAL_FRAME_DCLKS, NORMAL_DATA_END, NORMAL_FIRST_ROW, NORMAL_SCAN_DCLKS);
+
+
+pub fn prepare_stored_frames(configuration: &mut [u32], normal: &mut [u32], image: &Frame) {
+    assert_eq!(configuration.len(), CONFIG_LAYOUT.stored());
+    assert_eq!(normal.len(), NORMAL_LAYOUT.stored());
+    if !TIMING_ENABLED {
+        prepare_frames(configuration, normal, image);
+        return;
+    }
+    {
+        let mut wave = Waveform::stored(configuration, CONFIG_LAYOUT, true);
+        encode_wave(&mut wave, image, None);
+    }
+    configuration[CONFIG_END_WORDS..CONFIG_END_WORDS + CFG_POST_CLR_DCLKS].fill(PARK);
+    let select_end = CONFIG_END_WORDS + CFG_POST_CLR_DCLKS;
+    select_cpld(&mut configuration[select_end - CPLD_SELECT_DCLKS..select_end], CPLD_ADDRESSES);
+    if !ROW_ON_CFG {
+        configuration[CPLD_SELECT_DCLKS..COMMON_PREFIX_WORDS].fill(PARK);
+        for word in configuration { *word &= !ROW; }
+    }
+    let mut wave = Waveform::stored(normal, NORMAL_LAYOUT, false);
+    encode_normal(&mut wave, image);
+    select_cpld(&mut normal[..CPLD_SELECT_DCLKS], CPLD_ADDRESSES);
+}
+
+fn encode_normal(wave: &mut Waveform<'_>, image: &Frame) {
+    wave.command_at(SYNC_START, VSYNC);
+    wave.command_at(SYNC_START + TIMING_EN_START, EN_OP);
+    wave.hold(PARK, NORMAL_DATA_START - DATA_PREFIX_DCLKS - wave.clocks);
+    encode_gray(wave, image, TIMING_GRAY_WORD_GAP, TIMING_GRAY_ROW_GAP);
+    assert_eq!(wave.clocks, NORMAL_DATA_END);
+    wave.hold(PARK, NORMAL_FRAME_DCLKS - wave.clocks);
+    overlay_scan(wave, NORMAL_FIRST_ROW, NORMAL_SCAN_DCLKS);
+}
 #[cfg(not(target_os = "none"))]
 pub const HEAD_WORDS: usize = DATA_END;
 #[cfg(not(target_os = "none"))]
@@ -741,13 +861,7 @@ pub fn prepare_frames(configuration: &mut [u32], normal: &mut [u32], image: &Fra
     encode_frame(&mut configuration[..FRAME_WORDS], image);
     if TIMING_ENABLED {
         let mut wave = Waveform::new(normal);
-        wave.command_at(SYNC_START, VSYNC);
-        wave.command_at(SYNC_START + TIMING_EN_START, EN_OP);
-        wave.hold(PARK, NORMAL_DATA_START - DATA_PREFIX_DCLKS - wave.clocks);
-        encode_gray(&mut wave, image, TIMING_GRAY_WORD_GAP, TIMING_GRAY_ROW_GAP);
-        assert_eq!(wave.clocks, NORMAL_DATA_END);
-        wave.hold(PARK, NORMAL_FRAME_DCLKS - wave.clocks);
-        overlay_scan(&mut wave, NORMAL_FIRST_ROW, NORMAL_SCAN_DCLKS);
+        encode_normal(&mut wave, image);
     } else {
         normal[..COMMON_PREFIX_WORDS].copy_from_slice(&configuration[..COMMON_PREFIX_WORDS]);
         normal[COMMON_PREFIX_WORDS..].copy_from_slice(&configuration[CONFIG_END_WORDS..FRAME_WORDS]);
@@ -789,7 +903,6 @@ pub const GRAY_SWEEP: &[u16] = if CONTINUOUS_LATCH { &[
 /// Patch only the gray-data SIN bits in a buffer not currently used by DMA.
 #[cfg(not(target_os = "none"))]
 pub fn update_white(words: &mut [u32], gray: u16) {
-    assert!(gray <= MAX_GRAY_INPUT);
     if SHORT_DATA {
         let mut row_start = DATA_START + DATA_PREFIX_DCLKS;
         for row in 0..ROWS {
@@ -800,7 +913,7 @@ pub fn update_white(words: &mut [u32], gray: u16) {
                 let offset = t - start;
                 let mask = SIN;
                 words[t] = (words[t] & !mask)
-                    | if offset < 8 && gray & (1 << (7 - offset)) != 0 { GRAY_SIN } else { 0 };
+                    | if offset < 16 && gray & (1 << (15 - offset)) != 0 { GRAY_SIN } else { 0 };
             }
             row_start += DATA_ROW_DCLKS
                 + if target == 0 { REPEAT_LATCH_GAP + 1 } else { 0 };
@@ -830,16 +943,25 @@ pub struct Waveform<'a> {
     words: &'a mut [u32],
     tail: &'a mut [u32],
     clocks: usize,
+    layout: Option<FrameLayout>,
+    config_shift: bool,
 }
 impl<'a> Waveform<'a> {
     pub fn new(words: &'a mut [u32]) -> Self {
-        Self { words, tail: &mut [], clocks: 0 }
+        Self { words, tail: &mut [], clocks: 0, layout: None, config_shift: false }
+    }
+    fn stored(words: &'a mut [u32], layout: FrameLayout, config_shift: bool) -> Self {
+        Self { words, tail: &mut [], clocks: 0, layout: Some(layout), config_shift }
     }
     #[cfg(not(target_os = "none"))]
     pub fn split(words: &'a mut [u32], tail: &'a mut [u32]) -> Self {
-        Self { words, tail, clocks: 0 }
+        Self { words, tail, clocks: 0, layout: None, config_shift: false }
     }
     fn word_mut(&mut self, index: usize) -> &mut u32 {
+        let index = if self.config_shift && index >= CONFIG_END_WORDS {
+            index + CFG_POST_CLR_DCLKS
+        } else { index };
+        let index = self.layout.map_or(index, |layout| layout.index(index));
         if index < self.words.len() {
             &mut self.words[index]
         } else {
@@ -868,10 +990,9 @@ impl<'a> Waveform<'a> {
     }
     // Requires a zeroed shift chain before every gray transfer.
     fn shift_latch_gray(&mut self, value: u16, row: usize) {
-        assert!(value <= 255, "continuous latch gray must fit in 8 bits");
         let clocks = latch_gray_dclks(row);
         for t in 0..clocks {
-            let data = if t < 8 && value & (1 << (7 - t)) != 0 { GRAY_SIN } else { 0 };
+            let data = if t < 16 && value & (1 << (15 - t)) != 0 { GRAY_SIN } else { 0 };
             let latch = if t + 1 == clocks { LE } else { 0 };
             self.sample(PARK | data | latch);
         }
@@ -885,7 +1006,6 @@ impl<'a> Waveform<'a> {
         // Farthest chip first; the last serial word remains nearest SIN.
         for chip in (0..CHAIN_COPIES).rev() {
             let value = if out < LED_CHANNELS { values[chip * LED_CHANNELS + out] } else { 0 };
-            assert!(value <= MAX_GRAY_INPUT);
             for bit in (0..16).rev() {
                 let data = if value & (1 << bit) != 0 { GRAY_SIN } else { 0 };
                 self.sample(PARK | data | if chip == 0 && bit == 0 { LE } else { 0 });
@@ -951,7 +1071,6 @@ pub fn pattern_frame(pattern: Pattern, gray: u16) -> Frame {
 /// Column = chip * LED_CHANNELS + OUT; chip 0 is nearest the MCU.
 /// Integer interpolation rounds to the nearest gray and preserves endpoints.
 pub fn pattern_frame_range(pattern: Pattern, gray: [u16; 2]) -> Frame {
-    assert!(gray.iter().all(|&value| value <= MAX_GRAY_INPUT));
     if let Pattern::Column(column) = pattern {
         assert!(column < TOTAL_CHANNELS);
     }

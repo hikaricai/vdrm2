@@ -37,8 +37,8 @@ fn decode(words: &[u32], expected: &Frame) {
                     let row_clear = if out == CHANNELS - 1 && row > 0 && latch_target(row - 1) == 0 {
                         latch_clear_dclks(row - 1)
                     } else { 0 };
-                    assert_eq!(t - previous, row_clear + 8 + 16 * (latch_pixel(row) / LED_CHANNELS),
-                        "gray byte must advance to only the selected chip");
+                    assert_eq!(t - previous, row_clear + 16 * (1 + latch_pixel(row) / LED_CHANNELS),
+                        "16-bit gray word must advance to only the selected chip");
                 } else if latch_target(row) > 0 && out + 1 == latch_target(row) {
                     assert_eq!(t - previous, 16 * (CHAIN_COPIES - latch_pixel(row) / LED_CHANNELS),
                         "clear must flush the selected gray out of the chain");
@@ -161,12 +161,12 @@ fn main() {
     }
     decode(&words, &patched);
     if CONTINUOUS_LATCH {
-        for gray in [0, 1, 128, 255] {
+        for gray in [0, 1, 0x8000, 0xa55a, u16::MAX] {
             let expected = target_frame([[gray; TOTAL_CHANNELS]; ROWS]);
             let mut rebuilt = vec![0; FRAME_WORDS];
             encode_frame(&mut rebuilt, &expected);
             update_white(&mut words, gray);
-            assert_eq!(words, rebuilt, "8-bit gray patch must match a fresh encoding");
+            assert_eq!(words, rebuilt, "16-bit gray patch must match a fresh encoding");
             decode(&words, &expected);
         }
     }
@@ -218,7 +218,7 @@ fn main() {
         assert_eq!(pins, original, "normal frame lost data/scan alignment");
     }
     if COLUMN_PATTERN {
-        for range in [[255, 0], [16, 64], [255, 255], [0, 0]] {
+        for range in [[255, 0], [0x8001, 0xa55a], [u16::MAX; 2], [0, 0]] {
             let image = pattern_frame_range(Pattern::Column(TARGET_CHANNEL), range);
             for (row, values) in image.iter().enumerate() {
                 for (column, &value) in values.iter().enumerate() {
@@ -236,7 +236,7 @@ fn main() {
         }
     }
     if !CONTINUOUS_LATCH {
-        for range in [[255, 0], [0, 16], [8192, 8192], [0, 0]] {
+        for range in [[255, 0], [0, u16::MAX], [u16::MAX; 2], [0, 0]] {
             let image = pattern_frame_range(Pattern::Normal, range);
             let mut expected = std::array::from_fn::<_, TOTAL_CHANNELS, _>(|column|
                 (f64::from(range[0]) + (f64::from(range[1]) - f64::from(range[0]))

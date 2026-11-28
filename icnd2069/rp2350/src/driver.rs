@@ -2,7 +2,7 @@ use embassy_rp::{
     bind_interrupts,
     gpio::{Drive, Level, Output, SlewRate},
     peripherals::{
-        DMA_CH0, PIN_10, PIN_13, PIN_15, PIN_16, PIN_18, PIO0,
+        DMA_CH0, DMA_CH1, PIN_10, PIN_13, PIN_15, PIN_16, PIN_18, PIO0,
     },
     pio::{self, Common, Pio, ShiftConfig, StateMachine},
     Peripheral, PeripheralRef,
@@ -23,6 +23,29 @@ use fixed::types::U24F8;
 
 use crate::protocol;
 include!(concat!(env!("OUT_DIR"), "/pin_config.rs"));
+pub struct Transfer<'a> {
+    first: &'a [u32],
+    blocks: [[u32; 2]; protocol::GROUPS + 3],
+    count: usize,
+}
+
+impl<'a> Transfer<'a> {
+    pub fn new(words: &'a [u32], layout: protocol::FrameLayout,
+        range: core::ops::Range<usize>) -> Self
+    {
+        assert!(range.start < range.end && words.len() == layout.stored());
+        let mut parts = layout.ranges(range.start, range.end);
+        let first = &words[parts.next().unwrap()];
+        let mut transfer = Self { first, blocks: [[0; 2]; protocol::GROUPS + 3], count: 0 };
+        for part in core::iter::once(first).chain(parts.map(|part| &words[part])) {
+            transfer.blocks[transfer.count] = [part.len() as u32, part.as_ptr() as u32];
+            transfer.count += 1;
+        }
+        // Zero count/address sentinel terminates the device-side chain.
+        transfer.count += 1;
+        transfer
+    }
+}
 
 #[cfg(feature = "dma-diagnostics")]
 pub fn diagnose_rtt_mode() {
@@ -131,7 +154,8 @@ pub struct Driver {
     sm: StateMachine<'static, PIO0, 0>,
     #[cfg(icnd2069_hdl)]
     clock_sm: StateMachine<'static, PIO0, 1>,
-    dma: PeripheralRef<'static, DMA_CH0>,
+    _dma: PeripheralRef<'static, DMA_CH0>,
+    _control_dma: PeripheralRef<'static, DMA_CH1>,
     _common: Common<'static, PIO0>,
     divider: u32,
     running: bool,
@@ -144,7 +168,7 @@ pub struct Driver {
 }
 
 impl Driver {
-    pub fn new(pio: PIO0, dma: DMA_CH0, pins: Pins) -> Self {
+    pub fn new(pio: PIO0, dma: DMA_CH0, control_dma: DMA_CH1, pins: Pins) -> Self {
         // Keep BK asserted even while PIO emits idle zeros or changes divider.
         let (mut blank, bk_pin) = if protocol::DISABLE_RT5990 {
             let level = if protocol::BK_ACTIVE_HIGH { Level::High } else { Level::Low };
@@ -239,7 +263,7 @@ impl Driver {
             sm,
             #[cfg(icnd2069_hdl)]
             clock_sm,
-            dma: dma.into_ref(), _common: common,
+            _dma: dma.into_ref(), _control_dma: control_dma.into_ref(), _common: common,
             divider: protocol::PIO_CLKDIV_INT << 8,
             running: false, program_origin: loaded.origin, _blank: blank,
             pins: owned_pins,
@@ -251,9 +275,8 @@ impl Driver {
 
     /// Blocks with unchanged rate and pads keep DCLK running.
     /// Rate or selected pad changes drain PARK and stop both SMs.
-    pub async fn send(&mut self, words: &[u32], configuration: bool) {
-        assert!(!words.is_empty());
-        assert_eq!(words[words.len() - 1] & (protocol::LE | protocol::ROW), 0);
+    pub fn send(&mut self, transfer: &Transfer<'_>, configuration: bool) {
+        let words = transfer.first;
         #[cfg(feature = "dma-diagnostics")]
         let started = embassy_time::Instant::now();
         #[cfg(feature = "dma-diagnostics")]
@@ -326,9 +349,14 @@ impl Driver {
             self.clock_sm.set_clock_divider(U24F8::from_bits(divider));
             self.divider = divider;
         }
-        let transfer = self.sm.tx().dma_push(self.dma.reborrow(), words, false);
-        // The transfer borrows TX. CTRL/FLEVEL are independent registers;
-        // this driver exclusively owns SM0, SM1 and DMA0.
+        // DMA1 loads the next descriptor when DMA0 finishes. The complete
+        // descriptor list and all waveform words stay valid without CPU work.
+        let dma = embassy_rp::pac::DMA;
+        assert!(!dma.ch(0).ctrl_trig().read().busy() && !dma.ch(1).ctrl_trig().read().busy());
+        dma.inte(0).modify(|bits| *bits &= !3);
+        dma.intr(0).write_value(3);
+        let descriptors = &transfer.blocks[..transfer.count];
+        start_chain(descriptors);
         if start {
             while embassy_rp::pac::PIO0.flevel().read().0 & 0xf < words.len().min(8) as u32 {
                 #[cfg(feature = "dma-diagnostics")]
@@ -348,29 +376,45 @@ impl Driver {
             });
             self.running = true;
         }
-        #[cfg(not(feature = "dma-diagnostics"))]
-        transfer.await;
-        #[cfg(feature = "dma-diagnostics")]
+        let end = descriptors.as_ptr_range().end as u32;
+        while dma.ch(1).read_addr().read() != end
+            || dma.ch(1).ctrl_trig().read().busy() || dma.ch(0).ctrl_trig().read().busy()
         {
-            // A timed poll also reveals a completed DMA whose IRQ failed to
-            // wake the task. This diagnostic build can shorten that stall.
-            let mut transfer = transfer;
-            loop {
-                match embassy_futures::select::select(
-                    &mut transfer, embassy_time::Timer::after_millis(100),
-                ).await {
-                    embassy_futures::select::Either::First(()) => {
-                        let elapsed = started.elapsed().as_millis();
-                        if elapsed >= 100 {
-                            report_stall("dma_completed_late", elapsed, words);
-                        }
-                        break;
-                    }
-                    embassy_futures::select::Either::Second(()) => {
-                        report_stall("await_dma", started.elapsed().as_millis(), words);
-                    }
-                }
-            }
+            assert!(!dma.ch(0).ctrl_trig().read().ahb_error()
+                && !dma.ch(1).ctrl_trig().read().ahb_error(), "chained DMA bus error");
+            core::hint::spin_loop();
         }
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        dma.intr(0).write_value(3);
     }
+}
+
+fn start_chain(descriptors: &[[u32; 2]]) {
+    use embassy_rp::pac::{dma::{regs::CtrlTrig, vals::{DataSize, TreqSel}}, DMA, PIO0};
+    let data = DMA.ch(0);
+    let control = DMA.ch(1);
+    data.write_addr().write_value(PIO0.txf(0).as_ptr() as u32);
+    let mut cfg = CtrlTrig::default();
+    cfg.set_en(true);
+    cfg.set_data_size(DataSize::SIZE_WORD);
+    cfg.set_incr_read(true);
+    cfg.set_treq_sel(TreqSel::PIO0_TX0);
+    cfg.set_chain_to(1);
+    cfg.set_irq_quiet(true);
+    data.al1_ctrl().write_value(cfg.0);
+    control.read_addr().write_value(descriptors.as_ptr() as u32);
+    control.write_addr().write_value(data.al3_trans_count().as_ptr() as u32);
+    control.trans_count().write(|w| { w.set_mode(0.into()); w.set_count(2); });
+    let mut cfg = CtrlTrig::default();
+    cfg.set_en(true);
+    cfg.set_data_size(DataSize::SIZE_WORD);
+    cfg.set_incr_read(true);
+    cfg.set_incr_write(true);
+    cfg.set_ring_sel(true);
+    cfg.set_ring_size(3);
+    cfg.set_treq_sel(TreqSel::PERMANENT);
+    cfg.set_chain_to(1);
+    cfg.set_irq_quiet(true);
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    control.ctrl_trig().write_value(cfg);
 }

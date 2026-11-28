@@ -23,6 +23,17 @@ fn check_reference_registers() {
         .unwrap_or("0").parse().unwrap();
     assert_eq!(CFG_PRE_CLR_DCLKS, preclear * 16);
     assert_eq!(ROW_ON_CFG, option_env!("ICND2069_ROW_ON_CFG").unwrap_or("0") == "1");
+    if !RAW_REGS.is_empty() {
+        let expected: Vec<_> = RAW_REGS.as_bytes().chunks_exact(8).map(|entry| {
+            let byte = |at| u8::from_str_radix(
+                std::str::from_utf8(&entry[at..at + 2]).unwrap(), 16).unwrap();
+            (byte(0), [byte(2), byte(4), byte(6)])
+        }).collect();
+        assert_eq!(REGISTERS, expected);
+        assert_eq!(ROWS, usize::from(expected[0].1[0] & 0x3f) + 1);
+        assert_eq!(GROUPS, usize::from(expected[1].1[0] & 0x7f) + 1);
+        return;
+    }
     // Independent oracle: the captured RGB table, with only the current
     // scan/PLL/PWM settings substituted. Do not derive expected RGB from masks.
     let requested_gclk: u64 = option_env!("ICND2069_GCLK_HZ")

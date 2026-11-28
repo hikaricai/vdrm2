@@ -43,6 +43,18 @@ with tempfile.TemporaryDirectory(prefix="icnd2069-timing-check-") as temp:
         return clean_env | fields
 
     def check(settings):
+        # Scenario overrides use physical geometry; raw mode expresses them
+        # through 02/03 instead of re-enabling automatic register overrides.
+        if "regs" in settings:
+            settings = dict(settings)
+            settings["regs"] = dict(settings["regs"])
+            if "regs_high_level" in settings:
+                settings["regs_high_level"] = dict(settings["regs_high_level"])
+            for key, address in [("lines", "0x02"), ("scan_repeats", "0x03")]:
+                if key in settings:
+                    settings["regs"][address] = f"0x{settings.pop(key) - 1:02X}"
+                    settings.get("regs_high_level", {}).pop(key, None)
+            settings.pop("keep_scan_time", None)
         env = build_env(settings)
         run(["rustc", "--edition=2021", "-O", str(ROOT / "tools/check_timing.rs"),
              "-o", binary], env=env)
@@ -52,6 +64,8 @@ with tempfile.TemporaryDirectory(prefix="icnd2069-timing-check-") as temp:
                      gray_word_gap=8, gray_row_gap=1, row_period=81, frame_tail=430)
     current = config | {"timing": config.get("timing", reference)}
     check(current)
+    check(current | {"row_on_cfg": True, "pattern": "diagonal_rev"})
+    check(current | {"disable_rt5990": True})
     full = {k: v for k, v in current.items() if k != "repeat_latch"}
     check(full)
     for board in ("hdl", "dev", "direct"):
@@ -70,7 +84,8 @@ with tempfile.TemporaryDirectory(prefix="icnd2069-timing-check-") as temp:
     altered = dict(en_start=21, gray_start=900, row_start=40,
                    gray_word_gap=3, gray_row_gap=5, row_period=97, frame_tail=510)
     check(full | {"timing": altered})
-    check(current | {"timing": altered, "keep_scan_time": True, "disable_rt5990": True})
+    kept = {k: v for k, v in current.items() if k not in ("regs", "regs_high_level")}
+    check(kept | {"timing": altered, "scan_repeats": 1, "keep_scan_time": True, "disable_rt5990": True})
     check(full | {"lines": 1, "scan_repeats": 1})
 
     # Invalid ordering/periods must fail at build time rather than on the device.
@@ -86,7 +101,8 @@ with tempfile.TemporaryDirectory(prefix="icnd2069-timing-check-") as temp:
         assert result.returncode != 0 and message in result.stderr, result.stdout + result.stderr
     print("PASS invalid timing overlap/period rejected", flush=True)
 
-    # Byte-for-byte regression when timing is omitted, all boards.
+    # Byte-for-byte regression for full writes when timing is omitted.
+    # Repeat latch intentionally differs from HEAD: it now clocks 16 gray bits.
     baseline = temp / "baseline.rs"
     baseline.write_text(run(["git", "show", "HEAD:icnd2069/rp2350/src/protocol.rs"], cwd=ROOT))
     template = '''#![allow(dead_code)]
@@ -105,7 +121,8 @@ fn main() {{
 }}
 '''
     for board in ("hdl", "dev", "direct"):
-        legacy = {k: v for k, v in current.items() if k != "timing"}
+        legacy = {k: v for k, v in current.items() if k not in ("timing", "regs", "regs_high_level", "repeat_latch")}
+        legacy.update(lines=54, scan_repeats=1)
         env = build_env(legacy | {"board": board, "pattern": "diagonal_rev"})
         outputs = []
         for source in (baseline, ROOT / "src/protocol.rs"):

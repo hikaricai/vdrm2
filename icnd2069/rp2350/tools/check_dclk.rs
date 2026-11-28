@@ -63,7 +63,7 @@ fn main() {
             data_phase * 2 == period,
         );
     }
-    let image = pattern_frame_range(Pattern::Diagonal, [0, MAX_GRAY_INPUT.min(255)]);
+    let image = pattern_frame_range(Pattern::Diagonal, [0, 255]);
     let mut full = vec![0; FRAME_WORDS];
     encode_frame(&mut full, &image);
     let connected = if DIRECT_BOARD {

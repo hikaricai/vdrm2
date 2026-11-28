@@ -13,10 +13,10 @@ use embassy_time::{Instant, Timer};
 use panic_rtt_target as _;
 use static_cell::ConstStaticCell;
 
-static CONFIG_FRAME: ConstStaticCell<[u32; protocol::FRAME_WORDS + protocol::CFG_POST_CLR_DCLKS]> =
-    ConstStaticCell::new([0; protocol::FRAME_WORDS + protocol::CFG_POST_CLR_DCLKS]);
-static NORMAL_FRAME: ConstStaticCell<[u32; protocol::NORMAL_FRAME_DCLKS]> =
-    ConstStaticCell::new([0; protocol::NORMAL_FRAME_DCLKS]);
+static CONFIG_FRAME: ConstStaticCell<[u32; protocol::CONFIG_LAYOUT.stored()]> =
+    ConstStaticCell::new([0; protocol::CONFIG_LAYOUT.stored()]);
+static NORMAL_FRAME: ConstStaticCell<[u32; protocol::NORMAL_LAYOUT.stored()]> =
+    ConstStaticCell::new([0; protocol::NORMAL_LAYOUT.stored()]);
 
 /// Hundredths of FPS, without floating point or scaling the full numerator.
 fn fps_x100(clock_hz: u64, frames: u64, ticks: u64) -> u64 {
@@ -60,15 +60,15 @@ async fn main(_spawner: Spawner) {
         dclk: p.PIN_19, le: p.PIN_18, row: p.PIN_13,
         lck: p.PIN_16, lbk: p.PIN_15, ldata: p.PIN_17,
     };
-    let mut driver = driver::Driver::new(p.PIO0, p.DMA_CH0, pins);
+    let mut driver = driver::Driver::new(p.PIO0, p.DMA_CH0, p.DMA_CH1, pins);
     let configuration = CONFIG_FRAME.take();
     let normal = NORMAL_FRAME.take();
-    {
-        // Keep the temporary image out of the async task arena.
-        let image = protocol::pattern_frame_range(PATTERN, GRAY_RANGE);
-        protocol::prepare_frames(configuration, normal, &image);
-    }
-    rtt_target::rprintln!("ICND2069 board={}: PIO SM0 + DMA0, SM1 clock copy={}; continuous idle-zero clocks",
+    protocol::prepare_stored_frames(configuration, normal, &protocol::pattern_frame_range(PATTERN, GRAY_RANGE));
+    let slow = driver::Transfer::new(configuration, protocol::CONFIG_LAYOUT, 0..protocol::CONFIG_END_WORDS);
+    let fast = driver::Transfer::new(configuration, protocol::CONFIG_LAYOUT,
+        protocol::CONFIG_END_WORDS..protocol::CONFIG_LAYOUT.total);
+    let display = driver::Transfer::new(normal, protocol::NORMAL_LAYOUT, 0..protocol::NORMAL_FRAME_DCLKS);
+    rtt_target::rprintln!("ICND2069 board={}: PIO SM0 + DMA0/1, SM1 clock copy={}; continuous idle-zero clocks",
         protocol::BOARD, protocol::HDL_BOARD);
     rtt_target::rprintln!("chains={}, cfg_chains={}, lines={}, scan_repeats={}, row_on_cfg={}",
         protocol::CHAIN_COPIES, protocol::CFG_CHAIN_COPIES, protocol::ROWS,
@@ -81,7 +81,7 @@ async fn main(_spawner: Spawner) {
     rtt_target::rprintln!("pattern={}, color={}, gray={:?}, config_interval={}",
         PATTERN_NAME, protocol::COLOR, GRAY_RANGE, protocol::CONFIG_INTERVAL);
     rtt_target::rprintln!("normal={} data clocks, ROW={} pulses at {} minimum clocks/row; idle-zero clocks between frames",
-        normal.len(), protocol::ROWS * protocol::SCAN_REPEATS,
+        protocol::NORMAL_FRAME_DCLKS, protocol::ROWS * protocol::SCAN_REPEATS,
         protocol::NORMAL_SCAN_DCLKS / (protocol::ROWS * protocol::SCAN_REPEATS));
     if protocol::TIMING_ENABLED {
         rtt_target::rprintln!("timing relative to VSYNC: EN={}, gray={}, ROW={}; full-write gaps={}/{}, minimum tail={}",
@@ -103,13 +103,13 @@ async fn main(_spawner: Spawner) {
             protocol::CPLD_ADDRESSES);
         rtt_target::rprintln!("GPIO CLK/CLK2/LAT1/LAT2/LAT3/ROW=15/17/12/13/14/22; RT LCK/BK/DIN=16/18/20");
     }
-    rtt_target::rprintln!("LED channels/chip={}; wave RAM={} bytes",
+    rtt_target::rprintln!("LED channels/chip={}; stored waveform RAM={} bytes",
         protocol::LED_CHANNELS, (configuration.len() + normal.len()) * 4);
     let fast_cycles = u64::from(protocol::SYS_HZ / protocol::DCLK_HZ);
-    let normal_cycles = normal.len() as u64 * fast_cycles;
+    let normal_cycles = protocol::NORMAL_FRAME_DCLKS as u64 * fast_cycles;
     let config_cycles = protocol::CONFIG_END_WORDS as u64
         * u64::from(protocol::SYS_HZ / protocol::CFG_DCLK_HZ)
-        + (configuration.len() - protocol::CONFIG_END_WORDS) as u64 * fast_cycles;
+        + (protocol::CONFIG_LAYOUT.total - protocol::CONFIG_END_WORDS) as u64 * fast_cycles;
     let interval = u64::from(protocol::CONFIG_INTERVAL);
     let normal_fps = fps_x100(u64::from(protocol::SYS_HZ), 1, normal_cycles);
     let config_fps = fps_x100(u64::from(protocol::SYS_HZ), 1, config_cycles);
@@ -122,7 +122,9 @@ async fn main(_spawner: Spawner) {
         config_fps / 100, config_fps % 100,
     );
     rtt_target::rprintln!("normal FPS excludes configuration frames; theoretical FPS excludes software gaps");
-    if protocol::GCLK_HZ_ASSUMING_N1 >= 100_000_000 {
+    if !protocol::RAW_REGS.is_empty() {
+        rtt_target::rprintln!("raw regs: 45 RGB register values from config.json; internal GCLK not inferred");
+    } else if protocol::GCLK_HZ_ASSUMING_N1 >= 100_000_000 {
         rtt_target::rprintln!("PLL experiment: GCLK={} Hz exceeds guide's strict <100 MHz limit",
             protocol::GCLK_HZ_ASSUMING_N1);
     }
@@ -172,10 +174,10 @@ async fn main(_spawner: Spawner) {
         let configure = cursor.next().0;
         previous_normal = !configure;
         if configure {
-            driver.send(&configuration[..protocol::CONFIG_END_WORDS], true).await;
-            driver.send(&configuration[protocol::CONFIG_END_WORDS..], false).await;
+            driver.send(&slow, true);
+            driver.send(&fast, false);
         } else {
-            driver.send(normal, false).await;
+            driver.send(&display, false);
         }
         frames = frames.wrapping_add(1);
     }
