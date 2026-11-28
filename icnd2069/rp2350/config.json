@@ -12,12 +12,13 @@
         "pins": "dclk"
     },
     "timing": {
-        "en_start": 15,
+        "_en_start": 15,
         "_gray_start": "改成0就会产生空洞像素 严重异常",
         "gray_start": 30,
         "row_start": 28,
-        "gray_word_gap": 8,
+        "gray_word_gap": 0,
         "gray_row_gap": 1,
+        "_row_period": "小于81有噪声",
         "row_period": 81,
         "frame_tail": 0
     },

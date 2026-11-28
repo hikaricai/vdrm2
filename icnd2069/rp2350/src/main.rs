@@ -84,7 +84,7 @@ async fn main(_spawner: Spawner) {
         protocol::NORMAL_FRAME_DCLKS, protocol::ROWS * protocol::SCAN_REPEATS,
         protocol::NORMAL_SCAN_DCLKS / (protocol::ROWS * protocol::SCAN_REPEATS));
     if protocol::TIMING_ENABLED {
-        rtt_target::rprintln!("timing relative to VSYNC: EN={}, gray={}, ROW={}; full-write gaps={}/{}, minimum tail={}",
+        rtt_target::rprintln!("timing relative to VSYNC: EN={:?}, gray={}, ROW={}; full-write gaps={}/{}, minimum tail={}",
             protocol::TIMING_EN_START, protocol::TIMING_GRAY_START, protocol::TIMING_ROW_START,
             protocol::TIMING_GRAY_WORD_GAP, protocol::TIMING_GRAY_ROW_GAP, protocol::TIMING_FRAME_TAIL);
     }

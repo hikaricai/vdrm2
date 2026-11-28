@@ -103,7 +103,7 @@ impl RegisterOverrides {
 
 #[derive(Deserialize)]
 struct Timing {
-    en_start: u32,
+    en_start: Option<u32>,
     gray_start: u32,
     row_start: u32,
     gray_word_gap: u32,
@@ -325,8 +325,11 @@ fn main() {
     println!("cargo:rustc-env=ICND2069_TIMING={}", u8::from(config.timing.is_some()));
     // Emit all fields even when absent, so shell exports cannot change JSON.
     let timing = config.timing.as_ref();
+    match timing.and_then(|t| t.en_start) {
+        Some(start) => println!("cargo:rustc-env=ICND2069_TIMING_EN_START={start}"),
+        None => println!("cargo:rustc-env=ICND2069_TIMING_EN_START=off"),
+    }
     for (key, value) in [
-        ("EN_START", timing.map_or(15, |t| t.en_start)),
         ("GRAY_START", timing.map_or(732, |t| t.gray_start)),
         ("ROW_START", timing.map_or(28, |t| t.row_start)),
         ("GRAY_WORD_GAP", timing.map_or(8, |t| t.gray_word_gap)),

@@ -692,7 +692,10 @@ const fn timing_value(value: Option<&str>, default: usize) -> usize {
     }
 }
 pub const SYNC_START: usize = 13;
-pub const TIMING_EN_START: usize = timing_value(option_env!("ICND2069_TIMING_EN_START"), 15);
+pub const TIMING_EN_START: Option<usize> = match option_env!("ICND2069_TIMING_EN_START") {
+    Some(value) if !matches!(value.as_bytes(), b"off") => Some(unsigned_setting(value) as usize),
+    _ => None,
+};
 pub const TIMING_GRAY_START: usize = timing_value(option_env!("ICND2069_TIMING_GRAY_START"), 732);
 pub const TIMING_ROW_START: usize = timing_value(option_env!("ICND2069_TIMING_ROW_START"), 28);
 pub const TIMING_GRAY_WORD_GAP: usize = timing_value(option_env!("ICND2069_TIMING_GRAY_WORD_GAP"), 8);
@@ -729,10 +732,9 @@ pub const NORMAL_SCAN_DCLKS: usize = if TIMING_ENABLED {
 } else {
     SCAN_DCLKS
 };
-const NORMAL_COMMAND_END: usize = SYNC_START + if TIMING_EN_START + EN_OP > VSYNC {
-    TIMING_EN_START + EN_OP
-} else {
-    VSYNC
+const NORMAL_COMMAND_END: usize = SYNC_START + match TIMING_EN_START {
+    Some(start) => start + EN_OP,
+    None => VSYNC,
 };
 const NORMAL_SERIAL_END: usize = if NORMAL_DATA_END > NORMAL_COMMAND_END {
     NORMAL_DATA_END
@@ -842,9 +844,11 @@ fn encode_normal(wave: &mut Waveform<'_>, image: &Frame) {
     for t in SYNC_START..SYNC_START + VSYNC {
         *wave.word_mut(t) |= LE;
     }
-    let en = SYNC_START + TIMING_EN_START;
-    for t in en..en + EN_OP {
-        *wave.word_mut(t) |= LE;
+    if let Some(start) = TIMING_EN_START {
+        let en = SYNC_START + start;
+        for t in en..en + EN_OP {
+            *wave.word_mut(t) |= LE;
+        }
     }
     overlay_scan(wave, NORMAL_FIRST_ROW, NORMAL_SCAN_DCLKS);
 }

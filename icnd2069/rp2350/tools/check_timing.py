@@ -123,6 +123,8 @@ fn main() {{
         legacy = {k: v for k, v in current.items() if k not in ("timing", "regs", "regs_high_level", "repeat_latch")}
         legacy.update(lines=54, scan_repeats=1)
         env = build_env(legacy | {"board": board, "pattern": "diagonal_rev"})
+        # Older protocol.rs parses this env var as a number even without timing.
+        env.pop("ICND2069_TIMING_EN_START", None)
         outputs = []
         for source in (baseline, ROOT / "src/protocol.rs"):
             code = template.format(source=json.dumps(str(source)))
